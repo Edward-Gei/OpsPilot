@@ -101,6 +101,8 @@ async def poll_execution_events(
     """
     execution = await execution_service.get_execution_or_404(session, execution_id)
     finished = execution.status in ("success", "failed", "terminated", "interrupted")
+    # 挂起等待只读 Redis：先归还数据库连接，避免大量长轮询占满连接池拖垮全部 API
+    await session.close()
     deadline = asyncio.get_running_loop().time() + _POLL_TIMEOUT
     while True:
         events = await events_mod.fetch_events_since(execution_id, since_seq)

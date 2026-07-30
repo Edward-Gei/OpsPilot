@@ -7,6 +7,7 @@ import { message } from 'ant-design-vue'
 import {
   ArrowLeftOutlined,
   CodeOutlined,
+  CopyOutlined,
   DeleteOutlined,
   PlusOutlined,
   SearchOutlined,
@@ -165,17 +166,62 @@ async function onToggleStatus(row: jobApi.TemplateItem) {
   }
 }
 
-// ---------- 编辑器（新建/编辑共用；保存后刷新列表） ----------
+// ---------- 编辑器（新建/编辑/复制共用；保存后刷新列表） ----------
 const editorOpen = ref(false)
 const editingId = ref<number | null>(null) // null=新建
+const copyFromId = ref<number | null>(null) // 非空=复制模式（编辑器预填源模板配置）
 
 function openCreate() {
   editingId.value = null
+  copyFromId.value = null
   editorOpen.value = true
 }
 
 function openEdit(row: jobApi.TemplateItem) {
   editingId.value = row.id
+  copyFromId.value = null
+  editorOpen.value = true
+}
+
+// ---------- 复制模板：居中弹窗搜索选源模板 → 编辑器预填为新建（确认保存才真正创建） ----------
+const copyOpen = ref(false)
+const copySourceId = ref<number | undefined>(undefined)
+const copyOptions = ref<{ label: string; value: number }[]>([])
+const copySearching = ref(false)
+let copySearchTimer: number | null = null
+
+/** 打开复制弹窗：清空上次选择并预加载候选项 */
+function openCopy() {
+  copySourceId.value = undefined
+  copyOpen.value = true
+  void searchCopyOptions('')
+}
+
+/** 选项远程搜索（300ms 防抖）：服务端 keyword 过滤，避免受当前列表分页限制 */
+function onCopySearch(kw: string) {
+  if (copySearchTimer) clearTimeout(copySearchTimer)
+  copySearchTimer = window.setTimeout(() => searchCopyOptions(kw), 300)
+}
+
+async function searchCopyOptions(kw: string) {
+  copySearching.value = true
+  try {
+    const data = await jobApi.listTemplates({ page: 1, page_size: 100, keyword: kw || undefined })
+    copyOptions.value = data.items.map((t) => ({
+      label: `${t.name}（${appMap.value[t.app_id] || '—'} · v${t.current_version}）`,
+      value: t.id,
+    }))
+  } finally {
+    copySearching.value = false
+  }
+}
+
+/** 确认复制：以复制模式打开编辑器（templateId=null 走新建接口，名称自动加「-副本」） */
+function onCopyConfirm() {
+  if (!copySourceId.value) return
+  copyOpen.value = false
+  editingId.value = null
+  copyFromId.value = copySourceId.value
   editorOpen.value = true
 }
 
@@ -308,6 +354,7 @@ onMounted(() => {
             <DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
           </a-button>
         </a-popconfirm>
+        <a-button class="op-btn-cyan" @click="openCopy"><CopyOutlined />复制模板</a-button>
         <a-button type="primary" @click="openCreate"><PlusOutlined />新建模板</a-button>
       </div>
     </div>
@@ -378,15 +425,38 @@ onMounted(() => {
       </template>
     </a-table>
 
-    <!-- 全量配置编辑器（新建/编辑共用） -->
+    <!-- 全量配置编辑器（新建/编辑/复制共用） -->
     <TemplateEditor
       v-model:open="editorOpen"
       :template-id="editingId"
+      :copy-from-id="copyFromId"
       :apps="apps"
       :roles="roles"
       :credentials="credentials"
       @saved="refreshAll"
     />
+
+    <!-- 复制模板：居中搜索选择源模板 -->
+    <a-modal
+      v-model:open="copyOpen"
+      title="复制模板"
+      :width="440"
+      ok-text="下一步"
+      :ok-button-props="{ disabled: !copySourceId }"
+      @ok="onCopyConfirm"
+    >
+      <div class="copy-tip">选择要复制的源模板，将预填其全部规则配置，确认保存后才创建新模板</div>
+      <a-select
+        v-model:value="copySourceId"
+        show-search
+        placeholder="搜索模板名"
+        class="copy-select"
+        :filter-option="false"
+        :options="copyOptions"
+        :loading="copySearching"
+        @search="onCopySearch"
+      />
+    </a-modal>
 
     <!-- 详情抽屉：当前版本全量规则只读回看 -->
     <a-drawer v-model:open="detailVisible" :title="detail?.name || '模板详情'" :width="760">
@@ -487,6 +557,15 @@ onMounted(() => {
   margin-left: auto;
   display: flex;
   gap: 10px;
+}
+/* 复制模板弹窗 */
+.copy-tip {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-bottom: 10px;
+}
+.copy-select {
+  width: 100%;
 }
 .head-line {
   display: flex;

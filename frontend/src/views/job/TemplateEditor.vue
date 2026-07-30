@@ -13,6 +13,8 @@ const props = defineProps<{
   open: boolean
   /** null=新建；非空=编辑该模板（打开时拉详情回填） */
   templateId: number | null
+  /** 复制源模板 id：templateId 为空时生效，预填该模板全部配置作为新建（名称自动加「-副本」） */
+  copyFromId?: number | null
   apps: { id: number; name: string }[]
   roles: { id: number; name: string }[]
   credentials: { id: number; name: string }[]
@@ -32,7 +34,6 @@ interface EditStep {
   name: string
   script_type: 'shell' | 'playbook'
   content: string
-  params: EditParam[]
   credential_id: number | undefined
   timeout: number
 }
@@ -62,15 +63,40 @@ const form = reactive({
   changelog: '',
 })
 const steps = ref<EditStep[]>([])
+// 全局参数定义：对所有步骤生效（保存时同一份写入每个步骤的 params_schema，
+// 工单提交端已按 TPL-03 同名合并，后端/执行引擎无需改动）
+const globalParams = ref<EditParam[]>([])
 const nodes = ref<EditNode[]>([])
 const notifyRules = ref<EditNotifyRule[]>([])
 const stepActive = ref<number[]>([]) // 步骤折叠面板展开项
 
 function emptyStep(): EditStep {
-  return { name: '', script_type: 'shell', content: '', params: [], credential_id: undefined, timeout: 600 }
+  return { name: '', script_type: 'shell', content: '', credential_id: undefined, timeout: 600 }
 }
 
-/** 打开时初始化：新建给一个空步骤，编辑拉详情回填 */
+/** 各步骤存量 params_schema 合并为全局参数：与后端 TPL-03 规则一致
+ * （同名首现定义为准；任一步骤必填即必填、任一步骤固定即固定），
+ * 保证旧模板（步骤级参数）升级到全局参数后提交表单行为不变 */
+function mergeStepParams(stepList: { params_schema: jobApi.TemplateParam[] }[]): EditParam[] {
+  const merged = new Map<string, EditParam>()
+  for (const s of stepList) {
+    for (const p of s.params_schema || []) {
+      const exist = merged.get(p.name)
+      if (exist) {
+        exist.required = exist.required || p.required
+        exist.fixed = exist.fixed || p.fixed
+      } else {
+        merged.set(p.name, {
+          name: p.name, label: p.label || '', default: p.default ?? '',
+          required: p.required, fixed: p.fixed, description: p.description || '',
+        })
+      }
+    }
+  }
+  return [...merged.values()]
+}
+
+/** 打开时初始化：新建给一个空步骤；编辑/复制拉源模板详情回填 */
 watch(
   () => props.open,
   async (open) => {
@@ -83,15 +109,19 @@ watch(
       visible_role_ids: [], changelog: '',
     })
     steps.value = [emptyStep()]
+    globalParams.value = []
     nodes.value = []
     notifyRules.value = []
     stepActive.value = [0]
-    if (props.templateId == null) return
+    // 编辑回填自身；复制模式回填源模板（保存时仍走新建接口）
+    const loadId = props.templateId ?? props.copyFromId ?? null
+    if (loadId == null) return
     loading.value = true
     try {
-      const d = await jobApi.getTemplate(props.templateId)
+      const d = await jobApi.getTemplate(loadId)
       Object.assign(form, {
-        name: d.name,
+        // 复制模式名称加后缀，避免与源模板重名混淆
+        name: props.templateId == null ? `${d.name}-副本` : d.name,
         type: d.type,
         description: d.description || '',
         app_id: d.app_id,
@@ -108,12 +138,9 @@ watch(
         content: s.content,
         credential_id: s.credential_id,
         timeout: s.timeout,
-        // null 字段转空字符串便于输入框绑定
-        params: s.params_schema.map((p) => ({
-          name: p.name, label: p.label || '', default: p.default ?? '',
-          required: p.required, fixed: p.fixed, description: p.description || '',
-        })),
       }))
+      // 存量步骤级参数自动合并去重为全局参数
+      globalParams.value = mergeStepParams(d.steps)
       nodes.value = d.approval_nodes.map((n) => ({ role_id: n.role_id, approve_mode: n.approve_mode }))
       notifyRules.value = d.notify_rules.map((r) => ({ event: r.event, receivers: [...r.receivers], channels: [...r.channels] }))
       stepActive.value = steps.value.map((_, i) => i)
@@ -136,8 +163,8 @@ function moveStep(i: number, dir: -1 | 1) {
   if (j < 0 || j >= steps.value.length) return
   ;[steps.value[i], steps.value[j]] = [steps.value[j], steps.value[i]]
 }
-function addParam(step: EditStep) {
-  step.params.push({ name: '', label: '', default: '', required: false, fixed: false, description: '' })
+function addParam() {
+  globalParams.value.push({ name: '', label: '', default: '', required: false, fixed: false, description: '' })
 }
 
 // ---------- 审批节点 / 通知规则动态行 ----------
@@ -158,13 +185,14 @@ function validate(): string | null {
     if (!s.name) return `${no}：请填写步骤名`
     if (!s.content) return `${no}：请填写脚本内容`
     if (!s.credential_id) return `${no}：请选择执行凭据`
-    const names = new Set<string>()
-    for (const p of s.params) {
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(p.name)) return `${no}：参数名「${p.name || '(空)'}」不合法（字母/下划线开头）`
-      if (names.has(p.name)) return `${no}：参数名「${p.name}」重复`
-      names.add(p.name)
-      if (p.fixed && !p.default) return `${no}：固定值参数「${p.name}」必须提供默认值`
-    }
+  }
+  // 全局参数校验：命名合法、不重名、固定值必带默认值（与后端规则一致）
+  const names = new Set<string>()
+  for (const p of globalParams.value) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(p.name)) return `参数名「${p.name || '(空)'}」不合法（字母/下划线开头）`
+    if (names.has(p.name)) return `参数名「${p.name}」重复`
+    names.add(p.name)
+    if (p.fixed && !p.default) return `固定值参数「${p.name}」必须提供默认值`
   }
   if (form.approval_enabled) {
     if (!nodes.value.length) return '开启审批后至少需要 1 个审批节点'
@@ -186,6 +214,11 @@ async function onSubmit() {
     message.warning(err)
     return
   }
+  // 全局参数统一序列化（空字符串转 null，与后端快照比较语义一致），同一份写入每个步骤
+  const paramsSchema: jobApi.TemplateParam[] = globalParams.value.map((p) => ({
+    name: p.name, label: p.label || null, default: p.default || null,
+    required: p.required, fixed: p.fixed, description: p.description || null,
+  }))
   const payload: jobApi.TemplateForm = {
     name: form.name,
     type: form.type,
@@ -197,11 +230,7 @@ async function onSubmit() {
       content: s.content,
       credential_id: s.credential_id!,
       timeout: s.timeout,
-      // 空字符串字段转回 null，与后端快照比较语义一致
-      params_schema: s.params.map((p) => ({
-        name: p.name, label: p.label || null, default: p.default || null,
-        required: p.required, fixed: p.fixed, description: p.description || null,
-      })),
+      params_schema: paramsSchema,
     })),
     exec_strategy: form.exec_strategy as ExecStrategy,
     approval_enabled: form.approval_enabled,
@@ -237,7 +266,7 @@ async function onSubmit() {
 <template>
   <a-modal
     :open="open"
-    :title="templateId != null ? '编辑模板' : '新建模板'"
+    :title="templateId != null ? '编辑模板' : copyFromId != null ? '复制模板' : '新建模板'"
     :confirm-loading="saving"
     :width="960"
     @ok="onSubmit"
@@ -276,6 +305,25 @@ async function onSubmit() {
 
         <!-- 步骤编排 -->
         <a-tab-pane key="steps" :tab="`步骤编排（${steps.length}）`">
+          <!-- 全局参数定义：定义一次对所有步骤生效 -->
+          <a-form layout="vertical">
+            <a-form-item>
+              <template #label>
+                全局参数定义
+                <span class="label-tip">对所有步骤生效，脚本中以 <code v-pre>{{ 参数名 }}</code> 占位引用；固定值参数提交人不可见不可改</span>
+              </template>
+              <div v-for="(p, pi) in globalParams" :key="pi" class="param-row">
+                <a-input v-model:value="p.name" placeholder="参数名 *" class="param-name" />
+                <a-input v-model:value="p.label" placeholder="显示名" class="param-label" />
+                <a-input v-model:value="p.default" placeholder="默认值" class="param-default" />
+                <a-checkbox v-model:checked="p.required">必填</a-checkbox>
+                <a-checkbox v-model:checked="p.fixed">固定值</a-checkbox>
+                <a-input v-model:value="p.description" placeholder="参数说明" class="param-desc" />
+                <a-button size="small" danger @click="globalParams.splice(pi, 1)"><DeleteOutlined /></a-button>
+              </div>
+              <a-button size="small" class="op-btn-green" @click="addParam"><PlusOutlined />添加参数</a-button>
+            </a-form-item>
+          </a-form>
           <a-collapse v-model:active-key="stepActive">
             <a-collapse-panel v-for="(s, i) in steps" :key="i">
               <template #header><a-tag color="cyan">步骤 {{ i + 1 }}</a-tag>{{ s.name || '（未命名）' }}</template>
@@ -305,22 +353,6 @@ async function onSubmit() {
                     <a-input-number v-model:value="s.timeout" :min="1" :max="86400" class="full-w" />
                   </a-form-item>
                 </div>
-                <a-form-item>
-                  <template #label>
-                    参数定义
-                    <span class="label-tip">脚本中以 <code v-pre>{{ 参数名 }}</code> 占位引用；固定值参数提交人不可见不可改</span>
-                  </template>
-                  <div v-for="(p, pi) in s.params" :key="pi" class="param-row">
-                    <a-input v-model:value="p.name" placeholder="参数名 *" class="param-name" />
-                    <a-input v-model:value="p.label" placeholder="显示名" class="param-label" />
-                    <a-input v-model:value="p.default" placeholder="默认值" class="param-default" />
-                    <a-checkbox v-model:checked="p.required">必填</a-checkbox>
-                    <a-checkbox v-model:checked="p.fixed">固定值</a-checkbox>
-                    <a-input v-model:value="p.description" placeholder="参数说明" class="param-desc" />
-                    <a-button size="small" danger @click="s.params.splice(pi, 1)"><DeleteOutlined /></a-button>
-                  </div>
-                  <a-button size="small" class="op-btn-green" @click="addParam(s)"><PlusOutlined />添加参数</a-button>
-                </a-form-item>
                 <a-form-item label="脚本内容" required>
                   <CodeEditor v-model="s.content" :lang="editorLang(s.script_type)" height="220px" />
                 </a-form-item>

@@ -16,6 +16,7 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons-vue'
 import * as execApi from '@/api/execution'
+import { refreshTokenPair } from '@/api/http'
 import { useUserStore } from '@/stores/user'
 import { fmtTime } from '@/views/ticket/meta'
 import { execStatusMeta, hostStatusMeta, interruptReasonText, triggeredByText } from './meta'
@@ -86,6 +87,8 @@ const logOffset = ref(0)
 const logBox = ref<HTMLElement | null>(null)
 // 客户端日志行数上限（超出丢弃最早行，防止长任务撑爆内存）
 const LOG_CAP = 5000
+// 日志请求序号：快速切换焦点时丢弃过期响应，避免旧主机日志覆盖当前面板
+let logReqSeq = 0
 
 /** 当前步骤的日志通道 IP：Ansible 步骤输出统一记在伪主机 "ansible" */
 function logIpOf(step: execApi.ExecutionStepInfo | null, hostIp: string | null): string | null {
@@ -94,7 +97,7 @@ function logIpOf(step: execApi.ExecutionStepInfo | null, hostIp: string | null):
 }
 
 /** 切换日志焦点：拉历史日志 + 通知 WS 只推该焦点 */
-async function focusHost(row: execApi.ExecutionHostRow | null) {
+function focusHost(row: execApi.ExecutionHostRow | null) {
   const ip = logIpOf(activeStepInfo.value, row?.ip ?? null)
   focusIp.value = ip
   logLines.value = []
@@ -102,28 +105,37 @@ async function focusHost(row: execApi.ExecutionHostRow | null) {
   logEof.value = true
   if (!ip) return
   sendSubscribe()
+  void fetchHistoryLogs(true)
+}
+
+/** 拉取历史日志：reset=true 整体替换（切焦点），false 从当前偏移续拉（加载更多/断线补齐） */
+async function fetchHistoryLogs(reset: boolean) {
+  if (!focusIp.value) return
+  const seq = ++logReqSeq
   try {
     const data = await execApi.getExecutionLogs(executionId, {
-      step_order: activeStep.value, ip, offset: 0, limit: 2000,
+      step_order: activeStep.value,
+      ip: focusIp.value,
+      offset: reset ? 0 : logOffset.value,
+      limit: 2000,
     })
-    logLines.value = data.lines
+    if (seq !== logReqSeq) return // 焦点已切换：丢弃过期响应
+    if (reset) {
+      logLines.value = data.lines
+      scrollLogToBottom()
+    } else {
+      appendLogLines(data.lines)
+    }
     logOffset.value = data.next_offset
     logEof.value = data.eof
-    scrollLogToBottom()
   } catch {
     /* 日志文件未生成等场景静默（面板显示空态） */
   }
 }
 
 /** 继续加载历史日志（超长日志分段拉取） */
-async function loadMoreLogs() {
-  if (!focusIp.value) return
-  const data = await execApi.getExecutionLogs(executionId, {
-    step_order: activeStep.value, ip: focusIp.value, offset: logOffset.value, limit: 2000,
-  })
-  appendLogLines(data.lines)
-  logOffset.value = data.next_offset
-  logEof.value = data.eof
+function loadMoreLogs() {
+  void fetchHistoryLogs(false)
 }
 
 function appendLogLines(lines: string[]) {
@@ -145,7 +157,9 @@ function scrollLogToBottom() {
 // ---------- WebSocket 实时通道 ----------
 let ws: WebSocket | null = null
 let reconnectTimer: number | null = null
+let reconnectDelay = 5000 // 重连退避：5s 起步翻倍至 60s 上限，连上后复位
 let pollAbort = false // 长轮询降级循环停止标志
+let polling = false // 降级轮询单飞：重连风暴下避免叠加多个并发轮询循环占满连接
 const wsConnected = ref(false)
 let lastSeq = 0
 
@@ -184,10 +198,11 @@ function applyEvent(kind: string, data: Record<string, unknown>) {
 }
 
 function connectWs() {
-  if (isFinished.value) return
+  if (ws || isFinished.value) return // 已有连接（含握手中）不重复建，避免并行连接泄漏
   ws = new WebSocket(execApi.executionWsUrl(executionId))
   ws.onopen = () => {
     wsConnected.value = true
+    reconnectDelay = 5000 // 连上后退避复位
     pollAbort = true // WS 恢复后停掉降级长轮询
   }
   ws.onmessage = (e) => {
@@ -206,7 +221,10 @@ function connectWs() {
       detail.value = { ...detail.value, ...snap }
       if (snap.hosts) allHosts.value = snap.hosts
       if (activeStep.value === 0 && snap.steps.length) selectStep(snap.steps[0].step_order)
-      else sendSubscribe()
+      else {
+        sendSubscribe()
+        void fetchHistoryLogs(false) // 断线期间的日志断档从当前偏移补齐
+      }
     } else if (msg.type === 'log') {
       if (msg.step === activeStep.value && msg.ip === focusIp.value) {
         appendLogLines((msg.lines as string[]) ?? [])
@@ -217,33 +235,44 @@ function connectWs() {
       applyEvent(data.kind as string, data)
     }
   }
-  ws.onclose = () => {
+  ws.onclose = (e) => {
     wsConnected.value = false
     ws = null
-    if (!isFinished.value) {
-      startPollFallback()
-      reconnectTimer = window.setTimeout(connectWs, 5000) // 5s 后重试 WS
-    }
+    if (isFinished.value) return
+    void startPollFallback()
+    // 指数退避重连；4401=令牌过期被拒，先静默换新令牌再连，避免持续被拒刷屏
+    const delay = reconnectDelay
+    reconnectDelay = Math.min(reconnectDelay * 2, 60000)
+    reconnectTimer = window.setTimeout(async () => {
+      if (e.code === 4401) await refreshTokenPair()
+      connectWs()
+    }, delay)
   }
   ws.onerror = () => ws?.close()
 }
 
-/** WS 断线降级：长轮询补事件（日志断档由重连后 REST 历史拉取补齐） */
+/** WS 断线降级：长轮询补事件（单飞；日志断档由重连后 REST 历史拉取补齐） */
 async function startPollFallback() {
+  if (polling) return // 已有轮询循环在跑：不再叠加
+  polling = true
   pollAbort = false
-  while (!pollAbort && !isFinished.value) {
-    try {
-      const data = await execApi.pollExecutionEvents(executionId, lastSeq)
-      if (pollAbort) return
-      lastSeq = Math.max(lastSeq, data.last_seq)
-      for (const evt of data.events) applyEvent(evt.kind, evt.data)
-      if (data.finished) {
-        await loadDetail() // 终态兜底对齐（可能错过 host/step 事件）
-        return
+  try {
+    while (!pollAbort && !isFinished.value) {
+      try {
+        const data = await execApi.pollExecutionEvents(executionId, lastSeq)
+        if (pollAbort) return
+        lastSeq = Math.max(lastSeq, data.last_seq)
+        for (const evt of data.events) applyEvent(evt.kind, evt.data)
+        if (data.finished) {
+          await loadDetail() // 终态兜底对齐（可能错过 host/step 事件）
+          return
+        }
+      } catch {
+        await new Promise((r) => setTimeout(r, 3000)) // 网络异常退避
       }
-    } catch {
-      await new Promise((r) => setTimeout(r, 3000)) // 网络异常退避
     }
+  } finally {
+    polling = false
   }
 }
 

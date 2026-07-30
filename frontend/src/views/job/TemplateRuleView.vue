@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 模板规则只读视图：步骤编排/执行策略/审批规则/通知规则/权限范围（详情抽屉与版本快照回看共用）
 import { computed } from 'vue'
-import type { TemplateSnapshot } from '@/api/job'
+import type { TemplateParam, TemplateSnapshot } from '@/api/job'
 import CodeEditor from '@/components/CodeEditor.vue'
 import {
   approveModeText,
@@ -36,6 +36,24 @@ const paramCols = [
   { title: '说明', dataIndex: 'description', customRender: dash },
 ]
 
+// 参数定义汇总：全局参数模式下各步骤同一份，去重后即模板级参数；
+// 历史快照（步骤级参数）按提交端 TPL-03 同名合并规则展示，与实际提交表单一致
+const mergedParams = computed(() => {
+  const merged = new Map<string, TemplateParam>()
+  for (const s of props.rule.steps) {
+    for (const p of s.params_schema || []) {
+      const exist = merged.get(p.name)
+      if (exist) {
+        if (p.required) exist.required = true
+        if (p.fixed) exist.fixed = true
+      } else {
+        merged.set(p.name, { ...p })
+      }
+    }
+  }
+  return [...merged.values()]
+})
+
 // 执行策略展示行（快照可能缺省字段，出 —）
 const strategyRows = computed(() => {
   const s = props.rule.exec_strategy || {}
@@ -63,6 +81,13 @@ const strategyRows = computed(() => {
     <a-descriptions-item label="说明" :span="2">{{ rule.description || '—' }}</a-descriptions-item>
   </a-descriptions>
 
+  <!-- 参数定义：对所有步骤生效（历史快照的步骤级参数按同名合并展示） -->
+  <template v-if="mergedParams.length">
+    <div class="section-title">参数定义（{{ mergedParams.length }}，对所有步骤生效）</div>
+    <a-table bordered size="small" :pagination="false" row-key="name"
+             :columns="paramCols" :data-source="mergedParams" />
+  </template>
+
   <!-- 步骤编排：脚本内嵌，顺序即执行顺序 -->
   <div class="section-title">步骤编排（{{ rule.steps.length }}）</div>
   <a-collapse>
@@ -75,11 +100,6 @@ const strategyRows = computed(() => {
         <a-descriptions-item label="执行凭据">{{ credMap[s.credential_id] || `#${s.credential_id}` }}</a-descriptions-item>
         <a-descriptions-item label="超时（秒）">{{ s.timeout }}</a-descriptions-item>
       </a-descriptions>
-      <template v-if="s.params_schema.length">
-        <div class="sub-title">参数定义（{{ s.params_schema.length }}）</div>
-        <a-table bordered size="small" :pagination="false" row-key="name"
-                 :columns="paramCols" :data-source="s.params_schema" />
-      </template>
       <div class="sub-title">脚本内容</div>
       <CodeEditor :model-value="s.content" :lang="editorLang(s.script_type)" readonly height="220px" />
     </a-collapse-panel>

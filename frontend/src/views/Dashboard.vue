@@ -340,7 +340,7 @@ onUnmounted(() => {
 
     <!-- C 执行动态 + 状态分布/系统状态 -->
     <div class="row-main" v-if="summary?.execution || summary?.ticket">
-      <div v-if="summary?.execution" class="op-card">
+      <div v-if="summary?.execution" class="op-card exec-card">
         <div class="card-head">
           <div>
             <div class="op-card-title">执行动态</div>
@@ -367,7 +367,9 @@ onUnmounted(() => {
             </a-tag>
           </div>
         </div>
-        <a-empty v-else description="暂无执行记录" :image-style="{ height: '72px' }" style="margin: 48px 0" />
+        <div v-else class="exec-empty">
+          <a-empty description="暂无执行记录" :image-style="{ height: '72px' }" />
+        </div>
       </div>
 
       <div class="side-col">
@@ -564,10 +566,28 @@ onUnmounted(() => {
 }
 
 /* ===== 执行动态列表 ===== */
+/* 卡片拉伸至与右侧列（状态分布+系统状态）等高并固定：
+   列表 flex:1（basis 0）不参与撑高，空态居中填满、记录超高时内部滚动 */
+.exec-card {
+  align-self: stretch;
+  min-height: 380px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
 .exec-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.exec-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .exec-row {
   display: flex;
@@ -799,6 +819,8 @@ onUnmounted(() => {
 @media (max-width: 1200px) {
   .kpi-row { grid-template-columns: repeat(2, 1fr) !important; }
   .row-main { grid-template-columns: 1fr; }
+  /* 单列堆叠时无右列可对齐，回退为固定最小高度内容自适应 */
+  .exec-card { align-self: auto; min-height: 420px; }
 }
 @media (max-width: 768px) {
   .kpi-row { grid-template-columns: 1fr !important; }
