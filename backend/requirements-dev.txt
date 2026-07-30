@@ -1,0 +1,6 @@
+# 测试依赖（仅开发/CI 使用，不进生产镜像）
+-r requirements.txt
+pytest==8.3.3
+pytest-asyncio==0.24.0
+aiosqlite==0.20.0       # 测试用内存 SQLite（异步驱动）
+fakeredis==2.26.1       # 内存 Redis 替身（含 asyncio 客户端）

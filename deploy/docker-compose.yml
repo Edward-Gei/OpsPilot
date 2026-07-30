@@ -1,0 +1,94 @@
+# OpsPilot 单机部署编排：nginx / api / worker / mysql / redis 五容器
+# 使用方式：cp .env.example .env 并修改密钥后 docker compose up -d --build
+name: opspilot
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: opspilot-mysql
+    # 全局 utf8mb4，避免逐库设置
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DB}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: opspilot-redis
+    # AOF 持久化：执行队列消息不因重启丢失
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    restart: unless-stopped
+
+  api:
+    build: ../backend
+    container_name: opspilot-api
+    env_file: .env
+    environment:
+      RUN_MIGRATIONS: "1"   # 仅 api 执行 Alembic 迁移（冲突声明 C4）
+    volumes:
+      - exec-logs:/data/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    restart: unless-stopped
+
+  worker:
+    build: ../backend
+    container_name: opspilot-worker
+    command: ["python", "-m", "app.worker_main"]
+    env_file: .env
+    environment:
+      RUN_MIGRATIONS: "0"
+    volumes:
+      - exec-logs:/data/logs
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nginx:
+    build: ../frontend
+    container_name: opspilot-nginx
+    ports:
+      - "${NGINX_HTTP_PORT:-8080}:80"
+    volumes:
+      # 覆盖镜像内兜底配置（冲突声明 C3：改配置免重建镜像）
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  redis-data:
+  exec-logs:

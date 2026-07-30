@@ -1,0 +1,63 @@
+# M8-2 压测编排：500 台模拟主机 sshd 矩阵 + 通知模拟端点（冲突声明 C1/C3）
+#
+# 用法（在 deploy/loadtest 目录）：
+#   docker compose -f docker-compose.loadtest.yml up -d --build
+#   docker network connect opspilot-loadtest_loadtest opspilot-worker
+#   docker network connect opspilot-loadtest_loadtest opspilot-api
+# 清理：
+#   docker network disconnect opspilot-loadtest_loadtest opspilot-worker
+#   docker network disconnect opspilot-loadtest_loadtest opspilot-api
+#   docker compose -f docker-compose.loadtest.yml down -v
+name: opspilot-loadtest
+
+services:
+  # sshd 矩阵：单容器挂 500 个 secondary IP，模拟 500 台可真实建连的主机；
+  # 容器内置 ansible，兼作 Ansible 作业主机（DoD-3 验证用）
+  sshd-matrix:
+    build: ./sshd
+    container_name: lt-sshd-matrix
+    cap_add:
+      - NET_ADMIN            # 挂 secondary IP 需要
+    environment:
+      ROOT_PASSWORD: Loadtest123
+      IP_COUNT: "500"        # secondary IP 数量：172.28.4.1 起，每段 250 个
+    networks:
+      loadtest:
+        ipv4_address: 172.28.0.10
+    restart: unless-stopped
+
+  # 邮件模拟端点：SMTP :1025 收信，Web UI/API :8025 查信（DoD-3 邮件通知验证）
+  mailpit:
+    image: axllent/mailpit
+    container_name: lt-mailpit
+    ports:
+      - "8025:8025"          # 宿主机可打开 http://localhost:8025 查看收件
+    networks:
+      - loadtest
+      - opspilot             # 加入业务网，worker 以 lt-mailpit 直连发信
+    restart: unless-stopped
+
+  # Webhook/Teams 模拟端点：记录收到的 POST，GET /stats 查计数（DoD-3 验证）
+  webhook-echo:
+    image: python:3.11-slim
+    container_name: lt-webhook
+    command: ["python", "/srv/webhook_echo.py"]
+    volumes:
+      - ./webhook_echo.py:/srv/webhook_echo.py:ro
+    networks:
+      - loadtest
+      - opspilot
+    restart: unless-stopped
+
+networks:
+  # 压测专网：secondary IP 用 172.28.4.0/22，IPAM 仅从 /24 分配容器地址避免冲突
+  loadtest:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+          ip_range: 172.28.0.0/24
+          gateway: 172.28.0.1
+  # 业务网（主 compose 创建），通知端点挂双网供 worker 按容器名解析
+  opspilot:
+    external: true
+    name: opspilot_default

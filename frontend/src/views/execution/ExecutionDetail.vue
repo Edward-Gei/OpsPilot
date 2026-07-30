@@ -1,0 +1,676 @@
+<script setup lang="ts">
+// 执行详情页（M5）：步骤×主机矩阵 + 实时日志（WS）+ 执行控制
+// 实时通道：WS snapshot 首推 → log/event 增量；断线自动降级长轮询并重连
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { message } from 'ant-design-vue'
+import {
+  ArrowLeftOutlined,
+  CheckOutlined,
+  CloseOutlined,
+  LoadingOutlined,
+  PauseCircleOutlined,
+  PauseOutlined,
+  PlayCircleOutlined,
+  StopOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons-vue'
+import * as execApi from '@/api/execution'
+import { useUserStore } from '@/stores/user'
+import { fmtTime } from '@/views/ticket/meta'
+import { execStatusMeta, hostStatusMeta, interruptReasonText, triggeredByText } from './meta'
+
+const route = useRoute()
+const router = useRouter()
+const userStore = useUserStore()
+const executionId = Number(route.params.id)
+
+// ---------- 详情状态 ----------
+const detail = ref<execApi.ExecutionDetail | null>(null)
+const allHosts = ref<execApi.ExecutionHostRow[]>([])
+const loading = ref(false)
+
+/** 终态判定：终态后关闭实时通道，不再重连 */
+const isFinished = computed(() =>
+  ['success', 'failed', 'terminated', 'interrupted'].includes(detail.value?.status ?? ''),
+)
+
+/** 初始加载 / 断线恢复：REST 拉全量详情 + 主机明细 */
+async function loadDetail() {
+  loading.value = true
+  try {
+    const [d, hosts] = await Promise.all([
+      execApi.getExecution(executionId),
+      execApi.listExecutionHosts(executionId),
+    ])
+    detail.value = d
+    allHosts.value = hosts.items
+    if (activeStep.value === 0 && d.steps.length) selectStep(d.steps[0].step_order)
+  } finally {
+    loading.value = false
+  }
+}
+
+// ---------- 步骤选择与主机矩阵 ----------
+const activeStep = ref(0)
+
+const activeStepInfo = computed(() =>
+  detail.value?.steps.find((s) => s.step_order === activeStep.value) ?? null,
+)
+
+/** 当前步骤的主机行（矩阵列表数据源） */
+const stepHosts = computed(() =>
+  allHosts.value.filter((h) => h.step_order === activeStep.value),
+)
+
+function selectStep(order: number) {
+  activeStep.value = order
+  // 切步骤后重置日志焦点到首台主机（Ansible 步骤固定伪主机）
+  const first = allHosts.value.find((h) => h.step_order === order)
+  focusHost(first ?? null)
+}
+
+const hostColumns = [
+  { title: '主机', key: 'host', width: 170, ellipsis: true },
+  { title: '批次', dataIndex: 'batch_no', key: 'batch_no', width: 60 },
+  { title: '状态', key: 'status', width: 90 },
+  { title: '退出码', key: 'exit', width: 70 },
+  { title: '失败摘要', dataIndex: 'error_summary', key: 'summary', ellipsis: true },
+]
+
+// ---------- 日志面板（历史 REST + 实时 WS 追加） ----------
+const focusIp = ref<string | null>(null)
+const logLines = ref<string[]>([])
+const logEof = ref(true)
+const logOffset = ref(0)
+const logBox = ref<HTMLElement | null>(null)
+// 客户端日志行数上限（超出丢弃最早行，防止长任务撑爆内存）
+const LOG_CAP = 5000
+
+/** 当前步骤的日志通道 IP：Ansible 步骤输出统一记在伪主机 "ansible" */
+function logIpOf(step: execApi.ExecutionStepInfo | null, hostIp: string | null): string | null {
+  if (!step) return null
+  return step.script_type === 'playbook' ? 'ansible' : hostIp
+}
+
+/** 切换日志焦点：拉历史日志 + 通知 WS 只推该焦点 */
+async function focusHost(row: execApi.ExecutionHostRow | null) {
+  const ip = logIpOf(activeStepInfo.value, row?.ip ?? null)
+  focusIp.value = ip
+  logLines.value = []
+  logOffset.value = 0
+  logEof.value = true
+  if (!ip) return
+  sendSubscribe()
+  try {
+    const data = await execApi.getExecutionLogs(executionId, {
+      step_order: activeStep.value, ip, offset: 0, limit: 2000,
+    })
+    logLines.value = data.lines
+    logOffset.value = data.next_offset
+    logEof.value = data.eof
+    scrollLogToBottom()
+  } catch {
+    /* 日志文件未生成等场景静默（面板显示空态） */
+  }
+}
+
+/** 继续加载历史日志（超长日志分段拉取） */
+async function loadMoreLogs() {
+  if (!focusIp.value) return
+  const data = await execApi.getExecutionLogs(executionId, {
+    step_order: activeStep.value, ip: focusIp.value, offset: logOffset.value, limit: 2000,
+  })
+  appendLogLines(data.lines)
+  logOffset.value = data.next_offset
+  logEof.value = data.eof
+}
+
+function appendLogLines(lines: string[]) {
+  if (!lines.length) return
+  logLines.value.push(...lines)
+  if (logLines.value.length > LOG_CAP) {
+    logLines.value.splice(0, logLines.value.length - LOG_CAP)
+  }
+  scrollLogToBottom()
+}
+
+/** 底部跟随：新日志到达自动滚到底 */
+function scrollLogToBottom() {
+  requestAnimationFrame(() => {
+    if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight
+  })
+}
+
+// ---------- WebSocket 实时通道 ----------
+let ws: WebSocket | null = null
+let reconnectTimer: number | null = null
+let pollAbort = false // 长轮询降级循环停止标志
+const wsConnected = ref(false)
+let lastSeq = 0
+
+function sendSubscribe() {
+  if (ws?.readyState === WebSocket.OPEN && focusIp.value) {
+    ws.send(JSON.stringify({ type: 'subscribe_log', step: activeStep.value, ip: focusIp.value }))
+  }
+}
+
+/** 应用状态事件（WS event / 长轮询 events 共用） */
+function applyEvent(kind: string, data: Record<string, unknown>) {
+  if (!detail.value) return
+  if (kind === 'execution_status') {
+    detail.value.status = data.status as execApi.ExecutionStatus
+    if (data.ticket_status) detail.value.ticket_status = data.ticket_status as string
+    if (isFinished.value) teardownRealtime()
+  } else if (kind === 'step_status') {
+    const step = detail.value.steps.find((s) => s.step_order === data.step_order)
+    if (step) {
+      step.status = data.status as string
+      step.current_batch = (data.current_batch as number) ?? step.current_batch
+      step.total_batch = (data.total_batch as number) ?? step.total_batch
+      step.success_count = (data.success_count as number) ?? step.success_count
+      step.failed_count = (data.failed_count as number) ?? step.failed_count
+    }
+  } else if (kind === 'host_status') {
+    const row = allHosts.value.find(
+      (h) => h.step_order === data.step_order && h.ip === data.ip,
+    )
+    if (row) {
+      row.status = data.status as execApi.HostExecStatus
+      row.exit_code = (data.exit_code as number | null) ?? row.exit_code
+      row.error_summary = (data.error_summary as string | null) ?? row.error_summary
+    }
+  }
+}
+
+function connectWs() {
+  if (isFinished.value) return
+  ws = new WebSocket(execApi.executionWsUrl(executionId))
+  ws.onopen = () => {
+    wsConnected.value = true
+    pollAbort = true // WS 恢复后停掉降级长轮询
+  }
+  ws.onmessage = (e) => {
+    let msg: Record<string, unknown>
+    try {
+      msg = JSON.parse(e.data as string)
+    } catch {
+      return
+    }
+    if (msg.type === 'ping') {
+      ws?.send(JSON.stringify({ type: 'pong' }))
+    } else if (msg.type === 'snapshot') {
+      // 首推快照：整体替换（断线重连后以快照对齐状态）
+      lastSeq = (msg.seq as number) ?? 0
+      const snap = msg.data as execApi.ExecutionDetail
+      detail.value = { ...detail.value, ...snap }
+      if (snap.hosts) allHosts.value = snap.hosts
+      if (activeStep.value === 0 && snap.steps.length) selectStep(snap.steps[0].step_order)
+      else sendSubscribe()
+    } else if (msg.type === 'log') {
+      if (msg.step === activeStep.value && msg.ip === focusIp.value) {
+        appendLogLines((msg.lines as string[]) ?? [])
+      }
+    } else if (msg.type === 'event') {
+      lastSeq = Math.max(lastSeq, (msg.seq as number) ?? 0)
+      const data = msg.data as Record<string, unknown>
+      applyEvent(data.kind as string, data)
+    }
+  }
+  ws.onclose = () => {
+    wsConnected.value = false
+    ws = null
+    if (!isFinished.value) {
+      startPollFallback()
+      reconnectTimer = window.setTimeout(connectWs, 5000) // 5s 后重试 WS
+    }
+  }
+  ws.onerror = () => ws?.close()
+}
+
+/** WS 断线降级：长轮询补事件（日志断档由重连后 REST 历史拉取补齐） */
+async function startPollFallback() {
+  pollAbort = false
+  while (!pollAbort && !isFinished.value) {
+    try {
+      const data = await execApi.pollExecutionEvents(executionId, lastSeq)
+      if (pollAbort) return
+      lastSeq = Math.max(lastSeq, data.last_seq)
+      for (const evt of data.events) applyEvent(evt.kind, evt.data)
+      if (data.finished) {
+        await loadDetail() // 终态兜底对齐（可能错过 host/step 事件）
+        return
+      }
+    } catch {
+      await new Promise((r) => setTimeout(r, 3000)) // 网络异常退避
+    }
+  }
+}
+
+/** 终态/离开页面：关闭全部实时通道 */
+function teardownRealtime() {
+  pollAbort = true
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  if (ws) {
+    ws.onclose = null // 避免触发重连
+    ws.close()
+    ws = null
+  }
+  wsConnected.value = false
+}
+
+// ---------- 执行控制（04 §6：仅创建人或 admin，权限 execution:control） ----------
+const isAdmin = computed(() =>
+  (userStore.userInfo?.roles ?? []).some((r) => r.code === 'admin'),
+)
+const canControl = computed(() => {
+  if (!userStore.hasPerm('execution:control') || !detail.value) return false
+  return isAdmin.value || detail.value.creator_id === userStore.userInfo?.id
+})
+
+/** 各控制操作允许的工单状态（与后端状态机一致，仅控制按钮显隐） */
+const controlAllowed: Record<execApi.ControlOp, string[]> = {
+  abort: ['queued', 'running', 'paused'],
+  pause: ['running'],
+  resume: ['paused'],
+  'force-abort': ['running', 'paused'],
+}
+
+function showControl(op: execApi.ControlOp): boolean {
+  return canControl.value && controlAllowed[op].includes(detail.value?.ticket_status ?? '')
+}
+
+const controlling = ref(false)
+
+async function onControl(op: execApi.ControlOp) {
+  if (!detail.value) return
+  controlling.value = true
+  try {
+    await execApi.controlTicket(detail.value.ticket_id, op)
+    message.success('控制信号已下发，状态将随执行推进更新')
+    await loadDetail() // 信号不直接改状态，刷新以拿到最新工单态
+  } catch {
+    /* 40901/40302 等提示由拦截器统一弹出 */
+  } finally {
+    controlling.value = false
+  }
+}
+
+onMounted(async () => {
+  await loadDetail()
+  if (!isFinished.value) connectWs()
+})
+
+onBeforeUnmount(teardownRealtime)
+</script>
+
+<template>
+  <div>
+    <!-- 头部：返回 + 概要 + 控制按钮 -->
+    <div class="op-hero op-hero--indigo detail-hero">
+      <div class="op-hero-icon"><ThunderboltOutlined /></div>
+      <div class="hero-main">
+        <div class="op-hero-title">
+          {{ detail?.ticket_no || `执行 #${executionId}` }}
+          <a-tag
+            v-if="detail"
+            class="status-tag"
+            :color="execStatusMeta[detail.status]?.color"
+          >
+            {{ execStatusMeta[detail.status]?.text || detail.status }}
+          </a-tag>
+          <a-tag v-if="detail?.interrupt_reason" color="warning">
+            {{ interruptReasonText[detail.interrupt_reason] || detail.interrupt_reason }}
+          </a-tag>
+          <span class="ws-dot" :class="{ on: wsConnected }" :title="wsConnected ? '实时通道已连接' : '实时通道未连接（降级轮询）'" />
+        </div>
+        <div class="op-hero-sub">
+          {{ detail?.title }}（应用：{{ detail?.app_name || '—' }}）
+          · {{ triggeredByText[detail?.triggered_by ?? ''] || detail?.triggered_by }}
+          · 开始 {{ fmtTime(detail?.started_at) }} · 结束 {{ fmtTime(detail?.finished_at) }}
+        </div>
+      </div>
+      <div class="op-hero-extra hero-actions">
+        <a-button class="back-btn" @click="router.push({ name: 'execution-list' })">
+          <ArrowLeftOutlined />返回列表
+        </a-button>
+        <a-popconfirm v-if="showControl('pause')" title="确认暂停执行？在跑主机将先跑完。" @confirm="onControl('pause')">
+          <a-button :loading="controlling" class="op-btn-orange"><PauseCircleOutlined />暂停</a-button>
+        </a-popconfirm>
+        <a-popconfirm v-if="showControl('resume')" title="确认恢复执行？" @confirm="onControl('resume')">
+          <a-button :loading="controlling" class="op-btn-green"><PlayCircleOutlined />恢复</a-button>
+        </a-popconfirm>
+        <a-popconfirm v-if="showControl('abort')" title="确认中止？未派发主机将置为跳过。" @confirm="onControl('abort')">
+          <a-button :loading="controlling" danger><StopOutlined />中止</a-button>
+        </a-popconfirm>
+        <a-popconfirm
+          v-if="showControl('force-abort')"
+          title="强制中止将强杀在跑 SSH 会话，可能造成目标机业务中断，确认继续？"
+          ok-text="强制中止"
+          ok-type="danger"
+          @confirm="onControl('force-abort')"
+        >
+          <a-button :loading="controlling" type="primary" danger>强制中止</a-button>
+        </a-popconfirm>
+      </div>
+    </div>
+
+    <!-- 步骤条：状态节点 + 连接线，点击切换主机矩阵与日志焦点 -->
+    <div class="step-flow">
+      <template v-for="(s, i) in detail?.steps ?? []" :key="s.step_order">
+        <div
+          class="step-node"
+          :class="[`is-${s.status}`, { active: s.step_order === activeStep }]"
+          @click="selectStep(s.step_order)"
+        >
+          <span class="node-dot">
+            <CheckOutlined v-if="s.status === 'success'" />
+            <CloseOutlined v-else-if="s.status === 'failed'" />
+            <LoadingOutlined v-else-if="s.status === 'running'" spin />
+            <PauseOutlined v-else-if="s.status === 'paused'" />
+            <StopOutlined v-else-if="s.status === 'terminated'" />
+            <template v-else>{{ s.step_order }}</template>
+          </span>
+          <span class="node-body">
+            <span class="node-title">
+              {{ s.step_name }}
+              <a-tag class="step-type" color="cyan">{{ s.script_type === 'playbook' ? 'Ansible' : 'Shell' }}</a-tag>
+            </span>
+            <span class="node-meta">
+              <b class="node-status">
+                {{ execStatusMeta[s.status as execApi.ExecutionStatus]?.text || (s.status === 'pending' ? '待执行' : s.status) }}
+              </b>
+              <span v-if="s.total_batch > 1">批次 {{ s.current_batch }}/{{ s.total_batch }}</span>
+              <span class="ok">成功 {{ s.success_count }}</span>
+              <span class="bad">失败 {{ s.failed_count }}</span>
+            </span>
+          </span>
+        </div>
+        <span
+          v-if="i < (detail?.steps.length ?? 0) - 1"
+          class="step-conn"
+          :class="{ done: s.status === 'success' }"
+        />
+      </template>
+    </div>
+
+    <!-- 主机矩阵（左） + 实时日志（右） -->
+    <div class="matrix-wrap">
+      <a-table
+        class="host-table"
+        :columns="hostColumns"
+        :data-source="stepHosts"
+        row-key="id"
+        size="small"
+        bordered
+        :pagination="false"
+        :scroll="{ y: 420 }"
+        :custom-row="(record: execApi.ExecutionHostRow) => ({
+          onClick: () => focusHost(record),
+          class: logIpOf(activeStepInfo, record.ip) === focusIp ? 'row-focused' : '',
+        })"
+      >
+        <template #bodyCell="{ column, record }">
+          <template v-if="column.key === 'host'">
+            <div class="host-cell">
+              <span class="hostname">{{ record.hostname }}</span>
+              <span class="ip">{{ record.ip }}</span>
+            </div>
+          </template>
+          <template v-else-if="column.key === 'status'">
+            <a-tag :color="hostStatusMeta[record.status as execApi.HostExecStatus]?.color">
+              {{ hostStatusMeta[record.status as execApi.HostExecStatus]?.text || record.status }}
+            </a-tag>
+          </template>
+          <template v-else-if="column.key === 'exit'">{{ record.exit_code ?? '—' }}</template>
+        </template>
+      </a-table>
+
+      <!-- 日志面板：终端风格，历史 REST + 实时 WS 追加 -->
+      <div class="log-panel">
+        <div class="log-head">
+          <span>
+            日志 · 步骤 {{ activeStep }} ·
+            {{ focusIp === 'ansible' ? 'Ansible 汇总输出' : (focusIp || '未选择主机') }}
+          </span>
+          <a-button v-if="!logEof" size="small" @click="loadMoreLogs">加载更多</a-button>
+        </div>
+        <div ref="logBox" class="log-body">
+          <div v-for="(line, i) in logLines" :key="i" class="log-line">{{ line }}</div>
+          <div v-if="!logLines.length" class="log-empty">
+            {{ focusIp ? '暂无日志输出' : '点击左侧主机行查看日志' }}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.detail-hero {
+  align-items: center;
+}
+.hero-main {
+  min-width: 0;
+}
+.status-tag {
+  margin-left: 8px;
+  vertical-align: 2px;
+}
+.hero-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+/* 实时通道指示灯 */
+.ws-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d9d9d9;
+  margin-left: 8px;
+  vertical-align: 2px;
+}
+.ws-dot.on {
+  background: #52c41a;
+  box-shadow: 0 0 4px #52c41a;
+}
+
+/* 步骤条：状态节点 + 连接线（跟随双主题令牌，风格对齐 op-card） */
+.step-flow {
+  display: flex;
+  align-items: center;
+  margin-bottom: 14px;
+  padding: 10px 16px;
+  background: var(--bg-card);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  overflow-x: auto;
+}
+.step-node {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  flex: none;
+  transition: background-color 0.2s, box-shadow 0.2s;
+}
+.step-node:hover {
+  background: var(--bg-hover);
+}
+.step-node.active {
+  background: rgba(99, 102, 241, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.45);
+}
+/* 状态圆节点：待执行显序号，其余状态显图标（色彩与状态标签一致） */
+.node-dot {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  flex: none;
+  border: 2px solid var(--border);
+  color: var(--text-3);
+  transition: all 0.2s;
+}
+.step-node.is-running .node-dot {
+  border-color: transparent;
+  color: #fff;
+  background: var(--grad-blue);
+  animation: node-pulse 1.6s ease-out infinite;
+}
+.step-node.is-success .node-dot {
+  border-color: transparent;
+  color: #fff;
+  background: var(--grad-green);
+}
+.step-node.is-failed .node-dot {
+  border-color: transparent;
+  color: #fff;
+  background: var(--grad-red);
+}
+.step-node.is-paused .node-dot,
+.step-node.is-terminated .node-dot {
+  border-color: transparent;
+  color: #fff;
+  background: var(--grad-orange);
+}
+@keyframes node-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 8px rgba(59, 130, 246, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .step-node.is-running .node-dot {
+    animation: none;
+  }
+}
+.node-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.node-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+.step-type {
+  margin-left: 4px;
+}
+.node-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.node-status {
+  font-weight: 600;
+}
+.step-node.is-running .node-status {
+  color: var(--primary);
+}
+.step-node.is-success .node-status {
+  color: var(--success);
+}
+.step-node.is-failed .node-status {
+  color: var(--error);
+}
+.step-node.is-paused .node-status,
+.step-node.is-terminated .node-status {
+  color: var(--warning);
+}
+.node-meta .ok {
+  color: var(--success);
+}
+.node-meta .bad {
+  color: var(--error);
+}
+/* 步骤间连接线：前序步骤成功后点亮 */
+.step-conn {
+  flex: 1 1 40px;
+  min-width: 24px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border);
+  transition: background-color 0.3s;
+}
+.step-conn.done {
+  background: var(--success);
+}
+
+/* 主机矩阵 + 日志双栏 */
+.matrix-wrap {
+  display: grid;
+  grid-template-columns: minmax(420px, 46%) 1fr;
+  gap: 14px;
+  align-items: start;
+}
+.host-cell {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+.host-cell .ip {
+  font-size: 12px;
+  color: var(--text-3, #6b7280);
+}
+:deep(.row-focused) > td {
+  background: rgba(99, 102, 241, 0.08) !important;
+}
+:deep(.ant-table-row) {
+  cursor: pointer;
+}
+
+/* 终端风格日志面板 */
+.log-panel {
+  border: 1px solid var(--border-1, #e5e7eb);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.log-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-1, #fff);
+  border-bottom: 1px solid var(--border-1, #e5e7eb);
+  font-size: 13px;
+}
+.log-body {
+  height: 440px;
+  overflow: auto;
+  background: #0f172a;
+  color: #d1fae5;
+  font-family: 'Cascadia Code', Consolas, Menlo, monospace;
+  font-size: 12px;
+  padding: 10px 12px;
+}
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.6;
+}
+.log-empty {
+  color: #64748b;
+  text-align: center;
+  padding-top: 180px;
+}
+</style>

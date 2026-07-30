@@ -1,0 +1,296 @@
+<script setup lang="ts">
+// 工单详情抽屉（V2）：基本信息 + 提交参数 + 审批时间线（节点制）+ 步骤/主机快照 + 执行概要
+// showApprove=true（待办审批页）时在审批中状态下展示 通过/驳回 操作区
+import { computed, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { message } from 'ant-design-vue'
+import * as ticketApi from '@/api/ticket'
+import { useUserStore } from '@/stores/user'
+import { execStatusMeta, triggeredByText } from '@/views/execution/meta'
+import { fmtTime, statusMeta } from './meta'
+
+const props = defineProps<{
+  open: boolean
+  ticketId: number | null
+  showApprove?: boolean
+}>()
+const emit = defineEmits<{
+  (e: 'update:open', v: boolean): void
+  (e: 'changed'): void
+}>()
+
+const loading = ref(false)
+const detail = ref<ticketApi.TicketDetail | null>(null)
+const router = useRouter()
+const userStore = useUserStore()
+
+/** 拉取工单详情（打开抽屉或切换工单时刷新） */
+async function load() {
+  if (!props.ticketId) return
+  loading.value = true
+  try {
+    detail.value = await ticketApi.getTicket(props.ticketId)
+  } finally {
+    loading.value = false
+  }
+}
+
+watch(
+  () => [props.open, props.ticketId],
+  () => {
+    if (props.open && props.ticketId) load()
+  },
+)
+
+const awaiting = computed(() => detail.value?.status === 'approving')
+
+// 审批时间线：flow_snap 逐节点合并审批记录——已审绿/红、当前节点蓝、未到节点灰
+interface TimelineRow {
+  color: string
+  title: string
+  comment?: string
+  time?: string
+}
+const timeline = computed<TimelineRow[]>(() => {
+  const d = detail.value
+  if (!d) return []
+  return d.flow_snap.map((n) => {
+    const rec = d.approvals.find((a) => a.node_order === n.node)
+    if (rec) {
+      return {
+        color: rec.action === 'approve' ? 'green' : 'red',
+        title: `节点 ${n.node}（${n.role_name}）${rec.action === 'approve' ? '通过' : '驳回'} · ${rec.approver_name}`,
+        comment: rec.comment || undefined,
+        time: fmtTime(rec.created_at),
+      }
+    }
+    if (awaiting.value && n.node === d.current_node) {
+      return { color: 'blue', title: `节点 ${n.node} 等待「${n.role_name}」审批` }
+    }
+    return { color: 'gray', title: `节点 ${n.node} ${n.role_name}` }
+  })
+})
+
+/** 执行策略一行摘要（模板规则快照） */
+const strategyText = computed(() => {
+  const s = detail.value?.exec_strategy
+  if (!s || s.concurrency === undefined) return '—'
+  return [
+    `并发 ${s.concurrency}`,
+    s.batch_size ? `每批 ${s.batch_size} 台${s.batch_pause ? '（批间暂停）' : ''}` : '不分批',
+    `超时 ${s.timeout}s`,
+    s.fail_fast ? '失败即停' : '失败继续',
+  ].join(' · ')
+})
+
+const hostColumns = [
+  { title: '主机名', dataIndex: 'hostname', key: 'hostname', ellipsis: true },
+  { title: 'IP', dataIndex: 'ip', key: 'ip', width: 140 },
+  { title: '环境', dataIndex: 'environment', key: 'environment', width: 80 },
+  { title: 'SSH 端口', dataIndex: 'ssh_port', key: 'ssh_port', width: 90 },
+]
+
+// ---------- 审批操作（待办页复用本抽屉） ----------
+const comment = ref('')
+const acting = ref('')
+
+/** 审批通过/驳回：驳回意见必填（后端 40001 校验，前端同步拦截） */
+async function onApprove(action: 'approve' | 'reject') {
+  if (!detail.value) return
+  if (action === 'reject' && !comment.value.trim()) {
+    message.warning('驳回时必须填写审批意见')
+    return
+  }
+  acting.value = action
+  try {
+    const res = await ticketApi.approveTicket(detail.value.id, action, comment.value || undefined)
+    if (action === 'reject') message.success('已驳回，工单关闭')
+    else message.success(res.status === 'queued' ? '已通过，工单进入执行队列' : '已通过，流转至下一审批节点')
+    comment.value = ''
+    emit('changed')
+    await load()
+  } catch {
+    /* 错误提示由拦截器统一弹出 */
+  } finally {
+    acting.value = ''
+  }
+}
+/** 跳转执行详情页（矩阵 + 实时日志，需 execution:read） */
+function openExecution() {
+  if (!detail.value?.execution) return
+  emit('update:open', false)
+  router.push({ name: 'execution-detail', params: { id: detail.value.execution.id } })
+}
+</script>
+
+<template>
+  <a-drawer
+    :open="open"
+    :width="760"
+    :title="detail ? `工单详情 · ${detail.ticket_no}` : '工单详情'"
+    @close="emit('update:open', false)"
+  >
+    <a-spin :spinning="loading">
+      <template v-if="detail">
+        <!-- 头部：标题（=模板名快照）+ 状态 -->
+        <div class="d-head">
+          <b class="d-title">{{ detail.title }}</b>
+          <a-tag :color="statusMeta[detail.status]?.color">
+            {{ statusMeta[detail.status]?.text || detail.status }}
+          </a-tag>
+          <a-tag v-if="awaiting" color="blue">节点 {{ detail.current_node }}/{{ detail.total_nodes }}</a-tag>
+        </div>
+
+        <a-descriptions bordered size="small" :column="2" class="d-desc">
+          <a-descriptions-item label="目标应用">{{ detail.app_name || '—' }}</a-descriptions-item>
+          <a-descriptions-item label="模板版本">v{{ detail.template_version }}</a-descriptions-item>
+          <a-descriptions-item label="提交人">{{ detail.creator_name }}</a-descriptions-item>
+          <a-descriptions-item label="提交时间">{{ fmtTime(detail.submitted_at) }}</a-descriptions-item>
+          <a-descriptions-item label="完成时间">{{ fmtTime(detail.finished_at) }}</a-descriptions-item>
+          <a-descriptions-item label="执行策略">{{ strategyText }}</a-descriptions-item>
+          <a-descriptions-item v-if="Object.keys(detail.params).length" label="提交参数" :span="2">
+            <a-tag v-for="(v, k) in detail.params" :key="k" color="geekblue">{{ k }} = {{ v }}</a-tag>
+          </a-descriptions-item>
+        </a-descriptions>
+
+        <!-- 审批时间线（免审工单无此块） -->
+        <template v-if="detail.flow_snap.length">
+          <div class="d-section">审批流（模板规则快照）</div>
+          <a-timeline class="d-timeline">
+            <a-timeline-item v-for="(row, i) in timeline" :key="i" :color="row.color">
+              <div>{{ row.title }}</div>
+              <div v-if="row.comment" class="d-tl-comment">意见：{{ row.comment }}</div>
+              <div v-if="row.time" class="d-tl-time">{{ row.time }}</div>
+            </a-timeline-item>
+          </a-timeline>
+        </template>
+
+        <!-- 执行概要（M5：可跳执行详情页看矩阵与实时日志） -->
+        <template v-if="detail.execution">
+          <div class="d-section">
+            执行概要
+            <a-button
+              v-if="userStore.hasPerm('execution:read')"
+              size="small"
+              class="op-btn-cyan d-exec-btn"
+              @click="openExecution"
+            >查看执行详情</a-button>
+          </div>
+          <a-descriptions bordered size="small" :column="4" class="d-desc">
+            <a-descriptions-item label="状态">
+              <a-tag :color="execStatusMeta[detail.execution.status as keyof typeof execStatusMeta]?.color">
+                {{ execStatusMeta[detail.execution.status as keyof typeof execStatusMeta]?.text || detail.execution.status }}
+              </a-tag>
+            </a-descriptions-item>
+            <a-descriptions-item label="步骤数">{{ detail.execution.total_steps }}</a-descriptions-item>
+            <a-descriptions-item label="主机数">{{ detail.execution.total_hosts }}</a-descriptions-item>
+            <a-descriptions-item label="触发方式">{{ triggeredByText[detail.execution.triggered_by] || detail.execution.triggered_by }}</a-descriptions-item>
+          </a-descriptions>
+        </template>
+
+        <!-- 步骤快照：提交时固化的脚本内容与生效参数（含 fixed 固定值） -->
+        <div class="d-section">执行步骤（{{ detail.steps.length }}）</div>
+        <a-collapse class="d-steps">
+          <a-collapse-panel
+            v-for="s in detail.steps"
+            :key="s.step_order"
+            :header="`第 ${s.step_order} 步 · ${s.step_name}（${s.script_type} · 超时 ${s.timeout}s）`"
+          >
+            <div v-if="Object.keys(s.params).length" class="d-params">
+              <a-tag v-for="(v, k) in s.params" :key="k" color="geekblue">{{ k }} = {{ v }}</a-tag>
+            </div>
+            <pre class="d-content">{{ s.content_snap }}</pre>
+          </a-collapse-panel>
+        </a-collapse>
+
+        <!-- 主机清单：提交时固化快照 -->
+        <div class="d-section">目标主机（{{ detail.hosts.length }}，提交时固化）</div>
+        <a-table
+          :columns="hostColumns"
+          :data-source="detail.hosts"
+          row-key="host_id"
+          size="small"
+          bordered
+          :pagination="false"
+        />
+
+        <!-- 审批操作区：仅待办页且工单处于审批中 -->
+        <template v-if="showApprove && awaiting">
+          <div class="d-section">审批操作</div>
+          <a-textarea
+            v-model:value="comment"
+            :rows="2"
+            placeholder="审批意见（驳回时必填）"
+            :maxlength="512"
+          />
+          <div class="d-actions">
+            <a-button type="primary" :loading="acting === 'approve'" @click="onApprove('approve')">
+              通过
+            </a-button>
+            <a-button danger :loading="acting === 'reject'" @click="onApprove('reject')">驳回</a-button>
+          </div>
+        </template>
+      </template>
+    </a-spin>
+  </a-drawer>
+</template>
+
+<style scoped>
+.d-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.d-title {
+  font-size: 16px;
+  color: var(--text-1);
+}
+.d-desc {
+  margin-bottom: 4px;
+}
+.d-section {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-1);
+  margin: 18px 0 10px;
+}
+.d-exec-btn {
+  margin-left: 10px;
+  font-weight: 400;
+}
+.d-timeline {
+  padding: 6px 4px 0;
+}
+.d-tl-comment {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 2px;
+}
+.d-tl-time {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+.d-params {
+  margin-bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.d-content {
+  background: var(--bg-input);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+.d-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+</style>

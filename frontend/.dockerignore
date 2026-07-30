@@ -1,0 +1,5 @@
+# 构建上下文排除项：避免本地依赖/产物进入镜像
+node_modules
+dist
+.git
+*.local

@@ -1,0 +1,33 @@
+# 后端依赖（M0 基座所需，后续里程碑按需追加）
+fastapi==0.115.6
+uvicorn[standard]==0.30.6
+sqlalchemy==2.0.36
+asyncmy==0.2.9          # 运行时异步 MySQL 驱动
+pymysql==1.1.1          # Alembic 迁移用同步驱动（见架构冲突声明 C2）
+cryptography==43.0.3    # pymysql caching_sha2_password 认证依赖；M3 起用于 AES-256-GCM 字段加密
+alembic==1.13.3
+redis==5.0.8
+pydantic-settings==2.5.2
+passlib==1.7.4          # 密码哈希（种子 admin 账号需要）
+bcrypt==4.0.1           # 固定 4.0.x，passlib 1.7.4 与 bcrypt>=4.1 不兼容
+
+# ---- M1 登录鉴权新增 ----
+python-jose[cryptography]==3.3.0   # JWT 签发与校验（HS256）
+pyotp==2.9.0                       # TOTP MFA
+ldap3==2.9.1                       # LDAP 认证源
+authlib==1.3.2                     # OIDC 授权码模式客户端
+httpx==0.27.2                      # OIDC 换取 token 的 HTTP 客户端
+
+# ---- M2 CMDB 新增 ----
+openpyxl==3.1.5                    # Excel 模板/导入/导出
+python-multipart==0.0.12           # FastAPI multipart 文件上传解析
+
+# ---- M5 执行引擎新增 ----
+asyncssh==2.17.0                   # 异步 SSH 执行器（Shell 步骤 + Ansible 作业主机会话）
+jinja2==3.1.4                      # Playbook/Inventory 模板渲染（SandboxedEnvironment）
+
+# ---- M6 通知集成新增 ----
+aiosmtplib==3.0.2                  # 异步 SMTP 发送（Email 渠道）；Webhook/Teams 复用 httpx
+
+# ---- M7 安全审计新增 ----
+apscheduler==3.10.4                # Worker 内嵌定时器：audit_log 分区滚动预建/过期清理

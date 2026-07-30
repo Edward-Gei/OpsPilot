@@ -1,0 +1,307 @@
+"""CMDB 业务服务：主机/应用 CRUD、自动补全、删除保护、多对多关联。
+
+删除保护规则（03-数据库设计 §3.3）：
+    删主机：被应用关联 或 被进行中工单的 ticket_host 引用 → 42201
+    删应用：被进行中工单引用 → 42201
+"""
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.response import Errors
+from app.models.cmdb import AppHost, Application, Host
+from app.models.ticket import Ticket, TicketHost
+
+# 工单"进行中"状态集：终态之外的都算（引用即阻止删除）
+ACTIVE_TICKET_STATUSES = ("approving", "running")
+
+
+# ---------- 主机 ----------
+
+async def get_host_or_404(session: AsyncSession, host_id: int) -> Host:
+    """按 ID 取主机，不存在抛 40401。"""
+    host = await session.get(Host, host_id)
+    if host is None:
+        raise Errors.not_found("主机不存在")
+    return host
+
+
+async def list_hosts(
+    session: AsyncSession,
+    *,
+    page: int,
+    page_size: int,
+    keyword: str | None = None,
+    platform: str | None = None,
+    region: str | None = None,
+    environment: str | None = None,
+    status: str | None = None,
+) -> tuple[list[Host], int]:
+    """分页查主机；keyword 模糊匹配主机名/IP，其余精确筛选。"""
+    query = _host_filter_query(
+        keyword=keyword, platform=platform, region=region, environment=environment, status=status
+    )
+    total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
+    rows = await session.execute(
+        query.order_by(Host.id.desc()).offset((page - 1) * page_size).limit(page_size)
+    )
+    return list(rows.scalars()), total
+
+
+def _host_filter_query(
+    *,
+    keyword: str | None = None,
+    platform: str | None = None,
+    region: str | None = None,
+    environment: str | None = None,
+    status: str | None = None,
+):
+    """主机筛选查询构造：列表与导出共用同一套过滤语义。"""
+    query = select(Host)
+    if keyword:
+        like = f"%{keyword}%"
+        query = query.where(Host.hostname.like(like) | Host.ip.like(like))
+    if platform:
+        query = query.where(Host.platform == platform)
+    if region:
+        query = query.where(Host.region == region)
+    if environment:
+        query = query.where(Host.environment == environment)
+    if status:
+        query = query.where(Host.status == status)
+    return query
+
+
+async def iter_hosts_filtered(session: AsyncSession, **filters) -> list[Host]:
+    """按筛选条件取全量主机（导出用，按 id 升序保证行序稳定）。"""
+    rows = await session.execute(_host_filter_query(**filters).order_by(Host.id.asc()))
+    return list(rows.scalars())
+
+
+async def create_host(session: AsyncSession, *, created_by: int, **fields) -> Host:
+    """新增主机；IP 全局唯一，冲突抛 40901。"""
+    await _ensure_ip_unique(session, fields["ip"])
+    host = Host(created_by=created_by, **fields)
+    session.add(host)
+    await session.flush()
+    return host
+
+
+async def update_host(session: AsyncSession, host_id: int, **fields) -> Host:
+    """编辑主机；变更 IP 时重新校验唯一性。"""
+    host = await get_host_or_404(session, host_id)
+    if fields.get("ip") and fields["ip"] != host.ip:
+        await _ensure_ip_unique(session, fields["ip"])
+    for key, value in fields.items():
+        setattr(host, key, value)
+    await session.flush()
+    return host
+
+
+async def _ensure_ip_unique(session: AsyncSession, ip: str) -> None:
+    """IP 唯一性校验：已存在抛 40901（HOST-02）。"""
+    exists = (await session.execute(select(Host.id).where(Host.ip == ip))).scalar_one_or_none()
+    if exists is not None:
+        raise Errors.conflict(f"IP {ip} 已存在（主机 #{exists}）")
+
+
+async def delete_host(session: AsyncSession, host_id: int) -> Host:
+    """删除主机；删除保护：被应用关联或被进行中工单引用时拒绝（HOST-10）。"""
+    host = await get_host_or_404(session, host_id)
+    app_names = (
+        await session.execute(
+            select(Application.name)
+            .join(AppHost, AppHost.app_id == Application.id)
+            .where(AppHost.host_id == host_id)
+        )
+    ).scalars().all()
+    if app_names:
+        raise Errors.rejected(f"主机被应用引用，无法删除：{'、'.join(app_names[:5])}")
+    ticket_nos = (
+        await session.execute(
+            select(Ticket.ticket_no)
+            .join(TicketHost, TicketHost.ticket_id == Ticket.id)
+            .where(TicketHost.host_id == host_id, Ticket.status.in_(ACTIVE_TICKET_STATUSES))
+        )
+    ).scalars().all()
+    if ticket_nos:
+        raise Errors.rejected(f"主机被进行中工单引用，无法删除：{'、'.join(ticket_nos[:5])}")
+    await session.delete(host)
+    await session.flush()
+    return host
+
+
+async def suggest_host_field(session: AsyncSession, field: str, q: str | None) -> list[str]:
+    """平台/区域自由文本自动补全：返回已有去重值（HOST-03）。"""
+    column = {"platform": Host.platform, "region": Host.region}.get(field)
+    if column is None:
+        raise Errors.param("field 仅支持 platform / region")
+    query = select(column).where(column.is_not(None)).distinct().order_by(column).limit(20)
+    if q:
+        query = query.where(column.like(f"%{q}%"))
+    return [v for v in (await session.execute(query)).scalars() if v]
+
+
+async def get_host_apps(session: AsyncSession, host_id: int) -> list[Application]:
+    """主机详情反查关联应用（APP-05）。"""
+    rows = await session.execute(
+        select(Application)
+        .join(AppHost, AppHost.app_id == Application.id)
+        .where(AppHost.host_id == host_id)
+        .order_by(Application.id)
+    )
+    return list(rows.scalars())
+
+
+# ---------- 应用 ----------
+
+async def get_app_or_404(session: AsyncSession, app_id: int) -> Application:
+    """按 ID 取应用，不存在抛 40401。"""
+    app = await session.get(Application, app_id)
+    if app is None:
+        raise Errors.not_found("应用不存在")
+    return app
+
+
+async def list_apps(
+    session: AsyncSession,
+    *,
+    page: int,
+    page_size: int,
+    keyword: str | None = None,
+    language: str | None = None,
+    deploy_type: str | None = None,
+) -> tuple[list[Application], int, dict[int, dict]]:
+    """分页查应用；返回 (列表, 总数, {app_id: 关联主机数+资源汇总})。"""
+    query = select(Application)
+    if keyword:
+        query = query.where(Application.name.like(f"%{keyword}%"))
+    if language:
+        query = query.where(Application.language == language)
+    if deploy_type:
+        query = query.where(Application.deploy_type == deploy_type)
+    total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
+    rows = await session.execute(
+        query.order_by(Application.id.desc()).offset((page - 1) * page_size).limit(page_size)
+    )
+    apps = list(rows.scalars())
+    # 关联主机明细一次查出，Python 侧聚合：主机数 + 资源汇总 + IP 清单（列表展示用）
+    host_stats: dict[int, dict] = {}
+    if apps:
+        detail_rows = await session.execute(
+            select(AppHost.app_id, Host.ip, Host.cpu_cores, Host.memory_gb, Host.disk_gb)
+            .join(Host, Host.id == AppHost.host_id)
+            .where(AppHost.app_id.in_([a.id for a in apps]))
+            .order_by(AppHost.app_id, Host.id)
+        )
+        for app_id, ip, cpu, mem, disk in detail_rows:
+            s = host_stats.setdefault(app_id, {
+                "host_count": 0, "cpu_total": 0, "memory_total": 0, "disk_total": 0, "host_ips": [],
+            })
+            s["host_count"] += 1
+            s["cpu_total"] += cpu or 0
+            s["memory_total"] += mem or 0
+            s["disk_total"] += disk or 0
+            s["host_ips"].append(ip)
+    return apps, total, host_stats
+
+
+async def _ensure_app_name_unique(session: AsyncSession, name: str, exclude_id: int | None = None) -> None:
+    """应用名唯一性校验（APP-02），冲突抛 40901。"""
+    query = select(Application.id).where(Application.name == name)
+    if exclude_id is not None:
+        query = query.where(Application.id != exclude_id)
+    if (await session.execute(query)).scalar_one_or_none() is not None:
+        raise Errors.conflict(f"应用名 {name} 已存在")
+
+
+async def _validate_host_ids(session: AsyncSession, host_ids: list[int]) -> None:
+    """关联主机校验：存在性 + 仅限生产环境，不满足抛 40001。"""
+    if not host_ids:
+        return
+    rows = (
+        await session.execute(
+            select(Host.id, Host.environment).where(Host.id.in_(host_ids))
+        )
+    ).all()
+    found = {hid for hid, _ in rows}
+    missing = set(host_ids) - found
+    if missing:
+        raise Errors.param(f"主机不存在: {sorted(missing)}")
+    non_prod = sorted(hid for hid, env in rows if env != "prod")
+    if non_prod:
+        raise Errors.param(f"应用仅可关联生产环境主机，非生产主机: {non_prod}")
+
+
+async def _replace_app_hosts(session: AsyncSession, app_id: int, host_ids: list[int]) -> None:
+    """全量替换应用-主机关联（编辑页穿梭框语义）。"""
+    existing = (
+        await session.execute(select(AppHost).where(AppHost.app_id == app_id))
+    ).scalars().all()
+    target = set(host_ids)
+    for link in existing:
+        if link.host_id not in target:
+            await session.delete(link)
+    current = {link.host_id for link in existing}
+    for hid in target - current:
+        session.add(AppHost(app_id=app_id, host_id=hid))
+    await session.flush()
+
+
+async def create_app(
+    session: AsyncSession, *, created_by: int, host_ids: list[int], **fields
+) -> Application:
+    """新增应用并建立主机关联。"""
+    await _ensure_app_name_unique(session, fields["name"])
+    await _validate_host_ids(session, host_ids)
+    app = Application(created_by=created_by, **fields)
+    session.add(app)
+    await session.flush()
+    await _replace_app_hosts(session, app.id, host_ids)
+    return app
+
+
+async def update_app(
+    session: AsyncSession, app_id: int, *, host_ids: list[int], **fields
+) -> Application:
+    """编辑应用；host_ids 全量替换关联。"""
+    app = await get_app_or_404(session, app_id)
+    if fields.get("name") and fields["name"] != app.name:
+        await _ensure_app_name_unique(session, fields["name"], exclude_id=app_id)
+    await _validate_host_ids(session, host_ids)
+    for key, value in fields.items():
+        setattr(app, key, value)
+    await _replace_app_hosts(session, app_id, host_ids)
+    await session.flush()
+    return app
+
+
+async def delete_app(session: AsyncSession, app_id: int) -> Application:
+    """删除应用；被进行中工单引用时拒绝（42201），关联关系级联清理。"""
+    app = await get_app_or_404(session, app_id)
+    ticket_nos = (
+        await session.execute(
+            select(Ticket.ticket_no).where(
+                Ticket.app_id == app_id, Ticket.status.in_(ACTIVE_TICKET_STATUSES)
+            )
+        )
+    ).scalars().all()
+    if ticket_nos:
+        raise Errors.rejected(f"应用被进行中工单引用，无法删除：{'、'.join(ticket_nos[:5])}")
+    for link in (
+        await session.execute(select(AppHost).where(AppHost.app_id == app_id))
+    ).scalars():
+        await session.delete(link)
+    await session.delete(app)
+    await session.flush()
+    return app
+
+
+async def get_app_hosts(session: AsyncSession, app_id: int) -> list[Host]:
+    """应用详情：关联主机列表。"""
+    rows = await session.execute(
+        select(Host)
+        .join(AppHost, AppHost.host_id == Host.id)
+        .where(AppHost.app_id == app_id)
+        .order_by(Host.id)
+    )
+    return list(rows.scalars())
