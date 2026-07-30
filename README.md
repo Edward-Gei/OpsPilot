@@ -9,6 +9,9 @@
 
 ## 一、快速部署（一键启动）
 
+> 生产环境完整手册（前置条件/安全基线/HTTPS/升级回滚/故障排查）：
+> [deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md)
+
 前置：部署机已装 Docker Engine 24+（含 compose 插件），无需外网（离线部署见第四节）。
 
 ```bash
@@ -98,6 +101,6 @@ docker compose up -d                          # 不带 --build，直接用导入
 ```
 backend/    FastAPI 应用（api 与 worker 共用镜像，入口不同）
 frontend/   Vue3 前端（构建产物打进 nginx 镜像）
-deploy/     compose 编排 / nginx.conf / mysql 初始化 / 备份与离线脚本 / 压测设施
+deploy/     compose 编排 / nginx.conf / mysql 初始化 / 备份与离线脚本 / 压测设施 / 生产部署手册
 docs/       设计文档（PRD、技术架构、数据库、API、任务拆解）
 ```
