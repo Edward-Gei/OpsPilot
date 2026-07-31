@@ -178,7 +178,15 @@ function tickLogPoll() {
 }
 ```
 
-`teardownRealtime` 中追加 `abortFetch = true`（放在 `pollAbort = true` 之后）。
+`teardownRealtime` 不动（它在执行终态时也会被调用，若在其中置 `abortFetch` 会把终态补拉截断）；`abortFetch` 仅在页面卸载时置位：`onBeforeUnmount(teardownRealtime)` 改为：
+
+```typescript
+onBeforeUnmount(() => {
+  // 离开页面：中断拉取循环（终态 teardown 不置此标志，保证终态补拉能跑完）
+  abortFetch = true
+  teardownRealtime()
+})
+```
 
 - [ ] **Step 3: template 区——步骤条改定位、日志框改合并流**
 
@@ -307,10 +315,12 @@ onMounted(async () => {
 })
 ```
 
-`onBeforeUnmount(teardownRealtime)` 替换为：
+`onBeforeUnmount` 替换为（保留 Task 1 的 `abortFetch = true`）：
 
 ```typescript
 onBeforeUnmount(() => {
+  // 离开页面：中断拉取循环（终态 teardown 不置此标志，保证终态补拉能跑完）
+  abortFetch = true
   teardownRealtime()
   window.removeEventListener('resize', fitLogHeight)
 })
