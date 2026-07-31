@@ -150,6 +150,11 @@ function openExecution() {
           <a-descriptions-item v-if="Object.keys(detail.params).length" label="提交参数" :span="2">
             <a-tag v-for="(v, k) in detail.params" :key="k" color="geekblue">{{ k }} = {{ v }}</a-tag>
           </a-descriptions-item>
+          <a-descriptions-item v-if="detail.credential_refs?.length" label="引用凭据" :span="2">
+            <a-tag v-for="r in detail.credential_refs" :key="r.alias" color="purple">
+              {{ r.alias }} → {{ r.credential_name }}
+            </a-tag>
+          </a-descriptions-item>
         </a-descriptions>
 
         <!-- 审批时间线（免审工单无此块） -->
