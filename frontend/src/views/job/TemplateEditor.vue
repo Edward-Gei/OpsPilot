@@ -63,6 +63,19 @@ const steps = ref<EditStep[]>([])
 // 全局参数定义：对所有步骤生效（保存时同一份写入每个步骤的 params_schema，
 // 工单提交端已按 TPL-03 同名合并，后端/执行引擎无需改动）
 const globalParams = ref<EditParam[]>([])
+
+interface EditCredRef {
+  alias: string
+  credential_id: number | undefined
+}
+// 引用凭据：模板级声明，shell 步骤执行时以 CRED_<别名大写>_* 环境变量注入
+const credentialRefs = ref<EditCredRef[]>([])
+const credOptions = ref<{ label: string; value: number }[]>([])
+async function loadCredOptions() {
+  const data = await jobApi.listCredentials({ page: 1, page_size: 100 })
+  credOptions.value = data.items.map((c) => ({ value: c.id, label: c.name }))
+}
+
 const nodes = ref<EditNode[]>([])
 const notifyRules = ref<EditNotifyRule[]>([])
 const stepActive = ref<number[]>([]) // 步骤折叠面板展开项
@@ -107,9 +120,11 @@ watch(
     })
     steps.value = [emptyStep()]
     globalParams.value = []
+    credentialRefs.value = []
     nodes.value = []
     notifyRules.value = []
     stepActive.value = [0]
+    loadCredOptions()
     // 编辑回填自身；复制模式回填源模板（保存时仍走新建接口）
     const loadId = props.templateId ?? props.copyFromId ?? null
     if (loadId == null) return
@@ -136,6 +151,9 @@ watch(
       }))
       // 存量步骤级参数自动合并去重为全局参数
       globalParams.value = mergeStepParams(d.steps)
+      credentialRefs.value = (d.credential_refs || []).map((r) => ({
+        alias: r.alias, credential_id: r.credential_id,
+      }))
       nodes.value = d.approval_nodes.map((n) => ({ role_id: n.role_id, approve_mode: n.approve_mode }))
       notifyRules.value = d.notify_rules.map((r) => ({ event: r.event, receivers: [...r.receivers], channels: [...r.channels] }))
       stepActive.value = steps.value.map((_, i) => i)
@@ -188,6 +206,13 @@ function validate(): string | null {
     names.add(p.name)
     if (p.fixed && !p.default) return `固定值参数「${p.name}」必须提供默认值`
   }
+  // 引用凭据校验：别名合法、不重名（大小写不敏感，与后端规则一致）
+  for (const r of credentialRefs.value) {
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(r.alias)) return `凭据别名 ${r.alias || '(空)'} 不合法：仅限字母/数字/下划线且以字母开头`
+    if (!r.credential_id) return '请为每个引用凭据选择凭据'
+  }
+  const aliases = credentialRefs.value.map((r) => r.alias.toUpperCase())
+  if (new Set(aliases).size !== aliases.length) return '凭据别名不允许重复'
   if (form.approval_enabled) {
     if (!nodes.value.length) return '开启审批后至少需要 1 个审批节点'
     if (nodes.value.some((n) => !n.role_id)) return '每个审批节点必须选择角色'
@@ -236,6 +261,7 @@ async function onSubmit() {
     allow_countersign: form.allow_countersign,
     notify_rules: notifyRules.value.map((r) => ({ event: r.event!, receivers: r.receivers, channels: r.channels })),
     visible_role_ids: form.visible_role_ids,
+    credential_refs: credentialRefs.value.map((r) => ({ alias: r.alias, credential_id: r.credential_id! })),
     changelog: form.changelog || undefined,
   }
   saving.value = true
@@ -316,6 +342,27 @@ async function onSubmit() {
                 <a-button size="small" danger @click="globalParams.splice(pi, 1)"><DeleteOutlined /></a-button>
               </div>
               <a-button size="small" class="op-btn-green" @click="addParam"><PlusOutlined />添加参数</a-button>
+            </a-form-item>
+            <a-form-item>
+              <template #label>
+                引用凭据
+                <span class="label-tip">脚本中以 <code>$CRED_&lt;别名大写&gt;_USER</code> / <code>$CRED_&lt;别名大写&gt;_SECRET</code> 读取，明文不落日志与快照</span>
+              </template>
+              <div v-for="(r, ri) in credentialRefs" :key="ri" class="param-row">
+                <a-input v-model:value="r.alias" placeholder="别名 * 如 mysql" class="param-name" />
+                <a-select
+                  v-model:value="r.credential_id"
+                  :options="credOptions"
+                  show-search
+                  option-filter-prop="label"
+                  placeholder="选择凭据"
+                  class="param-label"
+                />
+                <a-button size="small" danger @click="credentialRefs.splice(ri, 1)"><DeleteOutlined /></a-button>
+              </div>
+              <a-button size="small" class="op-btn-green" @click="credentialRefs.push({ alias: '', credential_id: undefined })">
+                <PlusOutlined />添加凭据引用
+              </a-button>
             </a-form-item>
           </a-form>
           <a-collapse v-model:active-key="stepActive">
