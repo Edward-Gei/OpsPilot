@@ -8,7 +8,6 @@ from fastapi import APIRouter, Depends, Query, Request
 from app import audit
 from app.core.deps import DbSession, get_client_ip, require_perm
 from app.core.response import ok
-from app.core.security import encrypt_text
 from app.models.auth import User
 from app.schemas.job import (
     JobHostCreateRequest,
@@ -21,10 +20,10 @@ from app.services import job_host_service
 router = APIRouter(prefix="/job-hosts", tags=["作业主机"])
 
 
-def _detail(jh) -> dict:
-    """作业主机统一序列化：永不输出密文字段，额外派生 has_passphrase。"""
+def _detail(jh, cred_names: dict[int, str] | None = None) -> dict:
+    """作业主机统一序列化：认证信息只暴露关联凭据 id/名称，永无密文。"""
     d = JobHostDetailResponse.model_validate(jh).model_dump(mode="json")
-    d["has_passphrase"] = bool(jh.passphrase_enc)
+    d["credential_name"] = (cred_names or {}).get(jh.credential_id)
     return d
 
 
@@ -41,7 +40,10 @@ async def list_job_hosts(
     hosts, total = await job_host_service.list_job_hosts(
         session, keyword=keyword, enabled=enabled, page=page, page_size=page_size
     )
-    return ok({"items": [_detail(jh) for jh in hosts], "total": total,
+    cred_names = await job_host_service.credential_names(
+        session, [jh.credential_id for jh in hosts]
+    )
+    return ok({"items": [_detail(jh, cred_names) for jh in hosts], "total": total,
                "page": page, "page_size": page_size})
 
 
@@ -52,18 +54,15 @@ async def create_job_host(
     session: DbSession,
     actor: User = Depends(require_perm("job_host:write")),
 ) -> dict:
-    """新建作业主机；IP+端口重复 42201，secret/passphrase 加密后入库。"""
-    payload = req.model_dump()
-    secret = payload.pop("secret")
-    passphrase = payload.pop("passphrase")
-    payload["secret_enc"] = encrypt_text(secret)
-    payload["passphrase_enc"] = encrypt_text(passphrase) if passphrase else None
-    jh = await job_host_service.create_job_host(session, data=payload, created_by=actor.id)
+    """新建作业主机；IP+端口重复 42201，登录认证引用凭据（credential_id）。"""
+    jh = await job_host_service.create_job_host(
+        session, data=req.model_dump(), created_by=actor.id
+    )
     audit.log(module="job", action="job_host.create", actor_id=actor.id,
               actor_name=actor.username, source_ip=get_client_ip(request),
               target_type="job_host", target_id=str(jh.id), target_name=jh.name,
               detail={"ip": jh.ip, "ssh_port": jh.ssh_port,
-                      "login_user": jh.login_user, "auth_type": jh.auth_type})
+                      "credential_id": jh.credential_id})
     return ok({"id": jh.id})
 
 
@@ -75,7 +74,7 @@ async def get_job_host(
 ) -> dict:
     """按 ID 取作业主机详情（不含密文），不存在 40401。"""
     jh = await job_host_service.get_job_host(session, job_host_id)
-    return ok(_detail(jh))
+    return ok(_detail(jh, await job_host_service.credential_names(session, [jh.credential_id])))
 
 
 @router.put("/{job_host_id}", summary="编辑作业主机")
@@ -86,26 +85,15 @@ async def update_job_host(
     session: DbSession,
     actor: User = Depends(require_perm("job_host:write")),
 ) -> dict:
-    """编辑作业主机；secret 传 ****** 或不传 = 不变更密文。"""
+    """编辑作业主机；credential_id 传值即切换关联凭据。"""
     payload = req.model_dump(exclude_none=True)
-    secret = payload.pop("secret", None)
-    passphrase = payload.pop("passphrase", None)
-    secret_changed = bool(secret and secret != "******")
-    if secret_changed:
-        payload["secret_enc"] = encrypt_text(secret)
-        # 密文更新时口令一并按本次入参覆盖（不传即清空，与新密钥配套）
-        payload["passphrase_enc"] = encrypt_text(passphrase) if passphrase else None
-    elif passphrase:
-        # 仅补充/修改私钥口令
-        payload["passphrase_enc"] = encrypt_text(passphrase)
     jh = await job_host_service.update_job_host(session, job_host_id, data=payload)
     audit.log(module="job", action="job_host.update", actor_id=actor.id,
               actor_name=actor.username, source_ip=get_client_ip(request),
               target_type="job_host", target_id=str(jh.id), target_name=jh.name,
               detail={"ip": jh.ip, "ssh_port": jh.ssh_port,
-                      "login_user": jh.login_user, "auth_type": jh.auth_type,
-                      "secret_changed": secret_changed})
-    return ok(_detail(jh))
+                      "credential_id": jh.credential_id})
+    return ok(_detail(jh, await job_host_service.credential_names(session, [jh.credential_id])))
 
 
 @router.delete("/{job_host_id}", summary="删除作业主机")
@@ -149,4 +137,4 @@ async def set_enabled(
               actor_name=actor.username, source_ip=get_client_ip(request),
               target_type="job_host", target_id=str(jh.id), target_name=jh.name,
               detail={"enabled": jh.enabled})
-    return ok(_detail(jh))
+    return ok(_detail(jh, await job_host_service.credential_names(session, [jh.credential_id])))

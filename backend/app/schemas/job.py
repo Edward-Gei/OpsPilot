@@ -167,28 +167,22 @@ class TemplateStatusRequest(BaseModel):
 # ---------- 作业主机（执行范式改造） ----------
 
 class JobHostCreateRequest(BaseModel):
-    """新建作业主机：secret 必填（密码或私钥明文，入库前 AES-256-GCM 加密）。"""
+    """新建作业主机：登录认证引用凭据管理（credential_id 必填）。"""
 
     name: str = Field(..., min_length=1, max_length=128)
     ip: str = Field(..., min_length=1, max_length=45)
     ssh_port: int = Field(default=22, ge=1, le=65535)
-    login_user: str = Field(..., min_length=1, max_length=64)
-    auth_type: str = Field(..., pattern="^(password|private_key)$")
-    secret: str = Field(..., min_length=1, description="密码或私钥明文")
-    passphrase: str | None = Field(default=None, description="私钥口令")
+    credential_id: int = Field(..., description="关联凭据 credential.id")
     workdir: str = Field(default="/opt/opspilot/workspace", max_length=255)
 
 
 class JobHostUpdateRequest(BaseModel):
-    """编辑作业主机：全字段可选；secret 传 ****** 表示不修改原密文。"""
+    """编辑作业主机：全字段可选，credential_id 传值即切换关联凭据。"""
 
     name: str | None = Field(default=None, max_length=128)
     ip: str | None = Field(default=None, max_length=45)
     ssh_port: int | None = Field(default=None, ge=1, le=65535)
-    login_user: str | None = Field(default=None, max_length=64)
-    auth_type: str | None = Field(default=None, pattern="^(password|private_key)$")
-    secret: str | None = Field(default=None, description="新密码/私钥，****** 表示不修改")
-    passphrase: str | None = Field(default=None)
+    credential_id: int | None = Field(default=None)
     workdir: str | None = Field(default=None, max_length=255)
 
 
@@ -199,14 +193,13 @@ class JobHostStatusRequest(BaseModel):
 
 
 class JobHostDetailResponse(BaseModel):
-    """作业主机详情：不含 secret_enc / passphrase_enc 密文字段（安全红线）。"""
+    """作业主机详情：认证信息只暴露关联凭据 id（名称由路由层 join 补充）。"""
 
     id: int
     name: str
     ip: str
     ssh_port: int
-    login_user: str
-    auth_type: str
+    credential_id: int | None = None
     workdir: str
     enabled: bool
     last_check_at: datetime | None = None
