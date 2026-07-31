@@ -3,8 +3,8 @@
 // 实时通道（纯长轮询，WS 已弃用）：
 //   状态事件 = /events 长轮询（服务端挂起 30s，有事件立即返回）
 //   日志追加 = /logs 每 2s 按 offset 增量拉取（Jenkins 式尾随效果）
-// 弃用 WS 原因：切换日志焦点后 WS 订阅失效导致日志无法实时更新，
-// 长轮询无连接状态、无订阅概念，切步骤即重置偏移量拉取，天然免疫该类 bug
+// 弃用 WS 原因：WS 订阅状态易失效导致日志无法实时更新，
+// 长轮询无连接状态、无订阅概念，按步骤偏移增量拉取合并展示，天然免疫该类 bug
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
