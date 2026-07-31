@@ -102,6 +102,9 @@ function ensureSegment(step: { step_order: number; step_name: string }): LogSegm
     }
     segments.value.push(seg)
     segments.value.sort((a, b) => a.step_order - b.step_order)
+    // 必须取回响应式代理返回：直接返回原始对象会绕过 Vue 代理，
+    // 后续 lines.push 不触发重渲染（实测表现为尾段日志冷加载不显示）
+    seg = segments.value.find((s) => s.step_order === step.step_order)!
   }
   return seg
 }
