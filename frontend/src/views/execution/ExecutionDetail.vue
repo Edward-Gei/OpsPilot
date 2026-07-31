@@ -76,8 +76,6 @@ interface LogSegment {
 }
 const segments = ref<LogSegment[]>([])
 const logBox = ref<HTMLElement | null>(null)
-// 日志框高度（Task 2 将扩展为视口自适应 + 拖拽；本任务先固定默认值）
-const logHeight = ref(440)
 // 客户端合并流总行数上限（超出从最早段头部丢弃，防止长任务撑爆内存）
 const LOG_CAP = 20000
 // 拉取在飞标志：轮询 tick 遇上一轮未完成时跳过，避免慢网下请求堆叠
@@ -198,6 +196,39 @@ function locateStep(order: number) {
   if (!box || !el) return
   nearBottom = false // 定位到非末段时暂停跟底（定位点距底 <40px 时 scroll 事件会重新恢复跟底）
   box.scrollTop = el.offsetTop
+}
+
+// ---------- 日志框高度：默认铺满视口 + 底缘拖拽自定义（不持久化，刷新恢复默认） ----------
+const logHeight = ref(440)
+const MIN_LOG_HEIGHT = 240
+// 用户拖拽过则窗口 resize 不再重算默认高度
+let userResized = false
+
+/** 默认高度 = 视口高 − 日志框顶部位置 − 留白(手柄+边框+页面底距) */
+function fitLogHeight() {
+  if (userResized || !logBox.value) return
+  const top = logBox.value.getBoundingClientRect().top
+  logHeight.value = Math.max(MIN_LOG_HEIGHT, Math.floor(window.innerHeight - top - 28))
+}
+
+/** 底缘手柄拖拽：mousedown 后跟踪全局 mousemove 调整高度，mouseup 收尾 */
+function onResizeStart(e: MouseEvent) {
+  e.preventDefault()
+  userResized = true
+  const startY = e.clientY
+  const startH = logHeight.value
+  const maxH = window.innerHeight - 120
+  document.body.style.userSelect = 'none' // 拖拽期间禁止选中文本
+  const onMove = (ev: MouseEvent) => {
+    logHeight.value = Math.min(maxH, Math.max(MIN_LOG_HEIGHT, startH + ev.clientY - startY))
+  }
+  const onUp = () => {
+    document.body.style.userSelect = ''
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
 }
 
 // ---------- 长轮询实时通道（事件长轮询 + 日志定时增量） ----------
@@ -321,6 +352,9 @@ async function onControl(op: execApi.ControlOp) {
 
 onMounted(async () => {
   await loadDetail()
+  // 详情渲染完成后再测量日志框顶部位置计算默认高度
+  requestAnimationFrame(fitLogHeight)
+  window.addEventListener('resize', fitLogHeight)
   if (!isFinished.value) startRealtime()
 })
 
@@ -328,6 +362,7 @@ onBeforeUnmount(() => {
   // 离开页面：中断拉取循环（终态 teardown 不置此标志，保证终态补拉能跑完）
   abortFetch = true
   teardownRealtime()
+  window.removeEventListener('resize', fitLogHeight)
 })
 </script>
 
@@ -436,6 +471,9 @@ onBeforeUnmount(() => {
           <div v-for="(line, i) in seg.lines" :key="seg.dropped + i" class="log-line">{{ line }}</div>
         </template>
         <div v-if="!segments.length" class="log-empty">暂无日志输出</div>
+      </div>
+      <div class="log-resize" title="拖拽调整日志区高度" @mousedown="onResizeStart">
+        <span class="grip" />
       </div>
     </div>
   </div>
@@ -643,6 +681,26 @@ onBeforeUnmount(() => {
 .log-trunc {
   color: #64748b;
   font-style: italic;
+}
+/* 底缘拖拽手柄：ns-resize 光标 + 居中握纹 */
+.log-resize {
+  height: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  background: var(--bg-1, #fff);
+  border-top: 1px solid var(--border-1, #e5e7eb);
+}
+.log-resize:hover .grip {
+  background: var(--primary, #6366f1);
+}
+.log-resize .grip {
+  width: 36px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border, #d1d5db);
+  transition: background-color 0.2s;
 }
 .log-empty {
   color: #64748b;
