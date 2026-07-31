@@ -2,8 +2,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | v2.1（竣工基线：接口清单与已实现代码逐个核对对齐） |
-| 状态 | 已实现（与代码同步） |
+| 文档版本 | v2.2（竣工审查：同步执行范式改造与凭据集成——模板改单选作业主机，删执行主机明细/作业主机配置键相关接口） |
+| 状态 | 竣工（与代码同步） |
 | 上游文档 | [01-PRD](./01-产品需求文档PRD.md)、[02-技术架构设计](./02-技术架构设计.md)、[03-数据库设计](./03-数据库设计.md) |
 
 ## 1. 通用约定
@@ -77,7 +77,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/users` | `user:read` | 分页；筛选 username/status/source/role_id |
+| GET | `/users` | `user:read` | 分页；筛选 keyword（用户名/显示名模糊）/status/source |
 | POST | `/users` | `user:write` | 建本地用户 `{username, display_name, email, password, role_ids}` |
 | PUT | `/users/{id}` | `user:write` | 基本信息 + status(active/disabled) + role_ids（状态并入本接口，禁止禁用自己） |
 | PUT | `/users/{id}/password` | `user:write` | `{new_password}` 重置密码，置 must_change_password 并解锁 |
@@ -113,11 +113,11 @@
 | POST | `/cmdb/apps` | `cmdb:write` | `{name, description, language, deploy_type, host_ids}` |
 | GET | `/cmdb/apps/{id}` | `cmdb:read` | 详情 + 关联主机列表 |
 | PUT | `/cmdb/apps/{id}` | `cmdb:write` | 含 host_ids 全量替换 |
-| DELETE | `/cmdb/apps/{id}` | `cmdb:write` | 进行中工单引用时 42201 |
+| DELETE | `/cmdb/apps/{id}` | `cmdb:write` | 删除应用并级联清理主机关联（V2 范式下工单不引用应用，无工单侧删除保护） |
 
 ## 5. 凭据与工单模板（`/credentials` `/templates`）
 
-模板管理负责工单全部规则配置：基本信息/目标应用/步骤编排（内嵌脚本）/执行策略/审批规则/通知规则/权限范围/版本。
+模板管理负责工单全部规则配置：基本信息/作业主机/步骤编排（内嵌脚本）/执行策略/审批规则/通知规则/权限范围/凭据引用/版本。
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -126,7 +126,7 @@
 | PUT | `/credentials/{id}` | `credential:write` | secret 传空 = 不变更 |
 | DELETE | `/credentials/{id}` | `credential:write` | 被作业主机（`job_host.credential_id`）或模板（`ticket_template.credential_refs`）引用时 42201 |
 | GET | `/templates` | `template:read` | 分页；keyword/type/status |
-| POST | `/templates` | `template:write` | 全量配置：`{name, type, description, app_id, steps:[{name, script_type, content, params_schema, credential_id, timeout}], exec_strategy, approval_enabled, approval_nodes:[{node_order, role_id, approve_mode}], allow_withdraw, allow_transfer, allow_countersign, notify_rules, visible_role_ids, credential_refs:[{alias, credential_id}]}` → 创建 v1；credential_refs 为模板级引用凭据声明（alias 字母开头、大小写不敏感去重），shell 步骤执行时注入 `CRED_<ALIAS大写>_USER/_SECRET/_PASSPHRASE` 环境变量 |
+| POST | `/templates` | `template:write` | 全量配置：`{name, type, description, job_host_id, steps:[{name, script_type, content, params_schema, timeout}], exec_strategy, approval_enabled, approval_nodes:[{node_order, role_id, approve_mode}], allow_withdraw, allow_transfer, allow_countersign, notify_rules, visible_role_ids, credential_refs:[{alias, credential_id}]}` → 创建 v1；type 枚举 `release/daily_ops/other`；credential_refs 为模板级引用凭据声明（alias 字母开头、大小写不敏感去重），shell 步骤执行时注入 `CRED_<ALIAS大写>_USER/_SECRET/_PASSPHRASE` 环境变量；步骤不再携带 credential_id（登录凭据随作业主机） |
 | GET | `/templates/{id}` | `template:read` | 当前版本全量配置详情；credential_refs 回显附 credential_name |
 | PUT | `/templates/{id}` | `template:write` | 全量更新；规则任一变更自动升版（含 credential_refs 变更）；仅改名/说明不升版 |
 | PUT | `/templates/{id}/status` | `template:write` | `{status: enabled/disabled}`；禁用后不可被提交，不影响已提交工单 |
@@ -155,21 +155,21 @@
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/tickets/templates` | `ticket:write` | 可用模板列表（enabled + visible_role_ids 过滤） |
-| GET | `/tickets/templates/{id}/form` | `ticket:write` | 提交表单描述：汇总参数（各步骤 params_schema 同名合并，排除 fixed）+ 目标主机/步骤/审批节点/策略只读预览 |
-| POST | `/tickets` | `ticket:write` | 提交工单：`{template_id, params}`；服务端固化五重快照（主机/步骤内容/审批节点/策略/版本）；免审直接入执行队列，否则进入 approving 并发待审批通知 |
-| GET | `/tickets` | `ticket:read` | 分页；status/creator/app/keyword/时间范围 |
+| GET | `/tickets/templates/{id}/form` | `ticket:write` | 提交表单描述：汇总参数（各步骤 params_schema 同名合并，排除 fixed）+ 作业主机/步骤/审批节点/策略只读预览 |
+| POST | `/tickets` | `ticket:write` | 提交工单：`{template_id, params}`；服务端固化六重快照（作业主机/步骤内容/审批节点/策略/版本/引用凭据）；免审直接入执行队列，否则进入 approving 并发待审批通知 |
+| GET | `/tickets` | `ticket:read` | 分页；status/creator/keyword（标题/工单号模糊）/时间范围 |
 | GET | `/tickets/todo` | `ticket:approve` | 待我审批（当前节点角色 ∩ 我的角色）+ 角标计数 |
-| GET | `/tickets/{id}` | `ticket:read` | 详情（只读）：基本信息 + 参数 + 主机快照 + 步骤快照 + 引用凭据快照（`credential_refs`，含 credential_name，不含密文）+ 审批时间线 + execution 概要 |
+| GET | `/tickets/{id}` | `ticket:read` | 详情（只读）：基本信息 + 参数 + 作业主机快照 + 步骤快照 + 引用凭据快照（`credential_refs`，含 credential_name，不含密文）+ 审批时间线 + execution 概要 |
 | POST | `/tickets/{id}/approve` | `ticket:approve` | `{action: approve/reject, comment}`；校验当前节点角色归属（可审批自己创建的工单）；驳回 comment 必填；末节点通过→自动入执行队列 |
 | POST | `/tickets/{id}/cancel` | `ticket:write` | 撤销（审批前作废）：仅创建人、approving 状态、且 allow_withdraw_snap=true；工单置 cancelled |
-| POST | `/tickets/{id}/abort` | `execution:control` | 中止：queued/running/paused；停止派发后续目标（在跑目标不打断），未派发置 skipped，工单终态 interrupted(user_abort)；仅创建人或 admin |
-| POST | `/tickets/{id}/pause` | `execution:control` | 暂停：仅 running；在跑目标跑完后停住（paused 非终态），不再派发；仅创建人或 admin |
-| POST | `/tickets/{id}/resume` | `execution:control` | 恢复：仅 paused；从停住处继续派发（含批间暂停放行）；仅创建人或 admin |
-| POST | `/tickets/{id}/force-abort` | `execution:control` | 强制中止：running/paused；在中止基础上强杀在跑目标（关闭 SSH 会话，best-effort）；高风险，独立审计；仅创建人或 admin |
+| POST | `/tickets/{id}/abort` | `execution:control` | 中止：queued/running/paused；停止派发后续步骤（在跑步骤不打断），未派发步骤置 skipped，工单终态 interrupted(user_abort)；仅创建人或 admin |
+| POST | `/tickets/{id}/pause` | `execution:control` | 暂停：仅 running；在跑步骤跑完后停住（paused 非终态），不再派发后续步骤；仅创建人或 admin |
+| POST | `/tickets/{id}/resume` | `execution:control` | 恢复：仅 paused；从停住的步骤处继续派发；仅创建人或 admin |
+| POST | `/tickets/{id}/force-abort` | `execution:control` | 强制中止：running/paused；在中止基础上强杀在跑步骤（强制关闭 SSH 会话 `conn.abort()`，best-effort）；高风险，独立审计；仅创建人或 admin |
 
 控制类接口（abort/pause/resume/force-abort）均写审计（操作人/IP/时间/工单ID/当时状态）并触发通知；审批人不能代替提交人撤销（只能审批通过/驳回）。状态不匹配返回 40901。
 
-**提交时服务端校验**：模板 enabled 且在我的可见范围；应用存在且关联主机 ≥1；凭据存在；参数满足汇总 params_schema（required/fixed）；审批节点角色存在。提交时冻结模板 credential_refs 为 `[{alias, credential_id, credential_name}]` 快照，执行时按 credential_id 实时取密文。
+**提交时服务端校验**：模板 enabled 且在我的可见范围；模板已配置步骤；参数满足汇总 params_schema（required/fixed）；开启审批时审批节点配置有效。提交时固化作业主机快照（`job_host_snap`）并冻结模板 credential_refs 为 `[{alias, credential_id, credential_name}]` 快照，执行时按 credential_id 实时取密文。
 
 > 已删除：`PUT/DELETE /tickets/{id}`（无草稿可编辑）、`POST /tickets/{id}/submit`（并入创建）、`POST /tickets/{id}/copy`。
 
@@ -177,10 +177,9 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/executions` | `execution:read` | 分页；ticket_no/app/creator/status/时间 |
-| GET | `/executions/{id}` | `execution:read` | 汇总 + 步骤列表（状态/批次/统计） |
-| GET | `/executions/{id}/hosts` | `execution:read` | `?step_order=&status=` 主机明细分页 |
-| GET | `/executions/{id}/logs` | `execution:read` | `?step_order=&ip=&offset=&limit=` 读日志文件（按行偏移；历史回看 + 前端 2s 定时增量拉取实现实时刷新） |
+| GET | `/executions` | `execution:read` | 分页；ticket_no/creator/status/时间 |
+| GET | `/executions/{id}` | `execution:read` | 汇总 + 步骤列表（状态/退出码/耗时） |
+| GET | `/executions/{id}/logs` | `execution:read` | `?step_order=&offset=&limit=` 读步骤日志文件（按行偏移；历史回看 + 前端 2s 定时增量拉取实现实时刷新） |
 | GET | `/executions/{id}/events` | `execution:read` | 实时状态长轮询主通道：`?since_seq=` 30s 挂起返回增量事件 |
 
 > 执行域为**只读查询**；控制操作（中止/暂停/恢复/强制中止）在工单控制面（§6），权限 `execution:control` 且（创建人 或 admin）。原 `POST /executions/{id}/stop|resume` 已移除。
@@ -190,7 +189,7 @@
 执行详情页实时刷新采用纯长轮询方案（均复用 §7 只读接口，无独立协议）：
 
 - **状态事件**：`GET /executions/{id}/events?since_seq=` 长轮询循环，服务端有新事件立即返回，否则挂起至 30s 返回空列表；`seq` 单调递增，客户端持有 `last_seq` 续拉；`finished=true` 时结束轮询。
-- **实时日志**：`GET /executions/{id}/logs?step_order=&ip=&offset=` 每 2s 按行偏移增量拉取追加（Jenkins 式尾随）；切换主机即重置 `offset=0` 重拉，无订阅状态。
+- **实时日志**：`GET /executions/{id}/logs?step_order=&offset=` 每 2s 按行偏移增量拉取追加（Jenkins 式尾随）；前端按步骤顺序合并为单日志流展示（步骤分隔行 + 步骤节点定位），无订阅状态。
 
 > **WebSocket 已弃用（2026-07）**：原 `/ws/executions/{id}?token=` 网关（snapshot/log/event/ping 协议）因切换目标主机后订阅失效导致日志无法实时更新，且断线重连/令牌过期链路复杂，已从应用摘除注册。代码保留在 `backend/app/api/ws_deprecated.py` 备查，回切需恢复 `main.py` 注册与 nginx `/ws/` 代理。
 
@@ -214,7 +213,7 @@
 
 > **渠道级消息模板**：`config` 可含可选键 `title_template`（≤200 字）、`content_template`（≤2000 字），超长返回 `40001`。占位符格式 `{变量名}`，留空/未配置则使用系统默认文案，未知或缺失变量原样保留。模板在 `emit` 落库时按渠道即时渲染（发送记录即最终实发内容，改模板只对新通知生效）。`POST /notify/channels/{type}/test` 用示例工单数据渲染当前表单模板后发送，供保存前预览。
 >
-> 支持变量：`{event}`(事件中文名) `{default_title}` `{default_content}` `{receiver}` `{time}` `{ref_id}`（emit 基础）；`{ticket_no}` `{ticket_title}` `{app_name}` `{creator}`（工单）；`{node}` `{role}`（待审批）；`{approver}` `{comment}`（通过/驳回）；`{reason}`（中断）；`{detail}`（崩溃恢复）。
+> 支持变量：`{event}`(事件中文名) `{default_title}` `{default_content}` `{receiver}` `{time}` `{ref_id}`（emit 基础）；`{ticket_no}` `{ticket_title}` `{job_host_name}`(作业主机名) `{creator}`（工单）；`{node}` `{role}`（待审批）；`{approver}` `{comment}`（通过/驳回）；`{reason}`（中断）；`{detail}`（崩溃恢复）。
 
 ### 10.1 站内通知（`/notifications`，NOTIFY-06）
 
@@ -232,11 +231,10 @@
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/system/configs` | `system:config` | 全部 system_config（敏感项掩码） |
-| PUT | `/system/configs` | `system:config` | 批量更新 `{configs: {key: value}}`（仅允许预置键：mfa.policy / token.policy / password.policy / ldap.config / oidc.config / ldap.default_role / oidc.default_role / ansible.job_host / exec.global_concurrency，共 9 键；敏感字段回传 `******` 保留原值） |
-| POST | `/system/ansible-job-host/test` | `system:config` | SSH 连通性 + `ansible --version` 探测 |
+| PUT | `/system/configs` | `system:config` | 批量更新 `{configs: {key: value}}`（仅允许预置键：mfa.policy / token.policy / password.policy / ldap.config / oidc.config / ldap.default_role / oidc.default_role / exec.global_concurrency，共 8 键；敏感字段回传 `******` 保留原值） |
 | GET | `/healthz` | 公开 | 存活 + DB/Redis 探活（部署健康检查用） |
 
-> 已删除：`GET/PUT /system/approval-flow`（审批规则下沉到模板内，无全局审批流）、`approval.enabled` 配置项。
+> 已删除：`GET/PUT /system/approval-flow`（审批规则下沉到模板内，无全局审批流）、`approval.enabled` 配置项；`POST /system/ansible-job-host/test` 与 `ansible.job_host` 配置键（作业主机改独立 `/job-hosts` 管理，连通性测试见 §5.1）。
 
 ## 12. 工作台（`/dashboard`）
 
@@ -268,12 +266,13 @@
 
 > 「功能菜单」搜索纯前端本地过滤侧边栏菜单项，不经后端。结果点击统一跳对应列表页并带 `?keyword=` 自动过滤（SEARCH-04）。
 
-## 14. 权限点全集（与 §2.2 PRD 矩阵对应，共 20 个）
+## 14. 权限点全集（与 §2.2 PRD 矩阵对应，共 22 个）
 
 ```
 user:read user:write user:mfa role:read role:write
 cmdb:read cmdb:write
 credential:read credential:write
+job_host:read job_host:write
 template:read template:write
 ticket:read ticket:write ticket:approve
 execution:read execution:control
@@ -281,4 +280,4 @@ audit:read audit:export
 notify:config system:config
 ```
 
-内置角色映射：admin=全部；ops=cmdb:*、credential:read、template:*、ticket:read/write、execution:read/control(本人)；approver=cmdb:read、ticket:read/approve、execution:read；auditor=cmdb:read、execution:read、audit:*。
+内置角色映射：admin=全部（含 job_host:read/write，仅 admin 具备）；ops=cmdb:*、credential:read、template:*、ticket:read/write、execution:read/control（控制类接口另有对象级校验：仅工单创建人或 admin）；approver=cmdb:read、ticket:read/approve、execution:read；auditor=cmdb:read、execution:read、audit:*。

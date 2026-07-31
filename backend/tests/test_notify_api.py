@@ -11,6 +11,8 @@
 """
 from datetime import datetime, timedelta
 
+import asyncio
+
 import pytest
 from sqlalchemy import select
 
@@ -300,6 +302,66 @@ class TestDispatcher:
                 select(NotificationRecord).order_by(NotificationRecord.id))).scalars().all()
             assert rows[0].status == "success"
             assert rows[1].status == "pending"
+
+    async def test_concurrent_scan_no_duplicate_send(self, db_factory, seed, monkeypatch):
+        """并发扫描不重复发送（重复邮件 bug 回归）。
+
+        复现：_consume_loop 与 _scan_loop 同时触发 scan_once，旧逻辑下两轮都会取到
+        同一条仍为 pending 的记录并各发一次；原子认领后仅首个扫描者拿到发送权，
+        同一记录仅发一封。
+        """
+        await self._seed_channel(db_factory)
+        fake = _FakeChannel()
+        monkeypatch.setattr(disp, "get_channel", lambda _t: fake)
+        monkeypatch.setattr(disp, "async_session_factory", db_factory)
+        async with db_factory() as session:
+            session.add(_record())
+            await session.commit()
+        # 两轮 scan_once 并发运行（模拟队列触发扫描与 30s 定时扫描重叠）
+        results = await asyncio.gather(disp.scan_once(), disp.scan_once())
+        assert sum(results) == 1  # 仅一轮真正认领并发送
+        assert len(fake.calls) == 1  # 只发一封（不重复）
+        async with db_factory() as session:
+            record = (await session.execute(select(NotificationRecord))).scalar_one()
+            assert record.status == "success"  # 终态回写正确（无 sending 残留）
+
+    async def test_reset_orphaned_sending_on_start(self, db_factory, seed, monkeypatch):
+        """启动兜底：上次中途崩溃遗留的 sending 记录重置回 pending，不会被扫描永久遗漏。"""
+        monkeypatch.setattr(disp, "async_session_factory", db_factory)
+        async with db_factory() as session:
+            session.add(_record(status="sending"))
+            await session.commit()
+        await disp.NotifyDispatcher._reset_orphaned_sending()
+        async with db_factory() as session:
+            record = (await session.execute(select(NotificationRecord))).scalar_one()
+            assert record.status == "pending"
+
+    async def test_scan_once_retry_returns_to_pending(self, db_factory, seed, monkeypatch):
+        """扫描路径下发送失败要重试：记录必须从 sending 写回 pending，下一轮能再被扫到。
+
+        回归原子认领引入的隐患：_claim_record 已把 DB 置 sending，若 _schedule_retry
+        不显式写回 pending，记录会卡在 sending 而被后续扫描永久遗漏。
+        """
+        await self._seed_channel(db_factory)
+        fake = _FakeChannel(error="SMTP 连接超时")
+        monkeypatch.setattr(disp, "get_channel", lambda _t: fake)
+        monkeypatch.setattr(disp, "async_session_factory", db_factory)
+        async with db_factory() as session:
+            session.add(_record())
+            await session.commit()
+        assert await disp.scan_once() == 1
+        async with db_factory() as session:
+            record = (await session.execute(select(NotificationRecord))).scalar_one()
+            # 未耗尽：回到 pending（不得卡在 sending）并排了下次重试
+            assert record.status == "pending"
+            assert record.retry_count == 1 and record.next_retry_at is not None
+        # 模拟到期后下一轮扫描仍能捐到该记录（验证未漏扫）
+        async with db_factory() as session:
+            record = (await session.execute(select(NotificationRecord))).scalar_one()
+            record.next_retry_at = None
+            await session.commit()
+        assert await disp.scan_once() == 1
+        assert len(fake.calls) == 2  # 两轮都真正发起了发送（未因卡 sending 而跳过）
 
     async def test_webhook_receiver_passthrough(self, db_factory, seed, monkeypatch):
         """非 email 渠道不解析邮箱：receivers 为空列表，发往全局 URL。"""

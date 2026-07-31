@@ -53,12 +53,13 @@ CONTENT_TEMPLATE_MAX = 2000
 # 模板占位符语法：{变量名}（仅字母数字下划线）
 _VAR_PATTERN = re.compile(r"\{(\w+)\}")
 
-# test_channel 预览用示例变量：保存前即可验证模板渲染效果
+# test_channel 预览用示例变量：与 emit 实发变量口径一致（job_host_name 为作业主机名），
+# 保证“测试发送”预览效果与真实通知一致（无 app_name——emit 从不注入该变量）
 SAMPLE_TEMPLATE_VARS = {
     "event": "审批通过",
     "ticket_no": "TK20260001",
     "ticket_title": "示例工单",
-    "app_name": "示例应用",
+    "job_host_name": "示例作业主机",
     "creator": "admin",
     "approver": "ops1",
     "comment": "同意",

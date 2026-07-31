@@ -5,24 +5,43 @@ import { ref } from 'vue'
 
 const props = defineProps<{ config: Record<string, any> }>()
 
-/** 支持的模板变量（与后端 emit 基础变量 + 业务变量同口径） */
-const templateVars: Array<{ key: string; label: string }> = [
-  { key: 'event', label: '事件名称' },
-  { key: 'ticket_no', label: '工单号' },
-  { key: 'ticket_title', label: '工单标题' },
-  { key: 'app_name', label: '应用名' },
-  { key: 'creator', label: '创建人' },
-  { key: 'node', label: '审批节点' },
-  { key: 'role', label: '审批角色' },
-  { key: 'approver', label: '审批人' },
-  { key: 'comment', label: '审批意见' },
-  { key: 'reason', label: '中断原因' },
-  { key: 'detail', label: '详情' },
-  { key: 'receiver', label: '收件人' },
-  { key: 'time', label: '触发时间' },
-  { key: 'ref_id', label: '工单ID' },
-  { key: 'default_title', label: '默认标题' },
-  { key: 'default_content', label: '默认正文' },
+/** 支持的模板变量，按适用事件分组（与后端 emit 实际注入的变量口径完全一致）
+ * - 通用：所有事件均注入（emit 基础变量 + 工单基础变量）
+ * - 审批类：仅工单待审批/审批通过/审批驳回事件注入
+ * - 中断类：仅执行中断/崩溃恢复事件注入
+ * 其他事件用到分组专属变量时，占位符会原样保留（不渲染）。 */
+const templateGroups: Array<{ title: string; vars: Array<{ key: string; label: string }> }> = [
+  {
+    title: '通用（所有事件）',
+    vars: [
+      { key: 'event', label: '事件名称' },
+      { key: 'ticket_no', label: '工单号' },
+      { key: 'ticket_title', label: '工单标题' },
+      { key: 'job_host_name', label: '作业主机名' },
+      { key: 'creator', label: '创建人' },
+      { key: 'receiver', label: '收件人' },
+      { key: 'time', label: '触发时间' },
+      { key: 'ref_id', label: '工单ID' },
+      { key: 'default_title', label: '默认标题' },
+      { key: 'default_content', label: '默认正文' },
+    ],
+  },
+  {
+    title: '审批类事件',
+    vars: [
+      { key: 'node', label: '审批节点' },
+      { key: 'role', label: '审批角色' },
+      { key: 'approver', label: '审批人' },
+      { key: 'comment', label: '审批意见' },
+    ],
+  },
+  {
+    title: '中断类事件',
+    vars: [
+      { key: 'reason', label: '中断原因' },
+      { key: 'detail', label: '详情' },
+    ],
+  },
 ]
 
 /** 最近聚焦的模板输入框：点击变量标签时插到对应字段末尾 */
@@ -58,16 +77,19 @@ function insertVar(key: string) {
       </a-form-item>
     </div>
     <div class="tpl-vars">
-      <a-tag
-        v-for="v in templateVars"
-        :key="v.key"
-        class="tpl-var"
-        @click="insertVar(v.key)"
-      >{{ '{' + v.key + '}' }} {{ v.label }}</a-tag>
+      <div v-for="g in templateGroups" :key="g.title" class="tpl-var-group">
+        <span class="tpl-var-group-title">{{ g.title }}</span>
+        <a-tag
+          v-for="v in g.vars"
+          :key="v.key"
+          class="tpl-var"
+          @click="insertVar(v.key)"
+        >{{ '{' + v.key + '}' }} {{ v.label }}</a-tag>
+      </div>
     </div>
     <div class="field-tip">
-      点击变量标签插入占位符（插入到最近点击的模板输入框）；留空使用系统默认文案；未知或缺失的变量将原样保留。
-      模板效果可通过「测试发送」按钮用示例工单数据预览。
+      点击变量标签插入占位符（插入到最近点击的模板输入框）；变量按适用事件分组，跨事件使用分组专属变量时占位符将原样保留。
+      留空使用系统默认文案；模板效果可通过「测试发送」按钮用示例工单数据预览。
     </div>
   </div>
 </template>
@@ -97,9 +119,20 @@ function insertVar(key: string) {
 }
 .tpl-vars {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 4px;
+  flex-direction: column;
+  gap: 8px;
   margin-bottom: 8px;
+}
+.tpl-var-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 4px;
+}
+.tpl-var-group-title {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  margin-right: 4px;
 }
 .tpl-var {
   cursor: pointer;

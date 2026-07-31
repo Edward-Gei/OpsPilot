@@ -1,7 +1,7 @@
 # OpsPilot V1 精简版
 
-自动化运维平台：CMDB（主机/应用）→ 作业模板（Shell / Ansible Playbook 多步 Pipeline）→
-工单审批 → 并发执行（实时日志/执行控制）→ 通知（邮件/Webhook/Teams）→ 全链路审计。
+自动化运维平台：CMDB 资产台账（主机/应用）＋ 作业模板（作业主机 + Shell/Ansible 多步 Pipeline）→
+工单审批 → 作业主机上步骤串行执行（实时日志/执行控制）→ 通知（邮件/Webhook/Teams）→ 全链路审计。
 面向单机 Docker Compose 内网部署。
 
 - 技术栈：FastAPI + SQLAlchemy(async) + MySQL 8 + Redis 7 | Vue3 + TS + Ant Design Vue 4 | asyncssh
@@ -35,8 +35,8 @@ docker compose up -d --build
   1. 系统配置 → 凭据管理：录入 SSH 凭据（密码/密钥）
   2. CMDB → 主机管理：手工录入或 Excel 批量导入（模板页内下载，单次 ≤5000 行）
   3. CMDB → 应用管理：建应用并关联主机（多对多）
-  4. 系统配置 → Ansible 作业主机：指定作业机 + 凭据并测试连通（Playbook 模板前置）
-  5. 作业模板：编排多步 Pipeline（Shell/Playbook）、执行策略、审批节点、通知规则
+  4. 系统配置 → 作业主机：录入作业主机（IP/端口/关联凭据/工作目录）并测试连通性（模板前置）
+  5. 作业模板：选定作业主机、编排多步 Pipeline（Shell/Ansible）、执行策略、审批节点、通知规则、凭据引用（可选）
   6. 通知配置：启用邮件/Webhook/Teams 渠道并发送测试消息
   7. 工单：选模板提交 → 审批 → 实时日志观察执行 → 通知送达
 
@@ -92,7 +92,7 @@ docker compose up -d                          # 不带 --build，直接用导入
 ## 五、压测与验收
 
 - 压测设施（500 台 sshd 矩阵 + mailpit + webhook-echo）：[deploy/loadtest/](deploy/loadtest/)
-- 实测报告（500 台单工单 65s 全成功、列表接口 P95 全部 <500ms）：
+- 实测报告（列表接口 P95 全部 <500ms；500 台单工单基线为执行范式改造前的历史数据）：
   [deploy/loadtest/LOADTEST_REPORT.md](deploy/loadtest/LOADTEST_REPORT.md)
 - 后端测试：`docker exec opspilot-api python -m pytest tests/ -q`
 
