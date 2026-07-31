@@ -45,6 +45,9 @@ const trendItems = ref<TrendPoint[]>([])
 const granularity = ref<TrendGranularity>('day')
 const apiStatus = ref<'checking' | 'up' | 'down'>('checking')
 let pollTimer: number | undefined
+// 卸载标志：onMounted 中 await 之后组件可能已被卸载（快速切路由），
+// 若不检查会在卸载后启动 setInterval 导致定时器泄漏
+let unmounted = false
 
 async function loadSummary() {
   try {
@@ -291,6 +294,7 @@ onMounted(async () => {
   // 首屏：探活 + 概览 + 趋势并发拉取
   request<{ pong: boolean }>({ url: '/ping', method: 'get' }).catch(() => (apiStatus.value = 'down'))
   await Promise.all([loadSummary(), loadTrend()])
+  if (unmounted) return // 组件已在等待期间卸载，不再启动轮询/绑定监听
   // 30s 静默轮询概览（页面隐藏时跳过，避免后台空耗）
   pollTimer = window.setInterval(() => {
     if (!document.hidden) loadSummary()
@@ -299,6 +303,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  unmounted = true
   if (pollTimer) window.clearInterval(pollTimer)
   window.removeEventListener('resize', resizeCharts)
   pieChart?.dispose()
@@ -358,7 +363,7 @@ onUnmounted(() => {
             <span class="dot" :class="e.status" />
             <div class="exec-main">
               <b>{{ e.ticket_no }} · {{ e.title }}</b>
-              <span>{{ e.app_name }} · {{ e.total_hosts }} 台 · {{ e.creator_name }}</span>
+              <span>{{ e.job_host_name || '—' }} · {{ e.total_steps }} 步骤 · {{ e.creator_name }}</span>
             </div>
             <span class="exec-time">{{ fmtTime(e.created_at) }}</span>
             <span class="exec-dur">{{ execDuration(e.started_at, e.finished_at) }}</span>

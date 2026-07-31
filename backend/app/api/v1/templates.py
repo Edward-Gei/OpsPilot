@@ -1,6 +1,6 @@
 """工单模板路由（04-API设计 §5，V2）：template:read / template:write 权限点控制。
 
-模板管理负责工单全部规则配置：基本信息/目标应用/步骤编排（内嵌脚本）/执行策略/
+模板管理负责工单全部规则配置：基本信息/作业主机/步骤编排（内嵌脚本）/执行策略/
 审批规则/通知规则/权限范围/版本。规则任一变更自动升版（TPL-06）。
 """
 from fastapi import APIRouter, Depends, Query, Request
@@ -22,7 +22,7 @@ def _tpl_brief(t) -> dict:
         "name": t.name,
         "type": t.type,
         "description": t.description,
-        "app_id": t.app_id,
+        "job_host_id": t.job_host_id,
         "approval_enabled": t.approval_enabled,
         "status": t.status,
         "current_version": t.current_version,
@@ -39,7 +39,6 @@ def _step_row(s) -> dict:
         "script_type": s.script_type,
         "content": s.content,
         "params_schema": s.params_schema or [],
-        "credential_id": s.credential_id,
         "timeout": s.timeout,
     }
 

@@ -3,17 +3,15 @@
 安全约束（PRD CRED-01/02）：
 - secret / passphrase 入库前经 core/security.encrypt_text 加密；
 - 任何查询接口不返回密文字段，明文仅执行引擎（M5）解密使用；
-- 删除保护：被进行中工单的步骤（ticket_step.credential_id）引用时 42201
-  （04-API 提及的"被模板引用"与 03 数据模型冲突，按 03 为准，见 M3 冲突声明①）。
+- 执行范式改造后模板步骤/工单步骤不再引用凭据（作业主机自带 SSH 凭据字段），
+  凭据为独立管理数据，删除无需引用保护。
 """
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.response import Errors
 from app.core.security import encrypt_text
-from app.models.job import Credential, TemplateStep
-from app.models.ticket import Ticket, TicketStep
-from app.services.cmdb_service import ACTIVE_TICKET_STATUSES
+from app.models.job import Credential
 
 
 async def get_credential_or_404(session: AsyncSession, credential_id: int) -> Credential:
@@ -119,28 +117,8 @@ async def update_credential(
 
 
 async def delete_credential(session: AsyncSession, credential_id: int) -> Credential:
-    """删除凭据；被模板步骤或进行中工单步骤引用时拒绝（42201，04-API §5）。"""
+    """删除凭据；V2 起模板/工单步骤不再引用凭据，直接删除。"""
     cred = await get_credential_or_404(session, credential_id)
-    tpl_count = (
-        await session.execute(
-            select(func.count()).select_from(TemplateStep)
-            .where(TemplateStep.credential_id == credential_id)
-        )
-    ).scalar_one()
-    if tpl_count:
-        raise Errors.rejected(f"凭据被 {tpl_count} 个模板步骤引用，无法删除")
-    ticket_nos = (
-        await session.execute(
-            select(Ticket.ticket_no.distinct())
-            .join(TicketStep, TicketStep.ticket_id == Ticket.id)
-            .where(
-                TicketStep.credential_id == credential_id,
-                Ticket.status.in_(ACTIVE_TICKET_STATUSES),
-            )
-        )
-    ).scalars().all()
-    if ticket_nos:
-        raise Errors.rejected(f"凭据被进行中工单引用，无法删除：{'、'.join(ticket_nos[:5])}")
     await session.delete(cred)
     await session.flush()
     return cred

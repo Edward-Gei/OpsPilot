@@ -11,10 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.response import Errors
 from app.models.auth import Role
-from app.models.job import Credential, TemplateApprovalNode, TemplateStep, TemplateVersion, TicketTemplate
+from app.models.cmdb import JobHost
+from app.models.job import TemplateApprovalNode, TemplateStep, TemplateVersion, TicketTemplate
 from app.models.ticket import Ticket
-from app.services import cmdb_service
-from app.services.cmdb_service import ACTIVE_TICKET_STATUSES
+
+# 进行中工单状态集合（引用保护判定用；原定义在 cmdb_service，执行范式改造后本地维护）
+ACTIVE_TICKET_STATUSES = ("approving", "queued", "running", "paused")
 
 
 async def get_template_or_404(session: AsyncSession, template_id: int) -> TicketTemplate:
@@ -107,14 +109,12 @@ async def _ensure_name_unique(session: AsyncSession, name: str, exclude_id: int 
 
 
 async def _validate_refs(session: AsyncSession, data: dict) -> None:
-    """引用校验：应用存在、步骤凭据存在、审批节点/可见范围角色存在（40001/40401）。"""
-    await cmdb_service.get_app_or_404(session, data["app_id"])
-    cred_ids = {s["credential_id"] for s in data["steps"]}
-    found_creds = set(
-        (await session.execute(select(Credential.id).where(Credential.id.in_(cred_ids)))).scalars()
-    )
-    if cred_ids - found_creds:
-        raise Errors.param(f"凭据不存在: {sorted(cred_ids - found_creds)}")
+    """引用校验：作业主机存在且启用、审批节点/可见范围角色存在（40001/40401）。"""
+    jh = await session.get(JobHost, data["job_host_id"])
+    if jh is None:
+        raise Errors.not_found("作业主机不存在")
+    if not jh.enabled:
+        raise Errors.param("作业主机已禁用，不可选用")
     role_ids = {n["role_id"] for n in data["approval_nodes"]} | set(data["visible_role_ids"])
     if role_ids:
         found_roles = set(
@@ -130,7 +130,7 @@ def _build_snapshot(data: dict) -> dict:
         "name": data["name"],
         "type": data["type"],
         "description": data["description"],
-        "app_id": data["app_id"],
+        "job_host_id": data["job_host_id"],
         "steps": [{"step_order": i + 1, **s} for i, s in enumerate(data["steps"])],
         "exec_strategy": data["exec_strategy"],
         "approval_enabled": data["approval_enabled"],
@@ -145,7 +145,7 @@ def _build_snapshot(data: dict) -> dict:
 
 # 升版判定范围：快照中除名称/说明以外的全部规则字段（TPL-06）
 _RULE_KEYS = (
-    "app_id", "steps", "exec_strategy", "approval_enabled", "approval_nodes",
+    "job_host_id", "steps", "exec_strategy", "approval_enabled", "approval_nodes",
     "allow_withdraw", "allow_transfer", "allow_countersign", "notify_rules", "visible_role_ids",
 )
 
@@ -171,7 +171,6 @@ async def _replace_children(session: AsyncSession, template_id: int, data: dict)
                 script_type=s["script_type"],
                 content=s["content"],
                 params_schema=s["params_schema"],
-                credential_id=s["credential_id"],
                 timeout=s["timeout"],
             )
         )
@@ -192,7 +191,7 @@ def _apply_basic(tpl: TicketTemplate, data: dict) -> None:
     tpl.name = data["name"]
     tpl.type = data["type"]
     tpl.description = data["description"]
-    tpl.app_id = data["app_id"]
+    tpl.job_host_id = data["job_host_id"]
     tpl.exec_strategy = data["exec_strategy"]
     tpl.approval_enabled = data["approval_enabled"]
     tpl.allow_withdraw = data["allow_withdraw"]

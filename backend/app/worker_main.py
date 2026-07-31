@@ -5,8 +5,7 @@
     2. audit_writer.start()：worker 进程独立启动审计写入器（lifespan 仅覆盖 api 进程）
     3. 崩溃恢复：recover_db_executions（DB running/paused → interrupted）
        + reclaim_pending_messages（PEL 重认领/丢弃），返回的可重试消息按新消息处理
-    4. init_global_semaphore：按系统配置 exec.global_concurrency 初始化全局并发
-    5. 消费循环：xreadgroup → 逐条**立即 XACK**（认领即 ACK，已确认决策三）
+    4. 消费循环：xreadgroup → 逐条**立即 XACK**（认领即 ACK，已确认决策三）
        → create_task(run_execution) 放入任务集合并发执行
 
 认领即 ACK 的取舍：XACK 后、execution 置 running 前存在极小崩溃窗口，此时
@@ -29,10 +28,8 @@ from app.audit.partition import run_maintenance
 from app.audit.writer import audit_writer
 from app.core import redis as redis_mod
 from app.core.config import settings
-from app.core.database import async_session_factory
 from app.engine import pipeline, recovery
 from app.notify.dispatcher import notify_dispatcher
-from app.services import config_service
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("opspilot.worker")
@@ -78,16 +75,12 @@ async def _handle_message(msg_id: str, fields: dict) -> None:
 
 
 async def startup() -> None:
-    """启动序：消费组 → 审计 → 崩溃恢复 → 全局并发初始化 → 通知分发器。"""
+    """启动序：消费组 → 审计 → 崩溃恢复 → 通知分发器。"""
     await redis_mod.ensure_stream_group(redis_mod.EXEC_QUEUE, redis_mod.EXEC_CONSUMER_GROUP)
     audit_writer.start()
     # 崩溃恢复三分支（02 §4.2）：先归档 DB 滞留现场，再接管 PEL 消息
     await recovery.recover_db_executions(CONSUMER_NAME)
     reclaimed = await recovery.reclaim_pending_messages(CONSUMER_NAME)
-    # 全局 SSH 并发信号量：系统配置优先，缺省回退环境默认值
-    async with async_session_factory() as session:
-        value = await config_service.get_config(session, "exec.global_concurrency")
-    pipeline.init_global_semaphore(int(value or settings.exec_global_concurrency_default))
     # 通知分发器（M6）：队列消费 + 定时扫描兜底，独立于执行队列
     await notify_dispatcher.start()
     # 审计分区维护（M7）：启动先补跑一次（覆盖停机跨日），再每日 03:30 定时滚动

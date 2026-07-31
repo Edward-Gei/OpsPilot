@@ -36,8 +36,7 @@ class DeployType(str, Enum):
 class TemplateType(str, Enum):
     """工单模板类型（V2：模板=规则定义，类型描述工单业务属性）。"""
     RELEASE = "release"
-    CHANGE = "change"
-    OPS = "ops"
+    DAILY_OPS = "daily_ops"
     OTHER = "other"
 
 
@@ -144,6 +143,8 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("credential:write", "凭据管理", "job"),
     ("template:read", "模板查看", "job"),
     ("template:write", "模板管理", "job"),
+    ("job_host:read", "作业主机查看", "job"),
+    ("job_host:write", "作业主机管理", "job"),
     ("ticket:read", "工单查看", "ticket"),
     ("ticket:write", "工单创建", "ticket"),
     ("ticket:approve", "工单审批", "ticket"),
@@ -197,7 +198,6 @@ SYSTEM_CONFIG_DEFAULTS: dict[str, dict] = {
     "oidc.config": {"value": None},
     "ldap.default_role": {"value": "ops"},
     "oidc.default_role": {"value": "ops"},
-    "ansible.job_host": {"value": None},  # {ip, port, credential_id, workdir}
     "exec.global_concurrency": {"value": 50},
 }
 

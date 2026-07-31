@@ -1,5 +1,5 @@
-// 执行中心共享元数据：执行/主机状态展示映射（列表/详情/矩阵共用）
-import type { ExecutionStatus, HostExecStatus } from '@/api/execution'
+// 执行中心共享元数据：执行/步骤状态展示映射（列表/详情共用）
+import type { ExecutionStatus } from '@/api/execution'
 
 /** 执行实例状态展示（03 §5.2：queued/running/paused + 四终态） */
 export const execStatusMeta: Record<ExecutionStatus, { text: string; color: string }> = {
@@ -17,8 +17,8 @@ export const execStatusOptions = Object.entries(execStatusMeta).map(([value, v])
   value,
 }))
 
-/** 主机粒度状态展示（矩阵单元格/主机明细行） */
-export const hostStatusMeta: Record<HostExecStatus, { text: string; color: string }> = {
+/** 步骤粒度状态展示（步骤列表行；作业主机上串行执行） */
+export const stepStatusMeta: Record<string, { text: string; color: string }> = {
   pending: { text: '待执行', color: 'default' },
   running: { text: '执行中', color: 'processing' },
   success: { text: '成功', color: 'success' },

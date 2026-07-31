@@ -130,22 +130,3 @@ export function getConfigs() {
 export function updateConfigs(configs: Record<string, unknown>) {
   return request<null>({ url: '/system/configs', method: 'put', data: { configs } })
 }
-
-// ---------- Ansible 作业主机（M5，系统配置键 ansible.job_host） ----------
-
-/** 作业主机配置：Ansible 控制节点，null = 未配置（playbook 步骤将无法执行） */
-export interface JobHostConfig {
-  ip: string
-  port: number
-  credential_id: number | null
-  workdir: string
-}
-
-/** 连通性测试：SSH 建连 + ansible --version；传当前表单值，保存前可预测（04-API §11） */
-export function testJobHost(data: { ip: string; port: number; credential_id: number }) {
-  return request<{ success: boolean; message: string }>({
-    url: '/system/ansible-job-host/test',
-    method: 'post',
-    data,
-  })
-}

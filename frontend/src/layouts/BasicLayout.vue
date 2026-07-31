@@ -73,7 +73,7 @@ const menuGroups = computed(() =>
         // M2 已开放：资源管理拆分为主机/应用两个入口，按 cmdb:read 权限显隐
         { key: 'cmdb-hosts', label: '主机管理', icon: CloudServerOutlined, path: '/cmdb/hosts', perm: 'cmdb:read' },
         { key: 'cmdb-apps', label: '应用管理', icon: AppstoreAddOutlined, path: '/cmdb/apps', perm: 'cmdb:read' },
-        // M3 已开放：作业中心拆分为模板/凭据两个入口（作业执行 M4 开放）
+        // M3 已开放：作业中心拆分为模板/凭据两个入口（作业主机配置已入系统设置）
         { key: 'job-templates', label: '模板管理', icon: CodeOutlined, path: '/job/templates', perm: 'template:read' },
         { key: 'job-credentials', label: '凭据管理', icon: KeyOutlined, path: '/job/credentials', perm: 'credential:read' },
         // M4 已开放：工单中心 + 待办审批（角标显示待我审批数）

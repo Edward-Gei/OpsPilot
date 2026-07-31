@@ -29,8 +29,8 @@ def _ticket_brief(t, creator_names: dict[int, str] | None = None) -> dict:
         "template_version": t.template_version_snap,
         "type": t.type,
         "title": t.title,
-        "app_id": t.app_id,
-        "app_name": t.app_name_snap,
+        "job_host_id": t.job_host_id,
+        "job_host_name": (t.job_host_snap or {}).get("name", ""),
         "status": t.status,
         "current_node": t.current_node,
         "total_nodes": len(t.flow_snap or []),
@@ -64,7 +64,7 @@ async def list_usable_templates(
     tpls = await ticket_service.list_visible_templates(session, user_id=actor.id)
     return ok({"items": [
         {"id": t.id, "name": t.name, "type": t.type, "description": t.description,
-         "app_id": t.app_id, "approval_enabled": t.approval_enabled,
+         "job_host_id": t.job_host_id, "approval_enabled": t.approval_enabled,
          "current_version": t.current_version}
         for t in tpls
     ]})
@@ -111,15 +111,14 @@ async def list_tickets(
     page_size: int = Query(20, ge=1, le=100),
     status: str | None = None,
     creator_id: int | None = None,
-    app_id: int | None = None,
     keyword: str | None = Query(None, description="模糊匹配标题/工单号"),
     start: str | None = None,
     end: str | None = None,
 ) -> dict:
-    """分页查工单（status/creator/app/keyword/时间范围）。"""
+    """分页查工单（status/creator/keyword/时间范围）。"""
     tickets, total = await ticket_service.list_tickets(
         session, page=page, page_size=page_size, status=status,
-        creator_id=creator_id, app_id=app_id, keyword=keyword, start=start, end=end,
+        creator_id=creator_id, keyword=keyword, start=start, end=end,
     )
     names = await _creator_name_map(session, tickets)
     return ok({"items": [_ticket_brief(t, names) for t in tickets], "total": total,
@@ -150,7 +149,7 @@ async def get_ticket(
     session: DbSession,
     _: User = Depends(require_perm("ticket:read")),
 ) -> dict:
-    """详情（只读）：基本信息 + 参数 + 主机快照 + 步骤快照 + 审批时间线 + execution 概要。"""
+    """详情（只读）：基本信息 + 参数 + 作业主机快照 + 步骤快照 + 审批时间线 + execution 概要。"""
     bundle = await ticket_service.get_ticket_bundle(session, ticket_id)
     t = bundle["ticket"]
     creator = bundle["creator"]
@@ -162,7 +161,7 @@ async def get_ticket(
         "flow_snap": t.flow_snap or [],
         "allow_withdraw": t.allow_withdraw_snap,
         "creator_name": (creator.display_name or creator.username) if creator else str(t.creator_id),
-        "hosts": bundle["hosts"],
+        "job_host": bundle["job_host"],
         "steps": [
             {
                 "step_order": s.step_order,
@@ -170,7 +169,6 @@ async def get_ticket(
                 "script_type": s.script_type_snap,
                 "content_snap": s.content_snap,
                 "params": s.params or {},
-                "credential_id": s.credential_id,
                 "timeout": s.timeout,
             }
             for s in bundle["steps"]
@@ -191,7 +189,6 @@ async def get_ticket(
             "id": execution.id,
             "status": execution.status,
             "total_steps": execution.total_steps,
-            "total_hosts": execution.total_hosts,
             "triggered_by": execution.triggered_by,
             "created_at": execution.created_at.isoformat() if execution.created_at else None,
         } if execution else None,

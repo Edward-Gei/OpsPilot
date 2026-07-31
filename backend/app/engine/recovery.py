@@ -69,7 +69,7 @@ async def _mark_interrupted(session, execution: Execution, reason: str, detail: 
             variables={
                 "ticket_no": ticket.ticket_no,
                 "ticket_title": ticket.title,
-                "app_name": ticket.app_name_snap,
+                "job_host_name": (ticket.job_host_snap or {}).get("name", ""),
                 "creator": creator.username if creator else str(ticket.creator_id),
                 "reason": reason,
                 "detail": detail,

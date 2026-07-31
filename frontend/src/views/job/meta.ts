@@ -1,24 +1,13 @@
 // 工单模板共享元数据：类型/审批方式/通知事件与渠道的展示映射（列表/编辑器/详情回看共用）
 import type { ApproveMode, TemplateType } from '@/api/job'
 
-/** 模板类型彩色标签（V2：类型描述工单业务属性） */
+/** 模板类型彩色标签（执行范式改造后收敛为 3 种） */
 export const typeText: Record<TemplateType, { text: string; color: string }> = {
   release: { text: '发布', color: 'geekblue' },
-  change: { text: '变更', color: 'orange' },
-  ops: { text: '日常运维', color: 'green' },
+  daily_ops: { text: '日常运维', color: 'green' },
   other: { text: '其他', color: 'purple' },
 }
 export const typeOptions = Object.entries(typeText).map(([value, v]) => ({ label: v.text, value }))
-
-export const scriptTypeOptions = [
-  { label: 'Shell', value: 'shell' },
-  { label: 'Playbook', value: 'playbook' },
-]
-
-/** 步骤脚本类型 → 编辑器高亮语言 */
-export function editorLang(scriptType: string): 'shell' | 'yaml' {
-  return scriptType === 'playbook' ? 'yaml' : 'shell'
-}
 
 /** 节点内审批方式：V1 仅 any（或签）生效，其余仅存配置（FLOW-01） */
 export const approveModeText: Record<ApproveMode, string> = {

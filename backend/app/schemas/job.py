@@ -5,9 +5,10 @@ params_schema 语义按 03-数据库设计 §4.3：参数定义数组
 fixed=true 的参数锁定默认值，提交人不可见不可改。
 """
 import re
+from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.constants import NotifyEvent
 from app.schemas.ticket import ExecStrategy
@@ -72,7 +73,6 @@ class TemplateStepInput(BaseModel):
     script_type: Literal["shell", "playbook"]
     content: str = Field(min_length=1)
     params_schema: list[TemplateParam] = Field(default_factory=list)
-    credential_id: int
     timeout: int = Field(default=600, ge=1, le=86400)
 
     @field_validator("params_schema")
@@ -130,9 +130,9 @@ class TemplateUpsertRequest(BaseModel):
     """
 
     name: str = Field(min_length=1, max_length=128)
-    type: Literal["release", "change", "ops", "other"]
+    type: Literal["release", "daily_ops", "other"]
     description: str | None = Field(default=None, max_length=512)
-    app_id: int
+    job_host_id: int
     steps: list[TemplateStepInput] = Field(min_length=1, max_length=20)
     exec_strategy: ExecStrategy = Field(default_factory=ExecStrategy)
     approval_enabled: bool = True
@@ -162,3 +162,57 @@ class TemplateStatusRequest(BaseModel):
     """启用/禁用：禁用后不可被提交，不影响已提交工单（TPL-03）。"""
 
     status: Literal["enabled", "disabled"]
+
+
+# ---------- 作业主机（执行范式改造） ----------
+
+class JobHostCreateRequest(BaseModel):
+    """新建作业主机：secret 必填（密码或私钥明文，入库前 AES-256-GCM 加密）。"""
+
+    name: str = Field(..., min_length=1, max_length=128)
+    ip: str = Field(..., min_length=1, max_length=45)
+    ssh_port: int = Field(default=22, ge=1, le=65535)
+    login_user: str = Field(..., min_length=1, max_length=64)
+    auth_type: str = Field(..., pattern="^(password|private_key)$")
+    secret: str = Field(..., min_length=1, description="密码或私钥明文")
+    passphrase: str | None = Field(default=None, description="私钥口令")
+    workdir: str = Field(default="/opt/opspilot/workspace", max_length=255)
+
+
+class JobHostUpdateRequest(BaseModel):
+    """编辑作业主机：全字段可选；secret 传 ****** 表示不修改原密文。"""
+
+    name: str | None = Field(default=None, max_length=128)
+    ip: str | None = Field(default=None, max_length=45)
+    ssh_port: int | None = Field(default=None, ge=1, le=65535)
+    login_user: str | None = Field(default=None, max_length=64)
+    auth_type: str | None = Field(default=None, pattern="^(password|private_key)$")
+    secret: str | None = Field(default=None, description="新密码/私钥，****** 表示不修改")
+    passphrase: str | None = Field(default=None)
+    workdir: str | None = Field(default=None, max_length=255)
+
+
+class JobHostStatusRequest(BaseModel):
+    """启用/禁用作业主机。"""
+
+    enabled: bool
+
+
+class JobHostDetailResponse(BaseModel):
+    """作业主机详情：不含 secret_enc / passphrase_enc 密文字段（安全红线）。"""
+
+    id: int
+    name: str
+    ip: str
+    ssh_port: int
+    login_user: str
+    auth_type: str
+    workdir: str
+    enabled: bool
+    last_check_at: datetime | None = None
+    last_check_ok: bool | None = None
+    last_check_msg: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)

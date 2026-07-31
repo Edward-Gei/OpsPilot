@@ -7,7 +7,7 @@ import { DeleteOutlined, DownOutlined, PlusOutlined, UpOutlined } from '@ant-des
 import * as jobApi from '@/api/job'
 import { defaultExecStrategy, type ExecStrategy } from '@/api/ticket'
 import CodeEditor from '@/components/CodeEditor.vue'
-import { approveModeOptions, channelOptions, editorLang, eventOptions, receiverOptions, scriptTypeOptions, typeOptions } from './meta'
+import { approveModeOptions, channelOptions, eventOptions, receiverOptions, typeOptions } from './meta'
 
 const props = defineProps<{
   open: boolean
@@ -15,9 +15,8 @@ const props = defineProps<{
   templateId: number | null
   /** 复制源模板 id：templateId 为空时生效，预填该模板全部配置作为新建（名称自动加「-副本」） */
   copyFromId?: number | null
-  apps: { id: number; name: string }[]
+  jobHosts: { id: number; name: string }[]
   roles: { id: number; name: string }[]
-  credentials: { id: number; name: string }[]
 }>()
 const emit = defineEmits<{ 'update:open': [boolean]; saved: [] }>()
 
@@ -32,9 +31,7 @@ interface EditParam {
 }
 interface EditStep {
   name: string
-  script_type: 'shell' | 'playbook'
   content: string
-  credential_id: number | undefined
   timeout: number
 }
 interface EditNode {
@@ -51,9 +48,9 @@ const activeTab = ref('base')
 const loading = ref(false)
 const form = reactive({
   name: '',
-  type: 'ops' as jobApi.TemplateType,
+  type: 'daily_ops' as jobApi.TemplateType,
   description: '',
-  app_id: undefined as number | undefined,
+  job_host_id: undefined as number | undefined,
   exec_strategy: defaultExecStrategy(),
   approval_enabled: false,
   allow_withdraw: true,
@@ -71,7 +68,7 @@ const notifyRules = ref<EditNotifyRule[]>([])
 const stepActive = ref<number[]>([]) // 步骤折叠面板展开项
 
 function emptyStep(): EditStep {
-  return { name: '', script_type: 'shell', content: '', credential_id: undefined, timeout: 600 }
+  return { name: '', content: '', timeout: 600 }
 }
 
 /** 各步骤存量 params_schema 合并为全局参数：与后端 TPL-03 规则一致
@@ -103,7 +100,7 @@ watch(
     if (!open) return
     activeTab.value = 'base'
     Object.assign(form, {
-      name: '', type: 'ops', description: '', app_id: undefined,
+      name: '', type: 'daily_ops', description: '', job_host_id: undefined,
       exec_strategy: defaultExecStrategy(), approval_enabled: false,
       allow_withdraw: true, allow_transfer: false, allow_countersign: false,
       visible_role_ids: [], changelog: '',
@@ -124,7 +121,7 @@ watch(
         name: props.templateId == null ? `${d.name}-副本` : d.name,
         type: d.type,
         description: d.description || '',
-        app_id: d.app_id,
+        job_host_id: d.job_host_id,
         exec_strategy: { ...defaultExecStrategy(), ...d.exec_strategy },
         approval_enabled: d.approval_enabled,
         allow_withdraw: d.allow_withdraw,
@@ -134,9 +131,7 @@ watch(
       })
       steps.value = d.steps.map((s) => ({
         name: s.name,
-        script_type: s.script_type,
         content: s.content,
-        credential_id: s.credential_id,
         timeout: s.timeout,
       }))
       // 存量步骤级参数自动合并去重为全局参数
@@ -178,13 +173,12 @@ function addNotifyRule() {
 // ---------- 前端预校验（与后端规则一致，减少一次往返） ----------
 function validate(): string | null {
   if (!form.name) return '请填写模板名称'
-  if (!form.app_id) return '请选择目标应用'
+  if (!form.job_host_id) return '请选择作业主机'
   if (!steps.value.length) return '至少需要 1 个步骤'
   for (const [i, s] of steps.value.entries()) {
     const no = `步骤 ${i + 1}`
     if (!s.name) return `${no}：请填写步骤名`
     if (!s.content) return `${no}：请填写脚本内容`
-    if (!s.credential_id) return `${no}：请选择执行凭据`
   }
   // 全局参数校验：命名合法、不重名、固定值必带默认值（与后端规则一致）
   const names = new Set<string>()
@@ -223,12 +217,12 @@ async function onSubmit() {
     name: form.name,
     type: form.type,
     description: form.description || undefined,
-    app_id: form.app_id!,
+    job_host_id: form.job_host_id!,
     steps: steps.value.map((s) => ({
       name: s.name,
-      script_type: s.script_type,
+      // 步骤脚本统一为 Shell（类型选择已取消，后端字段保留兼容存量）
+      script_type: 'shell' as jobApi.ScriptType,
       content: s.content,
-      credential_id: s.credential_id!,
       timeout: s.timeout,
       params_schema: paramsSchema,
     })),
@@ -284,13 +278,13 @@ async function onSubmit() {
               <a-form-item label="类型" required class="form-col-sm">
                 <a-select v-model:value="form.type" :options="typeOptions" />
               </a-form-item>
-              <a-form-item label="目标应用" required class="form-col">
+              <a-form-item label="作业主机" required class="form-col">
                 <a-select
-                  v-model:value="form.app_id"
-                  placeholder="工单执行的目标应用"
+                  v-model:value="form.job_host_id"
+                  placeholder="工单脚本统一在该主机上执行"
                   show-search
                   option-filter-prop="label"
-                  :options="apps.map((a) => ({ label: a.name, value: a.id }))"
+                  :options="jobHosts.map((h) => ({ label: h.name, value: h.id }))"
                 />
               </a-form-item>
             </div>
@@ -339,22 +333,12 @@ async function onSubmit() {
                   <a-form-item label="步骤名" required class="form-col">
                     <a-input v-model:value="s.name" placeholder="如 重启服务" />
                   </a-form-item>
-                  <a-form-item label="脚本类型" class="form-col-sm">
-                    <a-select v-model:value="s.script_type" :options="scriptTypeOptions" />
-                  </a-form-item>
-                  <a-form-item label="执行凭据" required class="form-col">
-                    <a-select
-                      v-model:value="s.credential_id"
-                      placeholder="SSH 执行凭据"
-                      :options="credentials.map((c) => ({ label: c.name, value: c.id }))"
-                    />
-                  </a-form-item>
                   <a-form-item label="超时（秒）" class="form-col-sm">
                     <a-input-number v-model:value="s.timeout" :min="1" :max="86400" class="full-w" />
                   </a-form-item>
                 </div>
-                <a-form-item label="脚本内容" required>
-                  <CodeEditor v-model="s.content" :lang="editorLang(s.script_type)" height="220px" />
+                <a-form-item label="脚本内容（Shell）" required>
+                  <CodeEditor v-model="s.content" lang="shell" height="220px" />
                 </a-form-item>
               </a-form>
             </a-collapse-panel>
@@ -367,17 +351,10 @@ async function onSubmit() {
           <a-form layout="vertical">
             <div class="section-title">执行策略（提交时快照到工单）</div>
             <div class="form-row">
-              <a-form-item label="并发数" class="form-col-sm">
-                <a-input-number v-model:value="form.exec_strategy.concurrency" :min="1" :max="100" class="full-w" />
-              </a-form-item>
-              <a-form-item label="分批大小（0=不分批）" class="form-col-sm">
-                <a-input-number v-model:value="form.exec_strategy.batch_size" :min="0" :max="1000" class="full-w" />
-              </a-form-item>
               <a-form-item label="总超时（秒）" class="form-col-sm">
                 <a-input-number v-model:value="form.exec_strategy.timeout" :min="1" :max="86400" class="full-w" />
               </a-form-item>
               <a-form-item label=" " class="form-col checks">
-                <a-checkbox v-model:checked="form.exec_strategy.batch_pause">批间暂停</a-checkbox>
                 <a-checkbox v-model:checked="form.exec_strategy.fail_fast">失败即停</a-checkbox>
                 <a-checkbox v-model:checked="form.exec_strategy.kill_on_stop">终止杀进程</a-checkbox>
               </a-form-item>

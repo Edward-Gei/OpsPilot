@@ -6,23 +6,17 @@ import CodeEditor from '@/components/CodeEditor.vue'
 import {
   approveModeText,
   channelText,
-  editorLang,
   eventText,
   receiverLabel,
-  scriptTypeOptions,
 } from './meta'
 
 const props = defineProps<{
   rule: TemplateSnapshot
   /** 角色 id → 角色名（审批节点/收件人/权限范围展示） */
   roleMap: Record<number, string>
-  /** 凭据 id → 凭据名 */
-  credMap: Record<number, string>
-  /** 目标应用名（父组件按 app_id 解析） */
-  appName: string
+  /** 作业主机名（父组件按 job_host_id 解析） */
+  jobHostName: string
 }>()
-
-const scriptTypeText = Object.fromEntries(scriptTypeOptions.map((o) => [o.value, o.label]))
 
 // 参数定义展示列（含 fixed 固定值语义）
 const yesNo = (v: { text: boolean }) => (v.text ? '是' : '否')
@@ -59,9 +53,6 @@ const strategyRows = computed(() => {
   const s = props.rule.exec_strategy || {}
   const b = (v: boolean | undefined) => (v === undefined ? '—' : v ? '是' : '否')
   return [
-    { label: '并发数', value: s.concurrency ?? '—' },
-    { label: '分批大小', value: s.batch_size ? s.batch_size : '不分批' },
-    { label: '批间暂停', value: b(s.batch_pause) },
     { label: '超时（秒）', value: s.timeout ?? '—' },
     { label: '失败即停', value: b(s.fail_fast) },
     { label: '终止杀进程', value: b(s.kill_on_stop) },
@@ -71,7 +62,7 @@ const strategyRows = computed(() => {
 
 <template>
   <a-descriptions :column="2" bordered size="small">
-    <a-descriptions-item label="目标应用">{{ appName || '—' }}</a-descriptions-item>
+    <a-descriptions-item label="作业主机">{{ jobHostName || '—' }}</a-descriptions-item>
     <a-descriptions-item label="可见角色">
       <template v-if="rule.visible_role_ids.length">
         <a-tag v-for="rid in rule.visible_role_ids" :key="rid" color="blue">{{ roleMap[rid] || rid }}</a-tag>
@@ -94,14 +85,12 @@ const strategyRows = computed(() => {
     <a-collapse-panel v-for="s in rule.steps" :key="s.step_order">
       <template #header>
         <a-tag color="cyan">步骤 {{ s.step_order }}</a-tag>{{ s.name }}
-        <a-tag class="step-type">{{ scriptTypeText[s.script_type] || s.script_type }}</a-tag>
       </template>
       <a-descriptions :column="2" bordered size="small">
-        <a-descriptions-item label="执行凭据">{{ credMap[s.credential_id] || `#${s.credential_id}` }}</a-descriptions-item>
         <a-descriptions-item label="超时（秒）">{{ s.timeout }}</a-descriptions-item>
       </a-descriptions>
-      <div class="sub-title">脚本内容</div>
-      <CodeEditor :model-value="s.content" :lang="editorLang(s.script_type)" readonly height="220px" />
+      <div class="sub-title">脚本内容（Shell）</div>
+      <CodeEditor :model-value="s.content" lang="shell" readonly height="220px" />
     </a-collapse-panel>
   </a-collapse>
 

@@ -14,7 +14,7 @@ import logging
 
 import asyncssh
 
-from app.core.constants import CredentialAuthType, HostExecStatus
+from app.core.constants import CredentialAuthType, ExecutionStatus, HostExecStatus
 from app.core.security import decrypt_text
 from app.engine.control import ControlState
 from app.engine.logs import LogChannel
@@ -47,10 +47,10 @@ async def open_connection(
     return await asyncssh.connect(**kwargs)
 
 
-async def _stream_output(stream, log: LogChannel, step_order: int, ip: str, prefix: str = "") -> None:
+async def _stream_output(stream, log: LogChannel, step_order: int, prefix: str = "") -> None:
     """逐行读取远端输出写入日志通道（stdout/stderr 各起一个协程）。"""
     async for line in stream:
-        log.write(step_order, ip, f"{prefix}{line.rstrip()}" if prefix else line.rstrip())
+        log.write(step_order, f"{prefix}{line.rstrip()}" if prefix else line.rstrip())
 
 
 async def run_shell_on_host(
@@ -80,8 +80,8 @@ async def run_shell_on_host(
             # stdout/stderr 并发流式收集；整体受步骤超时约束
             await asyncio.wait_for(
                 asyncio.gather(
-                    _stream_output(process.stdout, log, step_order, ip),
-                    _stream_output(process.stderr, log, step_order, ip),
+                    _stream_output(process.stdout, log, step_order),
+                    _stream_output(process.stderr, log, step_order),
                     process.wait(),
                 ),
                 timeout=timeout,
@@ -90,22 +90,95 @@ async def run_shell_on_host(
         if exit_code == 0:
             return HostExecStatus.SUCCESS.value, 0, None
         summary = f"退出码 {exit_code}"
-        log.write(step_order, ip, f"[opspilot] 脚本执行失败：{summary}")
+        log.write(step_order, f"[opspilot] 脚本执行失败：{summary}")
         return HostExecStatus.FAILED.value, exit_code, summary
     except asyncio.TimeoutError:
         # 超时：掐断连接终止远端会话，按失败策略参与统计（02 §4.2）
         if conn is not None:
             conn.abort()
-        log.write(step_order, ip, f"[opspilot] 执行超时（>{timeout}s），已终止会话")
+        log.write(step_order, f"[opspilot] 执行超时（>{timeout}s），已终止会话")
         return HostExecStatus.TIMEOUT.value, None, f"执行超时 >{timeout}s"
+    except RuntimeError as exc:
+        # 凭据解密失败等可识别运行时错误（decrypt_text）：按失败归档，
+        # 避免裸异常击穿引擎被误判为系统崩溃
+        summary = str(exc)[:500] or "运行时错误"
+        log.write(step_order, f"[opspilot] {summary}")
+        return HostExecStatus.FAILED.value, None, summary
     except (asyncssh.Error, OSError) as exc:
         if control.force_abort:
             # 会话被 force-abort 强杀导致的连接异常
-            log.write(step_order, ip, "[opspilot] 会话已被强制中止")
+            log.write(step_order, "[opspilot] 会话已被强制中止")
             return HostExecStatus.TERMINATED.value, None, "强制中止"
         summary = f"SSH 异常: {exc}" if str(exc) else f"SSH 异常: {type(exc).__name__}"
-        log.write(step_order, ip, f"[opspilot] {summary}")
+        log.write(step_order, f"[opspilot] {summary}")
         return HostExecStatus.FAILED.value, None, summary[:500]
+    finally:
+        if conn is not None:
+            control.unregister_conn(conn)
+            conn.close()
+
+
+async def run_shell_on_job_host(
+    *,
+    job_host,
+    script: str,
+    timeout: int,
+    step_order: int,
+    log: LogChannel,
+    control: ControlState,
+) -> tuple[str, int | None, str | None]:
+    """SSH→作业主机执行 Shell 脚本，返回 (ExecutionStatus值, 退出码, 失败摘要)。
+
+    执行范式改造后的步骤执行单元：JobHost 凭据字段与 Credential 同构
+    （login_user/auth_type/secret_enc/passphrase_enc），open_connection 直接复用。
+
+    超时口径：ExecutionStatus 无独立 TIMEOUT 态，超时归档为 failed，
+    但 error_summary 明确标注“执行超时”以区分普通失败（与旧版
+    run_shell_on_host 的 HostExecStatus.TIMEOUT 语义对齐）。
+    """
+    conn: asyncssh.SSHClientConnection | None = None
+    try:
+        conn = await open_connection(job_host.ip, job_host.ssh_port, job_host)
+        control.register_conn(conn)
+        async with conn.create_process("bash -s") as process:
+            process.stdin.write(script + "\n")
+            process.stdin.write_eof()
+            # stdout/stderr 并发流式收集；整体受步骤超时约束
+            await asyncio.wait_for(
+                asyncio.gather(
+                    _stream_output(process.stdout, log, step_order),
+                    _stream_output(process.stderr, log, step_order),
+                    process.wait(),
+                ),
+                timeout=timeout,
+            )
+            exit_code = process.exit_status
+        if exit_code == 0:
+            return ExecutionStatus.SUCCESS.value, 0, None
+        summary = f"退出码 {exit_code}"
+        log.write(step_order, f"[opspilot] 脚本执行失败：{summary}")
+        return ExecutionStatus.FAILED.value, exit_code, summary
+    except asyncio.TimeoutError:
+        # 超时：掐断连接终止远端会话；无独立 TIMEOUT 态，按 failed 归档
+        # 但摘要明确标注超时，保留“超时”语义供运维区分失败原因
+        if conn is not None:
+            conn.abort()
+        log.write(step_order, f"[opspilot] 执行超时（>{timeout}s），已终止会话")
+        return ExecutionStatus.FAILED.value, None, f"执行超时：SSH 命令超过 {timeout}s 未完成，会话已终止"
+    except RuntimeError as exc:
+        # 凭据解密失败等可识别运行时错误（decrypt_text）：按步骤失败归档，
+        # 避免裸异常击穿引擎被误判为系统崩溃（system_crash）
+        summary = str(exc)[:500] or "运行时错误"
+        log.write(step_order, f"[opspilot] {summary}")
+        return ExecutionStatus.FAILED.value, None, summary
+    except (asyncssh.Error, OSError) as exc:
+        if control.force_abort:
+            # 会话被 force-abort 强杀导致的连接异常
+            log.write(step_order, "[opspilot] 会话已被强制中止")
+            return ExecutionStatus.TERMINATED.value, None, "强制中止"
+        summary = f"SSH 异常: {exc}" if str(exc) else f"SSH 异常: {type(exc).__name__}"
+        log.write(step_order, f"[opspilot] {summary}")
+        return ExecutionStatus.FAILED.value, None, summary[:500]
     finally:
         if conn is not None:
             control.unregister_conn(conn)

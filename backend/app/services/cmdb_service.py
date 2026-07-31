@@ -1,18 +1,15 @@
 """CMDB 业务服务：主机/应用 CRUD、自动补全、删除保护、多对多关联。
 
 删除保护规则（03-数据库设计 §3.3）：
-    删主机：被应用关联 或 被进行中工单的 ticket_host 引用 → 42201
-    删应用：被进行中工单引用 → 42201
+    删主机：被应用关联 → 42201；V2 范式下工单引用的是作业主机（job_host），
+    与 CMDB 主机已解耦，无工单侧删除保护
+    删应用：V2 模型中工单不再引用应用，无工单侧删除保护
 """
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.response import Errors
 from app.models.cmdb import AppHost, Application, Host
-from app.models.ticket import Ticket, TicketHost
-
-# 工单"进行中"状态集：终态之外的都算（引用即阻止删除）
-ACTIVE_TICKET_STATUSES = ("approving", "running")
 
 
 # ---------- 主机 ----------
@@ -105,7 +102,10 @@ async def _ensure_ip_unique(session: AsyncSession, ip: str) -> None:
 
 
 async def delete_host(session: AsyncSession, host_id: int) -> Host:
-    """删除主机；删除保护：被应用关联或被进行中工单引用时拒绝（HOST-10）。"""
+    """删除主机；删除保护：被应用关联时拒绝（HOST-10）。
+
+    V2 范式下工单的 job_host_id 引用 job_host 表，与 CMDB host 属不同 ID 空间
+    且两者无外键关联，故不再做工单侧删除保护。"""
     host = await get_host_or_404(session, host_id)
     app_names = (
         await session.execute(
@@ -116,15 +116,6 @@ async def delete_host(session: AsyncSession, host_id: int) -> Host:
     ).scalars().all()
     if app_names:
         raise Errors.rejected(f"主机被应用引用，无法删除：{'、'.join(app_names[:5])}")
-    ticket_nos = (
-        await session.execute(
-            select(Ticket.ticket_no)
-            .join(TicketHost, TicketHost.ticket_id == Ticket.id)
-            .where(TicketHost.host_id == host_id, Ticket.status.in_(ACTIVE_TICKET_STATUSES))
-        )
-    ).scalars().all()
-    if ticket_nos:
-        raise Errors.rejected(f"主机被进行中工单引用，无法删除：{'、'.join(ticket_nos[:5])}")
     await session.delete(host)
     await session.flush()
     return host
@@ -276,17 +267,8 @@ async def update_app(
 
 
 async def delete_app(session: AsyncSession, app_id: int) -> Application:
-    """删除应用；被进行中工单引用时拒绝（42201），关联关系级联清理。"""
+    """删除应用；关联关系级联清理。V2 模型工单不引用应用，无需工单侧删除保护。"""
     app = await get_app_or_404(session, app_id)
-    ticket_nos = (
-        await session.execute(
-            select(Ticket.ticket_no).where(
-                Ticket.app_id == app_id, Ticket.status.in_(ACTIVE_TICKET_STATUSES)
-            )
-        )
-    ).scalars().all()
-    if ticket_nos:
-        raise Errors.rejected(f"应用被进行中工单引用，无法删除：{'、'.join(ticket_nos[:5])}")
     for link in (
         await session.execute(select(AppHost).where(AppHost.app_id == app_id))
     ).scalars():

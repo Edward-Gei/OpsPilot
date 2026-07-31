@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 工单详情抽屉（V2）：基本信息 + 提交参数 + 审批时间线（节点制）+ 步骤/主机快照 + 执行概要
+// 工单详情抽屉（V2）：基本信息 + 提交参数 + 审批时间线（节点制）+ 作业主机/步骤快照 + 执行概要
 // showApprove=true（待办审批页）时在审批中状态下展示 通过/驳回 操作区
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -74,21 +74,20 @@ const timeline = computed<TimelineRow[]>(() => {
 /** 执行策略一行摘要（模板规则快照） */
 const strategyText = computed(() => {
   const s = detail.value?.exec_strategy
-  if (!s || s.concurrency === undefined) return '—'
+  if (!s || s.timeout === undefined) return '—'
   return [
-    `并发 ${s.concurrency}`,
-    s.batch_size ? `每批 ${s.batch_size} 台${s.batch_pause ? '（批间暂停）' : ''}` : '不分批',
     `超时 ${s.timeout}s`,
     s.fail_fast ? '失败即停' : '失败继续',
   ].join(' · ')
 })
 
-const hostColumns = [
-  { title: '主机名', dataIndex: 'hostname', key: 'hostname', ellipsis: true },
-  { title: 'IP', dataIndex: 'ip', key: 'ip', width: 140 },
-  { title: '环境', dataIndex: 'environment', key: 'environment', width: 80 },
-  { title: 'SSH 端口', dataIndex: 'ssh_port', key: 'ssh_port', width: 90 },
-]
+/** 作业主机一行摘要（提交时固化快照） */
+const jobHostText = computed(() => {
+  const d = detail.value
+  if (!d) return '—'
+  if (d.job_host) return `${d.job_host.name}（${d.job_host.ip}）`
+  return d.job_host_name || '—'
+})
 
 // ---------- 审批操作（待办页复用本抽屉） ----------
 const comment = ref('')
@@ -115,7 +114,7 @@ async function onApprove(action: 'approve' | 'reject') {
     acting.value = ''
   }
 }
-/** 跳转执行详情页（矩阵 + 实时日志，需 execution:read） */
+/** 跳转执行详情页（步骤列表 + 实时日志，需 execution:read） */
 function openExecution() {
   if (!detail.value?.execution) return
   emit('update:open', false)
@@ -142,7 +141,7 @@ function openExecution() {
         </div>
 
         <a-descriptions bordered size="small" :column="2" class="d-desc">
-          <a-descriptions-item label="目标应用">{{ detail.app_name || '—' }}</a-descriptions-item>
+          <a-descriptions-item label="作业主机">{{ jobHostText }}</a-descriptions-item>
           <a-descriptions-item label="模板版本">v{{ detail.template_version }}</a-descriptions-item>
           <a-descriptions-item label="提交人">{{ detail.creator_name }}</a-descriptions-item>
           <a-descriptions-item label="提交时间">{{ fmtTime(detail.submitted_at) }}</a-descriptions-item>
@@ -165,7 +164,7 @@ function openExecution() {
           </a-timeline>
         </template>
 
-        <!-- 执行概要（M5：可跳执行详情页看矩阵与实时日志） -->
+        <!-- 执行概要（M5：可跳执行详情页看步骤列表与实时日志） -->
         <template v-if="detail.execution">
           <div class="d-section">
             执行概要
@@ -176,14 +175,13 @@ function openExecution() {
               @click="openExecution"
             >查看执行详情</a-button>
           </div>
-          <a-descriptions bordered size="small" :column="4" class="d-desc">
+          <a-descriptions bordered size="small" :column="3" class="d-desc">
             <a-descriptions-item label="状态">
               <a-tag :color="execStatusMeta[detail.execution.status as keyof typeof execStatusMeta]?.color">
                 {{ execStatusMeta[detail.execution.status as keyof typeof execStatusMeta]?.text || detail.execution.status }}
               </a-tag>
             </a-descriptions-item>
             <a-descriptions-item label="步骤数">{{ detail.execution.total_steps }}</a-descriptions-item>
-            <a-descriptions-item label="主机数">{{ detail.execution.total_hosts }}</a-descriptions-item>
             <a-descriptions-item label="触发方式">{{ triggeredByText[detail.execution.triggered_by] || detail.execution.triggered_by }}</a-descriptions-item>
           </a-descriptions>
         </template>
@@ -194,7 +192,7 @@ function openExecution() {
           <a-collapse-panel
             v-for="s in detail.steps"
             :key="s.step_order"
-            :header="`第 ${s.step_order} 步 · ${s.step_name}（${s.script_type} · 超时 ${s.timeout}s）`"
+            :header="`第 ${s.step_order} 步 · ${s.step_name}（超时 ${s.timeout}s）`"
           >
             <div v-if="Object.keys(s.params).length" class="d-params">
               <a-tag v-for="(v, k) in s.params" :key="k" color="geekblue">{{ k }} = {{ v }}</a-tag>
@@ -202,17 +200,6 @@ function openExecution() {
             <pre class="d-content">{{ s.content_snap }}</pre>
           </a-collapse-panel>
         </a-collapse>
-
-        <!-- 主机清单：提交时固化快照 -->
-        <div class="d-section">目标主机（{{ detail.hosts.length }}，提交时固化）</div>
-        <a-table
-          :columns="hostColumns"
-          :data-source="detail.hosts"
-          row-key="host_id"
-          size="small"
-          bordered
-          :pagination="false"
-        />
 
         <!-- 审批操作区：仅待办页且工单处于审批中 -->
         <template v-if="showApprove && awaiting">

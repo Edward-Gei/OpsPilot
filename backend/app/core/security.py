@@ -149,9 +149,19 @@ def encrypt_text(plain: str) -> str:
 
 
 def decrypt_text(enc: str) -> str:
-    """AES-256-GCM 解密（encrypt_text 的逆操作）。"""
-    raw = base64.b64decode(enc)
-    return AESGCM(_encrypt_key()).decrypt(raw[:12], raw[12:], None).decode()
+    """AES-256-GCM 解密（encrypt_text 的逆操作）；对损坏密文给出明确错误。
+
+    数据库密文可能被手动修改/迁移损坏，base64 或 AES 解密失败时统一抛
+    RuntimeError（附原始异常），调用方按业务口径捕获处理，避免裸异常击穿流程。
+    """
+    try:
+        raw = base64.b64decode(enc)
+        if len(raw) < 12:
+            raise ValueError("密文长度不足（缺少 12 字节 nonce）")
+        return AESGCM(_encrypt_key()).decrypt(raw[:12], raw[12:], None).decode()
+    except Exception as exc:  # noqa: BLE001 统一转译为业务可识别的解密失败
+        logger.error("凭据解密失败，数据可能已损坏: %s", exc)
+        raise RuntimeError("凭据解密失败，数据可能已损坏") from exc
 
 
 # ---------- TOTP（MFA） ----------

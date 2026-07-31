@@ -5,9 +5,6 @@ import type { PageResult } from './system'
 
 /** 执行策略（配置在模板内，提交时快照到工单 TPL-04） */
 export interface ExecStrategy {
-  concurrency: number
-  batch_size: number
-  batch_pause: boolean
   timeout: number
   fail_fast: boolean
   kill_on_stop: boolean
@@ -15,7 +12,7 @@ export interface ExecStrategy {
 
 /** 默认执行策略工厂：模板编辑器初始值 */
 export function defaultExecStrategy(): ExecStrategy {
-  return { concurrency: 5, batch_size: 0, batch_pause: false, timeout: 600, fail_fast: true, kill_on_stop: false }
+  return { timeout: 600, fail_fast: true, kill_on_stop: false }
 }
 
 /** V2 九态状态机（M5）：approving→queued→running(可paused)→终态；rejected/cancelled/interrupted */
@@ -39,8 +36,8 @@ export interface TicketBrief {
   template_version: number
   type: string
   title: string
-  app_id: number
-  app_name: string | null
+  job_host_id: number
+  job_host_name: string | null
   status: TicketStatus
   current_node: number
   total_nodes: number
@@ -51,13 +48,14 @@ export interface TicketBrief {
   created_at: string | null
 }
 
-/** 提交时固化的主机快照行 */
-export interface TicketHostSnap {
-  host_id: number
-  hostname: string
+/** 提交时固化的作业主机快照（login_user 仅工单详情快照携带） */
+export interface JobHostSnap {
+  id: number
+  name: string
   ip: string
-  environment: string
   ssh_port: number
+  login_user?: string
+  workdir: string
 }
 
 /** 步骤快照（含脚本内容快照与生效参数） */
@@ -67,7 +65,6 @@ export interface TicketStepSnap {
   script_type: string
   content_snap: string
   params: Record<string, string>
-  credential_id: number
   timeout: number
 }
 
@@ -86,7 +83,6 @@ export interface ExecutionBrief {
   id: number
   status: string
   total_steps: number
-  total_hosts: number
   triggered_by: string
   created_at: string | null
 }
@@ -97,7 +93,7 @@ export interface TicketDetail extends TicketBrief {
   exec_strategy: Partial<ExecStrategy>
   flow_snap: FlowNodeSnap[]
   allow_withdraw: boolean
-  hosts: TicketHostSnap[]
+  job_host: JobHostSnap | null
   steps: TicketStepSnap[]
   approvals: ApprovalRecord[]
   execution: ExecutionBrief | null
@@ -108,7 +104,6 @@ export interface TicketQuery {
   page_size?: number
   status?: string
   creator_id?: number
-  app_id?: number
   keyword?: string
   start?: string
   end?: string
@@ -122,7 +117,7 @@ export interface UsableTemplate {
   name: string
   type: string
   description: string | null
-  app_id: number
+  job_host_id: number
   approval_enabled: boolean
   current_version: number
 }
@@ -136,7 +131,7 @@ export interface FormParam {
   description: string | null
 }
 
-/** 提交表单描述：汇总参数 + 主机/步骤/审批节点/策略只读预览 */
+/** 提交表单描述：汇总参数 + 作业主机/步骤/审批节点/策略只读预览 */
 export interface TemplateFormDesc {
   template: {
     id: number
@@ -148,13 +143,11 @@ export interface TemplateFormDesc {
     allow_withdraw: boolean
   }
   params: FormParam[]
-  app: { id: number; name: string }
-  hosts: TicketHostSnap[]
+  job_host: JobHostSnap | null
   steps: {
     step_order: number
     name: string
     script_type: string
-    credential_id: number
     timeout: number
   }[]
   flow: FlowNodeSnap[]

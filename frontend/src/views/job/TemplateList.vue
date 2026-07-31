@@ -13,7 +13,7 @@ import {
   SearchOutlined,
 } from '@ant-design/icons-vue'
 import * as jobApi from '@/api/job'
-import { listApps } from '@/api/cmdb'
+import { listJobHosts } from '@/api/jobHost'
 import { listRoleOptions } from '@/api/system'
 import { makeResizable, onResizeColumn } from '@/utils/table'
 import { useUserStore } from '@/stores/user'
@@ -25,23 +25,19 @@ const userStore = useUserStore()
 const canWrite = userStore.hasPerm('template:write')
 
 // ---------- 下拉选项与名称映射（编辑器 + 规则回看共用） ----------
-const apps = ref<{ id: number; name: string }[]>([])
+const jobHosts = ref<{ id: number; name: string }[]>([])
 const roles = ref<{ id: number; name: string }[]>([])
-const credentials = ref<{ id: number; name: string }[]>([])
-const appMap = computed(() => Object.fromEntries(apps.value.map((a) => [a.id, a.name])) as Record<number, string>)
+const jobHostMap = computed(() => Object.fromEntries(jobHosts.value.map((h) => [h.id, h.name])) as Record<number, string>)
 const roleMap = computed(() => Object.fromEntries(roles.value.map((r) => [r.id, r.name])) as Record<number, string>)
-const credMap = computed(() => Object.fromEntries(credentials.value.map((c) => [c.id, c.name])) as Record<number, string>)
 
-/** 拉取编辑器/回看所需的关联选项（应用/角色/凭据；量小一次拉全） */
+/** 拉取编辑器/回看所需的关联选项（作业主机/角色；量小一次拉全） */
 async function loadOptions() {
-  const [appRes, roleRes, credRes] = await Promise.all([
-    listApps({ page: 1, page_size: 100 }),
+  const [hostRes, roleRes] = await Promise.all([
+    listJobHosts({ page: 1, page_size: 100, enabled: true }),
     listRoleOptions(),
-    jobApi.listCredentials({ page: 1, page_size: 100 }),
   ])
-  apps.value = appRes.items.map((a) => ({ id: a.id, name: a.name }))
+  jobHosts.value = hostRes.items.map((h) => ({ id: h.id, name: h.name }))
   roles.value = roleRes.items
-  credentials.value = credRes.items.map((c) => ({ id: c.id, name: c.name }))
 }
 
 // ---------- 列表 ----------
@@ -63,7 +59,7 @@ const query = reactive({
 const columns = ref(makeResizable([
   { title: '模板名', dataIndex: 'name', key: 'name', width: 170, ellipsis: true },
   { title: '类型', key: 'type', width: 90 },
-  { title: '目标应用', key: 'app', width: 130, ellipsis: true },
+  { title: '作业主机', key: 'job_host', width: 130, ellipsis: true },
   { title: '审批', key: 'approval', width: 80 },
   { title: '状态', key: 'status', width: 90 },
   { title: '当前版本', key: 'version', width: 90 },
@@ -208,7 +204,7 @@ async function searchCopyOptions(kw: string) {
   try {
     const data = await jobApi.listTemplates({ page: 1, page_size: 100, keyword: kw || undefined })
     copyOptions.value = data.items.map((t) => ({
-      label: `${t.name}（${appMap.value[t.app_id] || '—'} · v${t.current_version}）`,
+      label: `${t.name}（${jobHostMap.value[t.job_host_id] || '—'} · v${t.current_version}）`,
       value: t.id,
     }))
   } finally {
@@ -385,7 +381,7 @@ onMounted(() => {
             {{ typeText[record.type as jobApi.TemplateType]?.text || record.type }}
           </a-tag>
         </template>
-        <template v-else-if="column.key === 'app'">{{ appMap[record.app_id] || `#${record.app_id}` }}</template>
+        <template v-else-if="column.key === 'job_host'">{{ jobHostMap[record.job_host_id] || `#${record.job_host_id}` }}</template>
         <template v-else-if="column.key === 'approval'">
           <a-tag :color="record.approval_enabled ? 'gold' : 'default'">
             {{ record.approval_enabled ? '需审批' : '免审' }}
@@ -430,9 +426,8 @@ onMounted(() => {
       v-model:open="editorOpen"
       :template-id="editingId"
       :copy-from-id="copyFromId"
-      :apps="apps"
+      :job-hosts="jobHosts"
       :roles="roles"
-      :credentials="credentials"
       @saved="refreshAll"
     />
 
@@ -469,7 +464,7 @@ onMounted(() => {
             </a-tag>
             <a-tag color="cyan">当前版本 v{{ detail.current_version }}</a-tag>
           </div>
-          <TemplateRuleView :rule="detail" :role-map="roleMap" :cred-map="credMap" :app-name="appMap[detail.app_id] || ''" />
+          <TemplateRuleView :rule="detail" :role-map="roleMap" :job-host-name="jobHostMap[detail.job_host_id] || ''" />
         </template>
       </a-spin>
     </a-drawer>
@@ -496,8 +491,7 @@ onMounted(() => {
           <TemplateRuleView
             :rule="versionDetail.snapshot"
             :role-map="roleMap"
-            :cred-map="credMap"
-            :app-name="appMap[versionDetail.snapshot.app_id] || ''"
+            :job-host-name="jobHostMap[versionDetail.snapshot.job_host_id] || ''"
           />
         </template>
 

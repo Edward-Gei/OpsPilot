@@ -3,7 +3,7 @@
 覆盖：
     1. 响应包裹与业务异常约定
     2. 权限矩阵与常量的完整性（角色引用的权限点必须存在）
-    3. ORM 元数据完整性（24 张表全部注册）
+    3. ORM 元数据完整性（26 张表全部注册）
     4. FastAPI 应用可构建、路由已挂载
 """
 import pytest
@@ -52,16 +52,16 @@ def test_system_config_defaults_wrapped():
 
 
 def test_metadata_contains_all_tables():
-    """ORM 元数据必须收录 03-数据库设计 定义的全部 27 张表（V2 + 站内信 + 访问密钥）。"""
+    """ORM 元数据必须收录 03-数据库设计 定义的全部 26 张表（执行范式改造后）。"""
     from app.models import Base
 
     expected = {
         "user", "role", "permission", "user_role", "role_permission", "api_token",
-        "host", "application", "app_host",
+        "host", "application", "app_host", "job_host",
         "credential", "ticket_template", "template_step",
         "template_approval_node", "template_version",
-        "ticket", "ticket_host", "ticket_step", "ticket_approval",
-        "execution", "execution_step", "execution_step_host",
+        "ticket", "ticket_step", "ticket_approval",
+        "execution", "execution_step",
         "notify_channel", "notify_channel_event", "notification_record",
         "user_notification",
         "audit_log", "system_config",

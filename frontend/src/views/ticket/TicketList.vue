@@ -51,7 +51,7 @@ const rangePresets: { label: string; value: [Dayjs, Dayjs] }[] = [
 const columns = ref(makeResizable([
   { title: '工单号', dataIndex: 'ticket_no', key: 'ticket_no', width: 150 },
   { title: '标题（模板名）', dataIndex: 'title', key: 'title', width: 200, ellipsis: true },
-  { title: '目标应用', key: 'app', width: 130, ellipsis: true },
+  { title: '作业主机', key: 'job_host', width: 130, ellipsis: true },
   { title: '模板版本', key: 'tpl_version', width: 90 },
   { title: '状态', key: 'status', width: 140 },
   { title: '提交人', dataIndex: 'creator_name', key: 'creator_name', width: 110, ellipsis: true },
@@ -222,7 +222,7 @@ onMounted(() => {
       }"
     >
       <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'app'">{{ record.app_name || '—' }}</template>
+        <template v-if="column.key === 'job_host'">{{ record.job_host_name || '—' }}</template>
         <template v-else-if="column.key === 'tpl_version'">
           <a-tag color="cyan">v{{ record.template_version }}</a-tag>
         </template>

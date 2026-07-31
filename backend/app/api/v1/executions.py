@@ -30,16 +30,15 @@ async def list_executions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     ticket_no: str | None = None,
-    app_id: int | None = None,
     creator_id: int | None = None,
     status: str | None = None,
     start: str | None = None,
     end: str | None = None,
 ) -> dict:
-    """分页；筛选：ticket_no/app/creator/status/时间范围。"""
+    """分页；筛选：ticket_no/creator/status/时间范围。"""
     items, total = await execution_service.list_executions(
         session, page=page, page_size=page_size, ticket_no=ticket_no,
-        app_id=app_id, creator_id=creator_id, status=status, start=start, end=end,
+        creator_id=creator_id, status=status, start=start, end=end,
     )
     return ok({"items": items, "total": total, "page": page, "page_size": page_size})
 
@@ -50,26 +49,8 @@ async def get_execution(
     session: DbSession,
     _: User = Depends(require_perm("execution:read")),
 ) -> dict:
-    """汇总 + 步骤列表（状态/批次/统计）。"""
+    """汇总 + 步骤列表（状态/退出码/耗时）。"""
     return ok(await execution_service.get_execution_detail(session, execution_id))
-
-
-@router.get("/{execution_id}/hosts", summary="主机明细")
-async def list_execution_hosts(
-    execution_id: int,
-    session: DbSession,
-    _: User = Depends(require_perm("execution:read")),
-    step_order: int | None = None,
-    status: str | None = None,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(200, ge=1, le=500),
-) -> dict:
-    """?step_order=&status= 主机明细分页（步骤×主机矩阵数据源）。"""
-    items, total = await execution_service.list_hosts(
-        session, execution_id, step_order=step_order, status=status,
-        page=page, page_size=page_size,
-    )
-    return ok({"items": items, "total": total, "page": page, "page_size": page_size})
 
 
 @router.get("/{execution_id}/logs", summary="历史日志")
@@ -78,14 +59,13 @@ async def get_execution_logs(
     session: DbSession,
     _: User = Depends(require_perm("execution:read")),
     step_order: int = Query(..., ge=1),
-    ip: str = Query(..., description="目标主机 IP；Ansible 步骤固定传 ansible"),
     offset: int = Query(0, ge=0, description="起始行号（0 起）"),
     limit: int = Query(500, ge=1, le=2000),
 ) -> dict:
     """读日志文件（历史回看，按行偏移增量拉取）。"""
     await execution_service.get_execution_or_404(session, execution_id)
     lines, next_offset, eof = read_log_lines(
-        execution_id, step_order, ip, offset=offset, limit=limit
+        execution_id, step_order, offset=offset, limit=limit
     )
     return ok({"lines": lines, "next_offset": next_offset, "eof": eof})
 

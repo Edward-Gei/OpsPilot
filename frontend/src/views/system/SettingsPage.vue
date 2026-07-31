@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// 系统设置：安全策略（MFA/令牌/密码）+ SSO 认证源（LDAP / OIDC）+ Ansible 作业主机（M5）
+// 系统设置：安全策略（MFA/令牌/密码）+ SSO 认证源（LDAP / OIDC）+ 作业主机配置
 // 权限 system:config；敏感密钥读取时后端脱敏为 ******，原样提交不会覆盖真实值
+// 作业主机的增删改/连通性测试直接内嵌本页（JobHostPanel），不再单设导航菜单
 import { computed, onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import {
@@ -12,8 +13,8 @@ import {
   SafetyCertificateOutlined,
   SettingOutlined,
 } from '@ant-design/icons-vue'
-import { listCredentials } from '@/api/job'
 import * as sysApi from '@/api/system'
+import JobHostPanel from './JobHostPanel.vue'
 
 const loading = ref(false)
 
@@ -56,16 +57,6 @@ const oidcForm = reactive({
 })
 const oidcDefaultRole = ref('ops')
 
-// Ansible 作业主机（M5）：enabled 开关映射 ansible.job_host 是否为 null
-const jobHostEnabled = ref(false)
-const jobHostForm = reactive<sysApi.JobHostConfig>({
-  ip: '',
-  port: 22,
-  credential_id: null,
-  workdir: '/tmp',
-})
-const credOptions = ref<{ label: string; value: number }[]>([])
-
 const roleOptions = ref<{ label: string; value: string }[]>([])
 
 // 横幅状态统计：与表单实时联动
@@ -100,19 +91,8 @@ async function loadConfigs() {
     oidcEnabled.value = !!oidc?.authorize_endpoint
     if (oidc) Object.assign(oidcForm, oidc)
     oidcDefaultRole.value = (cfg['oidc.default_role'] as string) || 'ops'
-
-    const jobHost = cfg['ansible.job_host'] as sysApi.JobHostConfig | null
-    jobHostEnabled.value = !!jobHost?.ip
-    if (jobHost) Object.assign(jobHostForm, jobHost)
   } finally {
     loading.value = false
-  }
-  // 凭据下拉单独拉取：失败不阻断其他配置块加载（需 credential:read）
-  try {
-    const creds = await listCredentials({ page: 1, page_size: 100 })
-    credOptions.value = creds.items.map((c) => ({ label: `${c.name}（${c.login_user}）`, value: c.id }))
-  } catch {
-    /* 无凭据权限时下拉为空，提示由拦截器弹出 */
   }
 }
 
@@ -163,43 +143,6 @@ function onSaveOidc() {
   })
 }
 
-// ---------- Ansible 作业主机（M5） ----------
-
-function onSaveJobHost() {
-  if (jobHostEnabled.value && (!jobHostForm.ip || !jobHostForm.credential_id)) {
-    message.warning('请填写作业主机 IP 并选择 SSH 凭据')
-    return
-  }
-  save('jobhost', {
-    // 关闭开关即置空配置，playbook 步骤执行时将报作业主机未配置
-    'ansible.job_host': jobHostEnabled.value ? { ...jobHostForm } : null,
-  })
-}
-
-/** 连通性测试：传当前表单值（非已保存配置），保存前可预测 */
-const testing = ref(false)
-const testResult = ref<{ success: boolean; message: string } | null>(null)
-
-async function onTestJobHost() {
-  if (!jobHostForm.ip || !jobHostForm.credential_id) {
-    message.warning('请先填写作业主机 IP 并选择 SSH 凭据')
-    return
-  }
-  testing.value = true
-  testResult.value = null
-  try {
-    testResult.value = await sysApi.testJobHost({
-      ip: jobHostForm.ip,
-      port: jobHostForm.port,
-      credential_id: jobHostForm.credential_id,
-    })
-  } catch {
-    /* 错误提示由拦截器统一弹出 */
-  } finally {
-    testing.value = false
-  }
-}
-
 onMounted(loadConfigs)
 </script>
 
@@ -211,13 +154,12 @@ onMounted(loadConfigs)
         <div class="op-hero-icon"><SettingOutlined /></div>
         <div>
           <div class="op-hero-title">系统设置</div>
-          <div class="op-hero-sub">安全策略、SSO 认证源与 Ansible 作业主机配置，保存后即时生效</div>
+          <div class="op-hero-sub">安全策略与 SSO 认证源配置，保存后即时生效</div>
         </div>
         <div class="op-hero-extra">
           <div class="op-hero-stat"><b>{{ mfaPolicyLabel }}</b><span>MFA 策略</span></div>
           <div class="op-hero-stat"><b>{{ ldapEnabled ? '启用' : '停用' }}</b><span>LDAP</span></div>
           <div class="op-hero-stat"><b>{{ oidcEnabled ? '启用' : '停用' }}</b><span>OIDC</span></div>
-          <div class="op-hero-stat"><b>{{ jobHostEnabled ? '已配置' : '未配置' }}</b><span>作业主机</span></div>
         </div>
       </div>
 
@@ -403,50 +345,16 @@ onMounted(loadConfigs)
         <div v-else class="disabled-tip">已停用：登录页不显示 SSO 入口</div>
       </a-card>
 
-      <!-- Ansible 作业主机（M5：playbook 步骤的控制节点，全局单实例） -->
+      <!-- 作业主机配置：脚本统一在作业主机上执行，增删改/连通性测试内嵌本页 -->
       <a-card class="block">
         <div class="block-head">
           <div class="op-icon-grad" style="background: var(--grad-green)"><CloudServerOutlined /></div>
           <div class="block-title">
-            <b>Ansible 作业主机</b>
-            <span>Playbook 步骤的控制节点：平台 SSH 到该主机运行 ansible-playbook</span>
+            <b>作业主机</b>
+            <span>模板脚本统一在作业主机上执行（登录密文加密存储，任何接口不回显）</span>
           </div>
-          <a-switch v-model:checked="jobHostEnabled" class="head-switch" />
-          <a-button :loading="testing" :disabled="!jobHostEnabled" @click="onTestJobHost">测试连通性</a-button>
-          <a-button type="primary" :loading="saving === 'jobhost'" @click="onSaveJobHost">保存</a-button>
         </div>
-
-        <template v-if="jobHostEnabled">
-          <div class="grid2">
-            <a-form-item label="主机 IP" required>
-              <a-input v-model:value="jobHostForm.ip" placeholder="10.0.0.10" />
-            </a-form-item>
-            <a-form-item label="SSH 端口">
-              <a-input-number v-model:value="jobHostForm.port" :min="1" :max="65535" style="width: 100%" />
-            </a-form-item>
-            <a-form-item label="SSH 凭据" required>
-              <a-select
-                v-model:value="jobHostForm.credential_id"
-                :options="credOptions"
-                placeholder="选择凭据管理中的凭据"
-                show-search
-                option-filter-prop="label"
-              />
-            </a-form-item>
-            <a-form-item label="工作目录">
-              <a-input v-model:value="jobHostForm.workdir" placeholder="/tmp（临时文件上传与执行目录）" />
-            </a-form-item>
-          </div>
-          <!-- 测试结果：成功显示 ansible 版本，失败显示原因 -->
-          <a-alert
-            v-if="testResult"
-            :type="testResult.success ? 'success' : 'error'"
-            :message="testResult.success ? `连通正常：${testResult.message}` : `连通失败：${testResult.message}`"
-            show-icon
-          />
-          <div class="field-tip">未配置时含 Playbook 步骤的工单将执行失败；修改后对新派发的步骤生效。</div>
-        </template>
-        <div v-else class="disabled-tip">未配置：含 Ansible Playbook 步骤的工单将无法执行</div>
+        <JobHostPanel />
       </a-card>
       </div>
     </div>

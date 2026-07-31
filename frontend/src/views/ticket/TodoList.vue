@@ -17,7 +17,7 @@ const query = reactive({ page: 1, page_size: 20 })
 const columns = ref(makeResizable([
   { title: '工单号', dataIndex: 'ticket_no', key: 'ticket_no', width: 150 },
   { title: '标题（模板名）', dataIndex: 'title', key: 'title', width: 220, ellipsis: true },
-  { title: '目标应用', key: 'app', width: 150, ellipsis: true },
+  { title: '作业主机', key: 'job_host', width: 150, ellipsis: true },
   { title: '当前节点', key: 'node', width: 110 },
   { title: '提交人', dataIndex: 'creator_name', key: 'creator_name', width: 110, ellipsis: true },
   { title: '提交时间', key: 'submitted', width: 155 },
@@ -88,7 +88,7 @@ onMounted(loadList)
       }"
     >
       <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'app'">{{ record.app_name || '—' }}</template>
+        <template v-if="column.key === 'job_host'">{{ record.job_host_name || '—' }}</template>
         <template v-else-if="column.key === 'node'">
           <a-tag color="gold">节点 {{ record.current_node }}/{{ record.total_nodes }}</a-tag>
         </template>

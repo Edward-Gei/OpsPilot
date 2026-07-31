@@ -1,9 +1,9 @@
 """V2 工单中心接口测试。
 
-覆盖验收点（05-任务拆解 M4，V2 修订）：
+覆盖验收点ﾀ05-任务拆解 M4，V2 修订 + 执行范式改造ﾉ：
 - 可用模板列表：enabled + visible_role_ids 过滤；
 - 提交表单描述：各步骤 params_schema 同名合并、fixed 参数不外显；
-- 提交只填参数：标题=模板名，五重快照固化（提交后改模板/主机不影响工单）；
+- 提交只填参数：标题=模板名，多重快照固化（提交后改模板/作业主机不影响工单）；
 - 参数校验：未定义键/固定值键/必填缺失 40001，缺省补默认值；
 - 节点审批推进 / 越级 40302 / 驳回意见必填 / 驳回关闭 / 撤回（含模板禁止撤回）；
 - 末节点通过 → queued + Execution(queued) + 预建执行子表 + XADD ops:exec:queue（M5）；
@@ -19,35 +19,23 @@ from app.models.notify import NotificationRecord
 from tests.conftest import TEST_PASSWORD_HASH, auth_header, login_for_tokens
 
 
-HOST_PAYLOAD = {
-    "hostname": "tk-web-01", "ip": "10.9.0.1", "environment": "prod",
-    "status": "online", "ssh_port": 22,
-}
-
-CRED_PAYLOAD = {
-    "name": "tk-root", "login_user": "root", "auth_type": "password", "secret": "S3cret!pass",
+JOB_HOST_PAYLOAD = {
+    "name": "tk-agent-01", "ip": "10.9.0.1", "ssh_port": 22,
+    "login_user": "root", "auth_type": "password", "secret": "S3cret!pass",
+    "workdir": "/opt/opspilot/workspace",
 }
 
 
 # ---------- 测试辅助 ----------
 
 async def _base_env(client) -> dict:
-    """公共前置：admin/ops 登录 + 1 主机 + 1 应用 + 1 凭据。"""
+    """公共前置：admin/ops 登录 + 1 作业主机（仅 admin 有 job_host:write）。"""
     admin_h = auth_header(await login_for_tokens(client, "admin"))
     ops_h = auth_header(await login_for_tokens(client, "ops1"))
 
-    resp = await client.post("/api/v1/cmdb/hosts", json=HOST_PAYLOAD, headers=ops_h)
-    host_id = resp.json()["data"]["id"]
-    resp = await client.post(
-        "/api/v1/cmdb/apps",
-        json={"name": "订单服务", "deploy_type": "docker", "host_ids": [host_id]},
-        headers=ops_h,
-    )
-    app_id = resp.json()["data"]["id"]
-    resp = await client.post("/api/v1/credentials", json=CRED_PAYLOAD, headers=admin_h)
-    cred_id = resp.json()["data"]["id"]
-    return {"admin_h": admin_h, "ops_h": ops_h, "host_id": host_id,
-            "app_id": app_id, "cred_id": cred_id}
+    resp = await client.post("/api/v1/job-hosts", json=JOB_HOST_PAYLOAD, headers=admin_h)
+    job_host_id = resp.json()["data"]["id"]
+    return {"admin_h": admin_h, "ops_h": ops_h, "job_host_id": job_host_id}
 
 
 def _step(env: dict, **override) -> dict:
@@ -59,7 +47,6 @@ def _step(env: dict, **override) -> dict:
         "params_schema": [
             {"name": "svc", "label": "服务名", "default": "nginx", "required": True}
         ],
-        "credential_id": env["cred_id"],
         "timeout": 300,
         **override,
     }
@@ -69,11 +56,11 @@ async def _create_template(client, env, *, nodes: list[dict] | None = None, **ov
     """创建模板：nodes 传审批节点列表（None=免审），返回模板 id。"""
     payload = {
         "name": "重启 Nginx",
-        "type": "ops",
+        "type": "daily_ops",
         "description": "滚动重启",
-        "app_id": env["app_id"],
+        "job_host_id": env["job_host_id"],
         "steps": [_step(env)],
-        "exec_strategy": {"concurrency": 5, "batch_size": 0, "timeout": 600},
+        "exec_strategy": {"timeout": 600, "fail_fast": True},
         "approval_enabled": bool(nodes),
         "approval_nodes": nodes or [],
         **override,
@@ -155,11 +142,11 @@ class TestUsableTemplatesAndForm:
         assert [p["name"] for p in form["params"]] == ["svc"]
         assert form["params"][0]["required"] is True
         assert form["template"]["name"] == "重启 Nginx"
-        assert [h["ip"] for h in form["hosts"]] == ["10.9.0.1"]
+        assert form["job_host"]["ip"] == "10.9.0.1"
         assert [s["step_order"] for s in form["steps"]] == [1, 2]
         assert form["flow"] == [{"node": 1, "role_id": seed["roles"]["approver"],
                                  "role_name": "审批人", "approve_mode": "any"}]
-        assert form["exec_strategy"]["concurrency"] == 5
+        assert form["exec_strategy"]["timeout"] == 600
 
     async def test_form_guard(self, client, seed):
         """禁用模板 40901；不在可见范围 40302。"""
@@ -191,17 +178,17 @@ class TestSubmit:
         data = await _submit(client, env["ops_h"], tpl_id)
         assert data["status"] == "approving" and data["current_node"] == 1
 
-        # 提交后改模板步骤内容（升版）+ 清空应用主机 → 工单快照不受影响（五重快照固化）
+        # 提交后改模板步骤内容（升版）+ 改作业主机 IP → 工单快照不受影响（多重快照固化）
         resp = await client.put(f"/api/v1/templates/{tpl_id}", headers=env["ops_h"], json={
-            "name": "重启 Nginx", "type": "ops", "description": "滚动重启",
-            "app_id": env["app_id"], "steps": [_step(env, content="echo changed")],
-            "exec_strategy": {"concurrency": 5, "batch_size": 0, "timeout": 600},
+            "name": "重启 Nginx", "type": "daily_ops", "description": "滚动重启",
+            "job_host_id": env["job_host_id"], "steps": [_step(env, content="echo changed")],
+            "exec_strategy": {"timeout": 600, "fail_fast": True},
             "approval_enabled": True,
             "approval_nodes": [{"node_order": 1, "role_id": seed["roles"]["approver"]}],
         })
         assert resp.json()["code"] == 0
-        resp = await client.put(f"/api/v1/cmdb/apps/{env['app_id']}", headers=env["ops_h"],
-                                json={"name": "订单服务", "deploy_type": "docker", "host_ids": []})
+        resp = await client.put(f"/api/v1/job-hosts/{env['job_host_id']}", headers=env["admin_h"],
+                                json={"ip": "10.9.0.99"})
         assert resp.json()["code"] == 0
 
         detail = (await client.get(f"/api/v1/tickets/{data['id']}",
@@ -210,7 +197,7 @@ class TestSubmit:
         assert detail["template_version"] == 1  # 升版前的版本号
         assert detail["params"] == {"svc": "nginx"}  # 缺省补默认值
         assert detail["steps"][0]["content_snap"].startswith("#!/bin/bash")
-        assert [h["ip"] for h in detail["hosts"]] == ["10.9.0.1"]
+        assert detail["job_host"]["ip"] == "10.9.0.1"  # 作业主机快照不受后续改动影响
         assert detail["flow_snap"] == [{"node": 1, "role_id": seed["roles"]["approver"],
                                         "role_name": "审批人", "approve_mode": "any"}]
 
@@ -226,7 +213,7 @@ class TestSubmit:
         async with db_factory() as session:
             execution = (await session.execute(select(Execution))).scalar_one()
             assert (execution.status, execution.triggered_by) == ("queued", "auto_approve")
-            assert (execution.total_steps, execution.total_hosts) == (1, 1)
+            assert execution.total_steps == 1
         assert await fake_redis.xlen(EXEC_QUEUE) == 1
 
         # 通知打桩：待审批（默认收件人=节点角色成员）+ 审批通过（notify_rules 指定 creator）
@@ -280,7 +267,7 @@ class TestSubmit:
         assert await _notify_rows(db_factory) == []
 
     async def test_submit_guard(self, client, seed):
-        """禁用模板 40901；可见范围外 40302；应用无主机 40001。"""
+        """禁用模板 40901；可见范围外 40302。"""
         env = await _base_env(client)
         tpl_id = await _create_template(client, env)
         await client.put(f"/api/v1/templates/{tpl_id}/status",
@@ -294,16 +281,6 @@ class TestSubmit:
         resp = await client.post("/api/v1/tickets", headers=env["ops_h"],
                                  json={"template_id": limited, "params": {}})
         assert resp.json()["code"] == 40302
-
-        # 应用无关联主机 → 40001
-        resp = await client.post("/api/v1/cmdb/apps", headers=env["ops_h"],
-                                 json={"name": "空应用", "deploy_type": "shell", "host_ids": []})
-        empty_app = resp.json()["data"]["id"]
-        empty_tpl = await _create_template(client, env, name="空应用模板", app_id=empty_app)
-        resp = await client.post("/api/v1/tickets", headers=env["ops_h"],
-                                 json={"template_id": empty_tpl, "params": {}})
-        body = resp.json()
-        assert body["code"] == 40001 and "主机" in body["message"]
 
 
 class TestApproveAndCancel:

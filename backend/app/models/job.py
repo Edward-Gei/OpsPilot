@@ -38,17 +38,17 @@ class TicketTemplate(Base):
 
     __tablename__ = "ticket_template"
     __table_args__ = (
-        Index("idx_ticket_template_app", "app_id"),
+        Index("idx_ticket_template_jh", "job_host_id"),
         Base.__table_args__,
     )
 
     id: Mapped[int] = pk_column()
     name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, comment="模板名（工单标题直接使用）")
-    type: Mapped[str] = mapped_column(String(16), nullable=False, comment="release/change/ops/other")
+    type: Mapped[str] = mapped_column(String(16), nullable=False, comment="release/daily_ops/other")
     description: Mapped[str | None] = mapped_column(String(512))
-    app_id: Mapped[int] = mapped_column(UBIGINT, nullable=False, comment="目标应用（执行范围=应用关联主机）")
+    job_host_id: Mapped[int] = mapped_column(UBIGINT, nullable=False, comment="作业主机")
     exec_strategy: Mapped[dict | None] = mapped_column(
-        JSON, comment="执行策略 {concurrency,batch_size,batch_pause,timeout,fail_fast,kill_on_stop}"
+        JSON, comment="执行策略 {timeout, fail_fast}"
     )
     approval_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否需要审批")
     allow_withdraw: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否允许创建人撤回")
@@ -85,7 +85,6 @@ class TemplateStep(Base):
     params_schema: Mapped[list | None] = mapped_column(
         JSON, comment="参数定义 [{name,label,default,required,fixed,description}]；fixed=true 锁定默认值"
     )
-    credential_id: Mapped[int] = mapped_column(UBIGINT, nullable=False, comment="本步骤 SSH 凭据")
     timeout: Mapped[int] = mapped_column(Integer, nullable=False, default=600, comment="单机超时秒")
     created_at: Mapped[datetime] = created_at_column()
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 执行中心（M5）：执行记录列表，行点击进入详情页（矩阵 + 实时日志）
+// 执行中心（M5）：执行记录列表，行点击进入详情页（步骤列表 + 实时日志）
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
@@ -28,9 +28,9 @@ const columns = ref(makeResizable([
   { title: '执行 ID', dataIndex: 'id', key: 'id', width: 90 },
   { title: '工单号', dataIndex: 'ticket_no', key: 'ticket_no', width: 150 },
   { title: '标题', dataIndex: 'title', key: 'title', width: 200, ellipsis: true },
-  { title: '目标应用', key: 'app', width: 130, ellipsis: true },
+  { title: '作业主机', key: 'job_host', width: 130, ellipsis: true },
   { title: '状态', key: 'status', width: 100 },
-  { title: '规模', key: 'scale', width: 110 },
+  { title: '步骤数', key: 'scale', width: 110 },
   { title: '触发方式', key: 'triggered', width: 100 },
   { title: '发起人', dataIndex: 'creator_name', key: 'creator_name', width: 110, ellipsis: true },
   { title: '开始时间', key: 'started', width: 155 },
@@ -87,7 +87,7 @@ function onPageChange(page: number, pageSize: number) {
   loadList()
 }
 
-/** 进入执行详情页（步骤×主机矩阵 + 实时日志） */
+/** 进入执行详情页（步骤列表 + 实时日志） */
 function openDetail(row: execApi.ExecutionBrief) {
   router.push({ name: 'execution-detail', params: { id: row.id } })
 }
@@ -104,7 +104,7 @@ onMounted(() => {
       <div class="op-hero-icon"><ThunderboltOutlined /></div>
       <div>
         <div class="op-hero-title">执行中心</div>
-        <div class="op-hero-sub">工单执行记录：步骤×主机矩阵、实时日志与执行控制</div>
+        <div class="op-hero-sub">工单执行记录：作业主机步骤列表、实时日志与执行控制</div>
       </div>
       <div class="op-hero-extra">
         <div class="op-hero-stat"><b>{{ stats.all }}</b><span>总执行</span></div>
@@ -155,14 +155,14 @@ onMounted(() => {
       }"
     >
       <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'app'">{{ record.app_name || '—' }}</template>
+        <template v-if="column.key === 'job_host'">{{ record.job_host_name || '—' }}</template>
         <template v-else-if="column.key === 'status'">
           <a-tag :color="execStatusMeta[record.status as execApi.ExecutionStatus]?.color">
             {{ execStatusMeta[record.status as execApi.ExecutionStatus]?.text || record.status }}
           </a-tag>
         </template>
         <template v-else-if="column.key === 'scale'">
-          {{ record.total_steps }} 步骤 / {{ record.total_hosts }} 主机
+          {{ record.total_steps }} 步骤
         </template>
         <template v-else-if="column.key === 'triggered'">
           {{ triggeredByText[record.triggered_by] || record.triggered_by }}

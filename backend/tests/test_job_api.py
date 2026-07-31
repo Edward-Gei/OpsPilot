@@ -1,11 +1,11 @@
-"""M3 凭据与 V2 工单模板接口测试。
+"""M3 凭据与 V2 工单模板接口测试（执行范式改造后）。
 
 覆盖验收点：
-- 凭据任何接口不回显明文/密文；secret 传空不变更；
-- 模板全量配置 CRUD：步骤/审批节点/通知规则/可见范围一体提交；
+- 凭据任何接口不回显明文/密文；secret 传空不变更；V2 起凭据独立管理可直接删除；
+- 模板全量配置 CRUD：步骤/审批节点/通知规则/可见范围一体提交（绑定作业主机）；
 - 规则任一变更自动升版且旧版本快照可查；仅改名/说明不升版；
 - 启用/禁用：禁用后列表可筛选，删除保护 42201；
-- 引用校验：应用/凭据/角色不存在拒绝；
+- 引用校验：作业主机/角色不存在拒绝；
 - RBAC：ops 无 credential:write（CRED-02 仅管理员可管理凭据）。
 """
 from app.core.security import decrypt_text
@@ -22,9 +22,10 @@ CRED_PAYLOAD = {
     "description": "生产 root 密码",
 }
 
-HOST_PAYLOAD = {
-    "hostname": "tpl-web-01", "ip": "10.8.0.1", "environment": "prod",
-    "status": "online", "ssh_port": 22,
+JOB_HOST_PAYLOAD = {
+    "name": "job-agent-01", "ip": "10.8.0.1", "ssh_port": 22,
+    "login_user": "root", "auth_type": "password", "secret": "S3cret!pass",
+    "workdir": "/opt/opspilot/workspace",
 }
 
 
@@ -37,29 +38,21 @@ async def _create_credential(client, headers, **override) -> int:
 
 
 async def _base_env(client) -> dict:
-    """公共前置：admin/ops 登录 + 1 主机 + 1 应用 + 1 凭据（模板依赖引用）。"""
+    """公共前置：admin/ops 登录 + 1 作业主机（仅 admin 有 job_host:write）。"""
     admin_h = auth_header(await login_for_tokens(client, "admin"))
     ops_h = auth_header(await login_for_tokens(client, "ops1"))
-    resp = await client.post("/api/v1/cmdb/hosts", json=HOST_PAYLOAD, headers=ops_h)
-    host_id = resp.json()["data"]["id"]
-    resp = await client.post(
-        "/api/v1/cmdb/apps",
-        json={"name": "订单服务", "deploy_type": "docker", "host_ids": [host_id]},
-        headers=ops_h,
-    )
-    app_id = resp.json()["data"]["id"]
-    cred_id = await _create_credential(client, admin_h)
-    return {"admin_h": admin_h, "ops_h": ops_h, "host_id": host_id,
-            "app_id": app_id, "cred_id": cred_id}
+    resp = await client.post("/api/v1/job-hosts", json=JOB_HOST_PAYLOAD, headers=admin_h)
+    job_host_id = resp.json()["data"]["id"]
+    return {"admin_h": admin_h, "ops_h": ops_h, "job_host_id": job_host_id}
 
 
 def _tpl_payload(env: dict, **override) -> dict:
     """标准模板全量配置体（1 步骤 + 免审），override 覆盖顶层键。"""
     return {
         "name": "重启 Nginx",
-        "type": "ops",
+        "type": "daily_ops",
         "description": "滚动重启",
-        "app_id": env["app_id"],
+        "job_host_id": env["job_host_id"],
         "steps": [{
             "name": "重启服务",
             "script_type": "shell",
@@ -67,10 +60,9 @@ def _tpl_payload(env: dict, **override) -> dict:
             "params_schema": [
                 {"name": "svc", "label": "服务名", "default": "nginx", "required": True}
             ],
-            "credential_id": env["cred_id"],
             "timeout": 300,
         }],
-        "exec_strategy": {"concurrency": 5, "batch_size": 0, "timeout": 600},
+        "exec_strategy": {"timeout": 600, "fail_fast": True},
         "approval_enabled": False,
         **override,
     }
@@ -84,20 +76,21 @@ async def _create_template(client, headers, env, **override) -> int:
     return body["data"]["id"]
 
 
-async def _make_active_ticket(db_factory, *, template_id: int, credential_id: int) -> None:
+async def _make_active_ticket(db_factory, *, template_id: int) -> None:
     """测试辅助：手工造一条进行中工单 + 步骤快照，用于引用保护验证。"""
     async with db_factory() as session:
         ticket = Ticket(
             ticket_no="T20260727-0001", template_id=template_id, template_version_snap=1,
-            title="重启 Nginx", type="ops", app_id=1, app_name_snap="订单服务",
+            title="重启 Nginx", type="daily_ops", job_host_id=1,
+            job_host_snap={"id": 1, "name": "job-agent-01", "ip": "10.8.0.1",
+                           "ssh_port": 22, "workdir": "/opt/opspilot/workspace"},
             status="approving", creator_id=1,
         )
         session.add(ticket)
         await session.flush()
         session.add(TicketStep(
             ticket_id=ticket.id, step_order=1, step_name_snap="重启服务",
-            script_type_snap="shell", content_snap="echo x",
-            credential_id=credential_id, timeout=300,
+            script_type_snap="shell", content_snap="echo x", timeout=300,
         ))
         await session.commit()
 
@@ -182,24 +175,15 @@ class TestCredentialApi:
                                  headers=ops_headers)
         assert resp.json()["code"] == 40301
 
-    async def test_delete_protected_by_template_and_ticket(self, client, db_factory):
-        """被模板步骤/进行中工单步骤引用 → 42201；未引用可删（04-API §5）。"""
-        env = await _base_env(client)
-        headers = env["admin_h"]
-        busy_by_ticket = await _create_credential(client, headers, name="busy-ticket")
-        free_id = await _create_credential(client, headers, name="idle-cred")
-        await _make_active_ticket(db_factory, template_id=999, credential_id=busy_by_ticket)
+    async def test_delete_credential(self, client):
+        """V2 起凭据独立管理无引用关系：删除直接成功，再删 40401。"""
+        headers = auth_header(await login_for_tokens(client, "admin"))
+        cred_id = await _create_credential(client, headers, name="idle-cred")
 
-        # env["cred_id"] 被模板步骤引用 → 42201
-        await _create_template(client, env["ops_h"], env)
-        resp = await client.delete(f"/api/v1/credentials/{env['cred_id']}", headers=headers)
-        assert resp.json()["code"] == 42201
-        # 被进行中工单步骤引用 → 42201
-        resp = await client.delete(f"/api/v1/credentials/{busy_by_ticket}", headers=headers)
-        assert resp.json()["code"] == 42201
-        # 无引用可删
-        resp = await client.delete(f"/api/v1/credentials/{free_id}", headers=headers)
+        resp = await client.delete(f"/api/v1/credentials/{cred_id}", headers=headers)
         assert resp.json()["code"] == 0
+        resp = await client.delete(f"/api/v1/credentials/{cred_id}", headers=headers)
+        assert resp.json()["code"] == 40401
 
 
 class TestTemplateApi:
@@ -220,7 +204,7 @@ class TestTemplateApi:
         resp = await client.get(f"/api/v1/templates/{tpl_id}", headers=env["ops_h"])
         data = resp.json()["data"]
         assert (data["current_version"], data["status"]) == (1, "enabled")
-        assert data["type"] == "ops" and data["app_id"] == env["app_id"]
+        assert data["type"] == "daily_ops" and data["job_host_id"] == env["job_host_id"]
         step = data["steps"][0]
         assert step["script_type"] == "shell"
         assert step["content"].startswith("#!/bin/bash")
@@ -306,14 +290,10 @@ class TestTemplateApi:
         resp = await client.post("/api/v1/templates", json=bad, headers=headers)
         assert resp.json()["code"] == 40001
 
-        # 引用不存在：应用 40401 / 凭据 40001 / 审批角色 40001
+        # 引用不存在：作业主机 40401 / 审批角色 40001
         resp = await client.post("/api/v1/templates", headers=headers,
-                                 json=_tpl_payload(env, name="坏应用", app_id=99999))
+                                 json=_tpl_payload(env, name="坏作业主机", job_host_id=99999))
         assert resp.json()["code"] == 40401
-        bad = _tpl_payload(env, name="坏凭据")
-        bad["steps"][0]["credential_id"] = 99999
-        resp = await client.post("/api/v1/templates", json=bad, headers=headers)
-        assert resp.json()["code"] == 40001
         resp = await client.post("/api/v1/templates", headers=headers,
                                  json=_tpl_payload(env, name="坏角色", approval_enabled=True,
                                                    approval_nodes=[{"node_order": 1,
@@ -344,7 +324,7 @@ class TestTemplateApi:
         headers = env["ops_h"]
         busy_id = await _create_template(client, headers, env)
         free_id = await _create_template(client, headers, env, name="空闲模板")
-        await _make_active_ticket(db_factory, template_id=busy_id, credential_id=999)
+        await _make_active_ticket(db_factory, template_id=busy_id)
 
         resp = await client.delete(f"/api/v1/templates/{busy_id}", headers=headers)
         assert resp.json()["code"] == 42201

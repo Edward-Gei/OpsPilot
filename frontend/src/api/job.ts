@@ -49,7 +49,7 @@ export function deleteCredential(id: number) {
 
 // ---------- 工单模板（V2：全量规则配置，规则任一变更自动升版 TPL-06） ----------
 
-export type TemplateType = 'release' | 'change' | 'ops' | 'other'
+export type TemplateType = 'release' | 'daily_ops' | 'other'
 export type TemplateStatus = 'enabled' | 'disabled'
 export type ScriptType = 'shell' | 'playbook'
 export type ApproveMode = 'any' | 'all' | 'seq'
@@ -64,13 +64,12 @@ export interface TemplateParam {
   description: string | null
 }
 
-/** 模板步骤（脚本内嵌，顺序即数组顺序 TPL-02） */
+/** 模板步骤（脚本内嵌，顺序即数组顺序 TPL-02；统一在模板配置的作业主机上执行） */
 export interface TemplateStep {
   name: string
   script_type: ScriptType
   content: string
   params_schema: TemplateParam[]
-  credential_id: number
   timeout: number
 }
 
@@ -94,7 +93,7 @@ export interface TemplateItem {
   name: string
   type: TemplateType
   description: string | null
-  app_id: number
+  job_host_id: number
   approval_enabled: boolean
   status: TemplateStatus
   current_version: number
@@ -119,7 +118,7 @@ export interface TemplateForm {
   name: string
   type: TemplateType
   description?: string
-  app_id: number
+  job_host_id: number
   steps: TemplateStep[]
   exec_strategy: ExecStrategy
   approval_enabled: boolean
@@ -145,7 +144,7 @@ export interface TemplateSnapshot {
   name: string
   type: TemplateType
   description: string | null
-  app_id: number
+  job_host_id: number
   steps: (TemplateStep & { step_order: number })[]
   exec_strategy: Partial<ExecStrategy>
   approval_enabled: boolean

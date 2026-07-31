@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 工单提交向导（V2）：选模板 → 填参数 → 提交
-// 工单中心只能使用模板：标题=模板名，主机/步骤/审批/策略全部来自模板规则（提交时固化快照）
+// 工单中心只能使用模板：标题=模板名，作业主机/步骤/审批/策略全部来自模板规则（提交时固化快照）
 import { computed, reactive, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import * as ticketApi from '@/api/ticket'
@@ -74,8 +74,6 @@ const strategyText = computed(() => {
   const s = form.value?.exec_strategy
   if (!s) return '—'
   return [
-    `并发 ${s.concurrency}`,
-    s.batch_size ? `每批 ${s.batch_size} 台${s.batch_pause ? '（批间暂停）' : ''}` : '不分批',
     `超时 ${s.timeout}s`,
     s.fail_fast ? '失败即停' : '失败继续',
   ].join(' · ')
@@ -112,12 +110,12 @@ async function onSubmit() {
   }
 }
 
-const hostColumns = [
-  { title: '主机名', dataIndex: 'hostname', key: 'hostname', ellipsis: true },
-  { title: 'IP', dataIndex: 'ip', key: 'ip', width: 140 },
-  { title: '环境', dataIndex: 'environment', key: 'environment', width: 80 },
-  { title: 'SSH 端口', dataIndex: 'ssh_port', key: 'ssh_port', width: 90 },
-]
+/** 作业主机一行摘要（模板绑定，提交时固化快照） */
+const jobHostText = computed(() => {
+  const h = form.value?.job_host
+  if (!h) return '—'
+  return `${h.name}（${h.ip}:${h.ssh_port}）`
+})
 </script>
 
 <template>
@@ -176,7 +174,7 @@ const hostColumns = [
       <div class="w-tpl-head">
         <b>{{ form.template.name }}</b>
         <a-tag color="cyan">v{{ form.template.current_version }}</a-tag>
-        <span class="w-tpl-tip">标题将使用模板名，提交后主机/脚本/审批流固化为快照</span>
+        <span class="w-tpl-tip">标题将使用模板名，提交后作业主机/脚本/审批流固化为快照</span>
       </div>
 
       <!-- 汇总参数（同名合并，fixed 参数不外显） -->
@@ -195,7 +193,7 @@ const hostColumns = [
 
       <!-- 规则只读预览 -->
       <a-descriptions bordered size="small" :column="2" class="w-desc">
-        <a-descriptions-item label="目标应用">{{ form.app.name }}</a-descriptions-item>
+        <a-descriptions-item label="作业主机">{{ jobHostText }}</a-descriptions-item>
         <a-descriptions-item label="执行策略">{{ strategyText }}</a-descriptions-item>
         <a-descriptions-item label="执行步骤" :span="2">
           <a-tag v-for="s in form.steps" :key="s.step_order" color="geekblue">
@@ -211,17 +209,6 @@ const hostColumns = [
           <a-tag v-else color="orange">免审批，提交后直接执行</a-tag>
         </a-descriptions-item>
       </a-descriptions>
-
-      <div class="w-section">目标主机（{{ form.hosts.length }}，提交时固化）</div>
-      <a-table
-        :columns="hostColumns"
-        :data-source="form.hosts"
-        row-key="host_id"
-        size="small"
-        bordered
-        :pagination="false"
-        :scroll="{ y: 200 }"
-      />
 
       <div class="w-actions">
         <a-button @click="step = 0">上一步</a-button>

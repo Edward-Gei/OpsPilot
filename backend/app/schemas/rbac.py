@@ -50,9 +50,3 @@ class ConfigUpdateRequest(BaseModel):
     """系统配置更新：批量键值（仅允许预置键）。"""
     configs: dict = Field(min_length=1)
 
-
-class JobHostTestRequest(BaseModel):
-    """Ansible 作业主机连通性测试（04-API §11）：传当前表单值，支持保存前预测。"""
-    ip: str = Field(min_length=1, max_length=45)
-    port: int = Field(22, ge=1, le=65535)
-    credential_id: int = Field(gt=0)

@@ -1,16 +1,17 @@
 """工单业务服务（V2）：提交五重快照 / 7 态状态机 / 节点审批推进（03-数据库设计 §5）。
 
 工单中心只能使用模板：提交时仅传 {template_id, params}，标题使用模板名；
-五重快照——主机清单（应用全部关联主机）、步骤脚本内容、审批节点、执行策略、
+五重快照——作业主机、步骤脚本内容、审批节点、执行策略、
 模板版本；此后 CMDB/模板变更不影响已提交工单。无草稿态，提交即生效。
 
-M5 执行链：末节点通过/免审提交 → 工单置 queued、预建 Execution/Step/Host 子表
+M5 执行链：末节点通过/免审提交 → 工单置 queued、预建 Execution/Step 子表
 （全 pending）并 XADD ops:exec:queue，由 worker 认领推进；控制面 abort/pause/
 resume/force-abort 走 ops:ctrl 信号（engine.control）。M6 前通知只落 record。
 """
 from datetime import datetime
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import redis as redis_mod
@@ -18,10 +19,11 @@ from app.core.constants import NotifyEvent, TicketStatus
 from app.core.response import BizError, Errors
 from app.engine import control as exec_ctrl
 from app.models.auth import Role, User, UserRole
-from app.models.execution import Execution, ExecutionStep, ExecutionStepHost
+from app.models.cmdb import JobHost
+from app.models.execution import Execution, ExecutionStep
 from app.models.job import TicketTemplate
-from app.models.ticket import Ticket, TicketApproval, TicketHost, TicketStep
-from app.services import cmdb_service, notify_service, template_service
+from app.models.ticket import Ticket, TicketApproval, TicketStep
+from app.services import notify_service, template_service
 
 
 # ---------- 基础查询 ----------
@@ -134,11 +136,10 @@ async def _flow_preview(session: AsyncSession, tpl: TicketTemplate) -> list[dict
 
 
 async def get_template_form(session: AsyncSession, template_id: int, *, user_id: int) -> dict:
-    """提交表单描述：汇总参数（排除 fixed）+ 主机/步骤/审批节点/策略只读预览（04 §6）。"""
+    """提交表单描述：汇总参数（排除 fixed）+ 作业主机/步骤/审批节点/策略只读预览（04 §6）。"""
     tpl = await _ensure_template_usable(session, template_id, user_id=user_id)
     steps = await template_service.get_template_steps(session, template_id)
-    app = await cmdb_service.get_app_or_404(session, tpl.app_id)
-    hosts = await cmdb_service.get_app_hosts(session, tpl.app_id)
+    jh = await session.get(JobHost, tpl.job_host_id)
     merged = _merge_params_schema(steps)
     return {
         "template": {
@@ -148,15 +149,10 @@ async def get_template_form(session: AsyncSession, template_id: int, *, user_id:
         },
         # 固定值参数提交人不可见不可改（TPL-03）
         "params": [p for p in merged.values() if not p.get("fixed")],
-        "app": {"id": app.id, "name": app.name},
-        "hosts": [
-            {"host_id": h.id, "hostname": h.hostname, "ip": h.ip,
-             "environment": h.environment, "ssh_port": h.ssh_port}
-            for h in hosts
-        ],
+        "job_host": {"id": jh.id, "name": jh.name, "ip": jh.ip, "ssh_port": jh.ssh_port, "workdir": jh.workdir} if jh else None,
         "steps": [
             {"step_order": s.step_order, "name": s.name, "script_type": s.script_type,
-             "credential_id": s.credential_id, "timeout": s.timeout}
+             "timeout": s.timeout}
             for s in steps
         ],
         "flow": await _flow_preview(session, tpl),
@@ -188,17 +184,14 @@ async def create_ticket(
 ) -> Ticket:
     """提交工单：只填参数，标题=模板名；服务端固化五重快照后进入审批或直接执行。
 
-    快照顺序：模板版本 → 应用与主机清单（应用全部关联主机，≥1）→ 步骤内容与参数
+    快照顺序：模板版本 → 作业主机快照 → 步骤内容与参数
     （固定值+提交人填写合并）→ 审批节点 → 执行策略。
     """
     tpl = await _ensure_template_usable(session, template_id, user_id=creator.id)
     steps_tpl = await template_service.get_template_steps(session, template_id)
     if not steps_tpl:
         raise Errors.conflict("模板未配置任何步骤，无法提交")
-    app = await cmdb_service.get_app_or_404(session, tpl.app_id)
-    hosts = await cmdb_service.get_app_hosts(session, tpl.app_id)
-    if not hosts:
-        raise Errors.param("模板目标应用未关联任何主机，无法提交")
+    jh = await session.get(JobHost, tpl.job_host_id)
 
     merged = _merge_params_schema(steps_tpl)
     user_params = _validate_submit_params(params or {}, merged)
@@ -207,14 +200,14 @@ async def create_ticket(
         raise Errors.conflict("模板审批配置异常：已开启审批但无审批节点")
 
     ticket = Ticket(
-        ticket_no=await _next_ticket_no(session),
         template_id=tpl.id,
         template_version_snap=tpl.current_version,
         title=tpl.name,
         type=tpl.type,
         params=user_params,
-        app_id=app.id,
-        app_name_snap=app.name,
+        job_host_id=tpl.job_host_id,
+        job_host_snap={"id": jh.id, "name": jh.name, "ip": jh.ip, "ssh_port": jh.ssh_port,
+                       "login_user": jh.login_user, "workdir": jh.workdir} if jh else {},
         status=TicketStatus.APPROVING.value,
         exec_strategy_snap=tpl.exec_strategy or {},
         flow_snap=flow_snap,
@@ -222,15 +215,19 @@ async def create_ticket(
         creator_id=creator.id,
         submitted_at=datetime.now(),
     )
-    session.add(ticket)
-    await session.flush()
+    # 工单号靠 SELECT MAX 递增生成，并发提交可能撞号；依赖 ticket_no 唯一约束兜底，
+    # 冲突时回滚到 SAVEPOINT 重取重试（不动外层请求事务），最多 3 次
+    for attempt in range(3):
+        ticket.ticket_no = await _next_ticket_no(session)
+        try:
+            async with session.begin_nested():
+                session.add(ticket)
+                await session.flush()
+            break
+        except IntegrityError:
+            if attempt == 2:
+                raise Errors.conflict("工单号生成冲突，请稍后重试")
 
-    # 快照：主机清单（应用当前全部关联主机，不可增删）
-    for host in hosts:
-        session.add(TicketHost(
-            ticket_id=ticket.id, host_id=host.id, hostname=host.hostname,
-            ip=host.ip, environment=host.environment, ssh_port=host.ssh_port,
-        ))
     # 快照：步骤内容 + 生效参数（固定值取默认值，其余取提交人汇总参数）
     for s in steps_tpl:
         step_params = {
@@ -240,7 +237,7 @@ async def create_ticket(
         session.add(TicketStep(
             ticket_id=ticket.id, step_order=s.step_order, step_name_snap=s.name,
             script_type_snap=s.script_type, content_snap=s.content, params=step_params,
-            credential_id=s.credential_id, timeout=s.timeout,
+            timeout=s.timeout,
         ))
     await session.flush()
 
@@ -256,11 +253,10 @@ async def create_ticket(
 
 
 async def _start_execution(session: AsyncSession, ticket: Ticket, *, triggered_by: str) -> Execution:
-    """执行入队（M5）：工单置 queued、预建执行三级子表（全 pending）并 XADD 队列。
+    """执行入队（M5）：工单置 queued、预建 Execution/ExecutionStep（全 pending）并 XADD 队列。
 
-    在 API 进程一次性生成 ExecutionStep / ExecutionStepHost 骨架（步骤 × 主机，
-    batch_no 先落默认 1，实际分批由调度器按策略修正），worker 认领后只做状态
-    推进，避免执行侧写入与查询竞态。"""
+    在 API 进程一次性生成 ExecutionStep 骨架，worker 认领后只做状态推进，
+    避免执行侧写入与查询竞态。"""
     ticket.status = TicketStatus.QUEUED.value
     ticket.current_node = 0
     steps = list(
@@ -270,32 +266,16 @@ async def _start_execution(session: AsyncSession, ticket: Ticket, *, triggered_b
             )
         ).scalars()
     )
-    hosts = list(
-        (
-            await session.execute(
-                select(TicketHost).where(TicketHost.ticket_id == ticket.id).order_by(TicketHost.id)
-            )
-        ).scalars()
-    )
     execution = Execution(
         ticket_id=ticket.id, status="queued",
-        total_steps=len(steps), total_hosts=len(hosts), triggered_by=triggered_by,
+        total_steps=len(steps), triggered_by=triggered_by,
     )
     session.add(execution)
     await session.flush()
     for s in steps:
-        exec_step = ExecutionStep(
+        session.add(ExecutionStep(
             execution_id=execution.id, ticket_step_id=s.id, step_order=s.step_order,
-        )
-        session.add(exec_step)
-        await session.flush()
-        session.add_all(
-            ExecutionStepHost(
-                execution_id=execution.id, execution_step_id=exec_step.id,
-                ticket_host_id=h.id, hostname=h.hostname, ip=h.ip,
-            )
-            for h in hosts
-        )
+        ))
     await session.flush()
     # 消息体仅带 execution_id，worker 自行回查（02-技术架构 §4.1）
     await redis_mod.redis_client.xadd(redis_mod.EXEC_QUEUE, {"execution_id": str(execution.id)})
@@ -383,7 +363,7 @@ async def _emit_ticket_event(
 ) -> None:
     """按模板 notify_rules 发射事件：模板配了该事件规则用规则收件人，否则用默认收件人。
 
-    统一组装工单基础模板变量（工单号/标题/应用/创建人）后合并调用方额外变量，
+    统一组装工单基础模板变量（工单号/标题/作业主机/创建人）后合并调用方额外变量，
     供渠道消息模板（notify_channel.config）占位渲染。
     """
     tpl = await session.get(TicketTemplate, ticket.template_id)
@@ -402,7 +382,7 @@ async def _emit_ticket_event(
         variables={
             "ticket_no": ticket.ticket_no,
             "ticket_title": ticket.title,
-            "app_name": ticket.app_name_snap,
+            "job_host_name": (ticket.job_host_snap or {}).get("name", ""),
             "creator": creator.username if creator else str(ticket.creator_id),
             **(variables or {}),
         },
@@ -417,7 +397,7 @@ async def _notify_pending_approval(session: AsyncSession, ticket: Ticket) -> Non
     await _emit_ticket_event(
         session, ticket, NotifyEvent.TICKET_PENDING_APPROVAL,
         title=f"工单 {ticket.ticket_no} 等待第 {ticket.current_node} 节点审批",
-        content=f"{ticket.title}（应用：{ticket.app_name_snap}）待 {node['role_name']} 审批",
+        content=f"{ticket.title}（作业主机：{(ticket.job_host_snap or {}).get('name', '')}）待 {node['role_name']} 审批",
         default_receivers=await _role_members(session, node["role_id"]),
         variables={"node": ticket.current_node, "role": node["role_name"]},
     )
@@ -503,17 +483,15 @@ async def cancel_ticket(session: AsyncSession, ticket_id: int, *, actor: User) -
 
 async def list_tickets(
     session: AsyncSession, *, page: int, page_size: int,
-    status: str | None = None, creator_id: int | None = None, app_id: int | None = None,
+    status: str | None = None, creator_id: int | None = None,
     keyword: str | None = None, start: str | None = None, end: str | None = None,
 ) -> tuple[list[Ticket], int]:
-    """分页查工单（04 §6：status/creator/app/keyword/时间范围）。"""
+    """分页查工单（04 §6：status/creator/keyword/时间范围）。"""
     query = select(Ticket)
     if status:
         query = query.where(Ticket.status == status)
     if creator_id:
         query = query.where(Ticket.creator_id == creator_id)
-    if app_id:
-        query = query.where(Ticket.app_id == app_id)
     if keyword:
         like = f"%{keyword}%"
         query = query.where(Ticket.title.like(like) | Ticket.ticket_no.like(like))
@@ -552,17 +530,8 @@ async def todo_tickets(
 
 
 async def get_ticket_bundle(session: AsyncSession, ticket_id: int) -> dict:
-    """详情数据装配（只读）：主机快照 + 步骤快照 + 审批时间线 + 执行概要。"""
+    """详情数据装配（只读）：作业主机快照 + 步骤快照 + 审批时间线 + 执行概要。"""
     ticket = await get_ticket_or_404(session, ticket_id)
-    hosts = [
-        {"host_id": h.host_id, "hostname": h.hostname, "ip": h.ip,
-         "environment": h.environment, "ssh_port": h.ssh_port}
-        for h in (
-            await session.execute(
-                select(TicketHost).where(TicketHost.ticket_id == ticket_id).order_by(TicketHost.id)
-            )
-        ).scalars()
-    ]
     steps = list(
         (
             await session.execute(
@@ -586,6 +555,6 @@ async def get_ticket_bundle(session: AsyncSession, ticket_id: int) -> dict:
     ).scalar_one_or_none()
     creator = await session.get(User, ticket.creator_id)
     return {
-        "ticket": ticket, "hosts": hosts, "steps": steps,
+        "ticket": ticket, "job_host": ticket.job_host_snap, "steps": steps,
         "approvals": approvals, "execution": execution, "creator": creator,
     }

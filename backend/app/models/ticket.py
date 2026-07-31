@@ -1,6 +1,6 @@
-"""工单中心域模型：工单 / 主机快照 / 步骤快照 / 审批记录（03-数据库设计 §5，V2）。
+"""工单中心域模型：工单 / 步骤快照 / 审批记录（03-数据库设计 §5，V2）。
 
-五重快照原则：提交时固化主机清单、步骤脚本内容、审批节点、执行策略、模板版本，
+多重快照原则：提交时固化作业主机、步骤脚本内容、审批节点、执行策略、模板版本，
 后续 CMDB / 模板变更不影响已提交工单。无草稿态，提交即生效。
 """
 from datetime import datetime
@@ -28,10 +28,10 @@ class Ticket(Base):
     template_id: Mapped[int] = mapped_column(UBIGINT, nullable=False, comment="源模板（溯源）")
     template_version_snap: Mapped[int] = mapped_column(Integer, nullable=False, comment="提交时模板版本号快照")
     title: Mapped[str] = mapped_column(String(200), nullable=False, comment="提交时模板名快照（标题=模板名）")
-    type: Mapped[str] = mapped_column(String(16), nullable=False, comment="模板类型快照 release/change/ops/other")
+    type: Mapped[str] = mapped_column(String(16), nullable=False, comment="模板类型快照 release/daily_ops/other")
     params: Mapped[dict | None] = mapped_column(JSON, comment="提交人填写的汇总参数 {name: value}")
-    app_id: Mapped[int] = mapped_column(UBIGINT, nullable=False, comment="目标应用（来自模板）")
-    app_name_snap: Mapped[str] = mapped_column(String(128), nullable=False, comment="应用名快照")
+    job_host_id: Mapped[int] = mapped_column(UBIGINT, nullable=False, comment="作业主机")
+    job_host_snap: Mapped[dict] = mapped_column(JSON, nullable=False, comment="作业主机快照 {id,name,ip,ssh_port,workdir}")
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="approving",
         comment="过程态 approving/queued/running/paused + 终态 success/failed/rejected/cancelled/interrupted",
@@ -52,25 +52,6 @@ class Ticket(Base):
     updated_at: Mapped[datetime] = updated_at_column()
 
 
-class TicketHost(Base):
-    """工单目标主机快照：提交时由应用关联主机全量固化（强制全部主机，PRD 决策 D8）。"""
-
-    __tablename__ = "ticket_host"
-    __table_args__ = (
-        Index("idx_ticket_host_ticket_id", "ticket_id"),
-        Base.__table_args__,
-    )
-
-    id: Mapped[int] = pk_column()
-    ticket_id: Mapped[int] = mapped_column(UBIGINT, nullable=False)
-    host_id: Mapped[int] = mapped_column(UBIGINT, nullable=False, comment="原主机 ID（仅溯源）")
-    hostname: Mapped[str] = mapped_column(String(128), nullable=False, comment="主机名快照")
-    ip: Mapped[str] = mapped_column(String(45), nullable=False, comment="IP 快照")
-    environment: Mapped[str] = mapped_column(String(16), nullable=False, comment="环境快照")
-    ssh_port: Mapped[int] = mapped_column(Integer, nullable=False, default=22, comment="SSH 端口快照")
-    created_at: Mapped[datetime] = created_at_column()
-
-
 class TicketStep(Base):
     """步骤快照：提交时由模板步骤固化，参数为固定值+提交人填写合并后的生效值。"""
 
@@ -87,7 +68,6 @@ class TicketStep(Base):
     script_type_snap: Mapped[str] = mapped_column(String(16), nullable=False, comment="shell/playbook")
     content_snap: Mapped[str] = mapped_column(MTEXT, nullable=False, comment="提交时脚本内容快照")
     params: Mapped[dict | None] = mapped_column(JSON, comment="本步骤生效参数值 {name: value}")
-    credential_id: Mapped[int] = mapped_column(UBIGINT, nullable=False, comment="执行凭据")
     timeout: Mapped[int] = mapped_column(Integer, nullable=False, default=600, comment="步骤超时秒数")
     created_at: Mapped[datetime] = created_at_column()
 
