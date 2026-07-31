@@ -127,17 +127,18 @@ async def delete_credential(session: AsyncSession, credential_id: int) -> Creden
     ).scalar_one()
     if jh_count:
         raise Errors.rejected(f"凭据被 {jh_count} 台作业主机引用，无法删除")
-    # credential_refs 为 JSON 数组，MySQL 侧用 JSON_CONTAINS 精确匹配 credential_id
-    tpl_count = (
+    # credential_refs 为 JSON 数组；模板量小，取非空引用后在 Python 侧匹配
+    # credential_id（兼容 MySQL/SQLite，避免方言专属的 JSON_CONTAINS）
+    refs_rows = (
         await session.execute(
-            select(func.count()).select_from(TicketTemplate).where(
-                func.json_contains(
-                    func.coalesce(TicketTemplate.credential_refs, "[]"),
-                    f'{{"credential_id": {credential_id}}}',
-                )
-            )
+            select(TicketTemplate.credential_refs)
+            .where(TicketTemplate.credential_refs.is_not(None))
         )
-    ).scalar_one()
+    ).scalars()
+    tpl_count = sum(
+        1 for refs in refs_rows
+        if any(ref.get("credential_id") == credential_id for ref in (refs or []))
+    )
     if tpl_count:
         raise Errors.rejected(f"凭据被 {tpl_count} 个工单模板引用，无法删除")
     await session.delete(cred)

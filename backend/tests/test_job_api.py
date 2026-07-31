@@ -24,7 +24,6 @@ CRED_PAYLOAD = {
 
 JOB_HOST_PAYLOAD = {
     "name": "job-agent-01", "ip": "10.8.0.1", "ssh_port": 22,
-    "login_user": "root", "auth_type": "password", "secret": "S3cret!pass",
     "workdir": "/opt/opspilot/workspace",
 }
 
@@ -38,12 +37,16 @@ async def _create_credential(client, headers, **override) -> int:
 
 
 async def _base_env(client) -> dict:
-    """公共前置：admin/ops 登录 + 1 作业主机（仅 admin 有 job_host:write）。"""
+    """公共前置：admin/ops 登录 + 1 凭据 + 1 作业主机（主机关联凭据）。"""
     admin_h = auth_header(await login_for_tokens(client, "admin"))
     ops_h = auth_header(await login_for_tokens(client, "ops1"))
-    resp = await client.post("/api/v1/job-hosts", json=JOB_HOST_PAYLOAD, headers=admin_h)
+    cred_id = await _create_credential(client, admin_h)
+    resp = await client.post("/api/v1/job-hosts",
+                             json={**JOB_HOST_PAYLOAD, "credential_id": cred_id},
+                             headers=admin_h)
     job_host_id = resp.json()["data"]["id"]
-    return {"admin_h": admin_h, "ops_h": ops_h, "job_host_id": job_host_id}
+    return {"admin_h": admin_h, "ops_h": ops_h, "job_host_id": job_host_id,
+            "credential_id": cred_id}
 
 
 def _tpl_payload(env: dict, **override) -> dict:
@@ -340,3 +343,49 @@ class TestTemplateApi:
         assert resp.status_code == 401
         resp = await client.get("/api/v1/templates")
         assert resp.status_code == 401
+
+
+async def test_job_host_credential_binding(client):
+    """作业主机凭据关联：必填校验 / 不存在 40401 / 响应带 credential_name / 删除保护。"""
+    env = await _base_env(client)
+    admin_h = env["admin_h"]
+    # credential_id 缺失 → 参数校验失败（pydantic 必填）
+    resp = await client.post("/api/v1/job-hosts",
+                             json={**JOB_HOST_PAYLOAD, "name": "no-cred", "ip": "10.8.0.9"},
+                             headers=admin_h)
+    assert resp.json()["code"] != 0
+    # 凭据不存在 → 40401
+    resp = await client.post("/api/v1/job-hosts",
+                             json={**JOB_HOST_PAYLOAD, "name": "bad-cred", "ip": "10.8.0.8",
+                                   "credential_id": 99999}, headers=admin_h)
+    assert resp.json()["code"] == 40401
+    # 列表响应带 credential_name 且无密文字段
+    resp = await client.get("/api/v1/job-hosts", headers=admin_h)
+    row = next(r for r in resp.json()["data"]["items"] if r["id"] == env["job_host_id"])
+    assert row["credential_name"] == CRED_PAYLOAD["name"]
+    assert "secret_enc" not in row and "auth_type" not in row
+    # 被作业主机引用的凭据不可删除 → 42201
+    resp = await client.delete(f"/api/v1/credentials/{env['credential_id']}", headers=admin_h)
+    assert resp.json()["code"] == 42201
+
+
+async def test_template_credential_refs(client):
+    """模板引用凭据：alias 校验 / 详情回显 / 变更升版 / 引用保护。"""
+    env = await _base_env(client)
+    admin_h = env["admin_h"]
+    ref = [{"alias": "mysql", "credential_id": env["credential_id"]}]
+    # alias 非法 → 参数错误
+    bad = _tpl_payload(env, credential_refs=[{"alias": "1bad", "credential_id": env["credential_id"]}])
+    resp = await client.post("/api/v1/templates", json=bad, headers=admin_h)
+    assert resp.json()["code"] != 0
+    # 正常创建 + 详情回显（含 credential_name）
+    resp = await client.post("/api/v1/templates",
+                             json=_tpl_payload(env, credential_refs=ref), headers=admin_h)
+    tpl_id = resp.json()["data"]["id"]
+    detail = (await client.get(f"/api/v1/templates/{tpl_id}", headers=admin_h)).json()["data"]
+    assert detail["credential_refs"][0]["alias"] == "mysql"
+    assert detail["credential_refs"][0]["credential_name"] == CRED_PAYLOAD["name"]
+    # 引用变更触发升版
+    resp = await client.put(f"/api/v1/templates/{tpl_id}",
+                            json=_tpl_payload(env, credential_refs=[]), headers=admin_h)
+    assert resp.json()["data"]["version_bumped"] is True

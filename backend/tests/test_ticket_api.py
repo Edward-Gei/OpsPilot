@@ -21,21 +21,30 @@ from tests.conftest import TEST_PASSWORD_HASH, auth_header, login_for_tokens
 
 JOB_HOST_PAYLOAD = {
     "name": "tk-agent-01", "ip": "10.9.0.1", "ssh_port": 22,
-    "login_user": "root", "auth_type": "password", "secret": "S3cret!pass",
     "workdir": "/opt/opspilot/workspace",
+}
+
+CRED_PAYLOAD = {
+    "name": "tk-cred-01", "login_user": "root", "auth_type": "password",
+    "secret": "S3cret!pass",
 }
 
 
 # ---------- 测试辅助 ----------
 
 async def _base_env(client) -> dict:
-    """公共前置：admin/ops 登录 + 1 作业主机（仅 admin 有 job_host:write）。"""
+    """公共前置：admin/ops 登录 + 1 凭据 + 1 作业主机（主机关联凭据）。"""
     admin_h = auth_header(await login_for_tokens(client, "admin"))
     ops_h = auth_header(await login_for_tokens(client, "ops1"))
 
-    resp = await client.post("/api/v1/job-hosts", json=JOB_HOST_PAYLOAD, headers=admin_h)
+    resp = await client.post("/api/v1/credentials", json=CRED_PAYLOAD, headers=admin_h)
+    cred_id = resp.json()["data"]["id"]
+    resp = await client.post("/api/v1/job-hosts",
+                             json={**JOB_HOST_PAYLOAD, "credential_id": cred_id},
+                             headers=admin_h)
     job_host_id = resp.json()["data"]["id"]
-    return {"admin_h": admin_h, "ops_h": ops_h, "job_host_id": job_host_id}
+    return {"admin_h": admin_h, "ops_h": ops_h, "job_host_id": job_host_id,
+            "credential_id": cred_id}
 
 
 def _step(env: dict, **override) -> dict:
