@@ -211,18 +211,26 @@ function fitLogHeight() {
   logHeight.value = Math.max(MIN_LOG_HEIGHT, Math.floor(window.innerHeight - top - 28))
 }
 
+// 当前活跃拖拽的清理函数：mouseup 丢失或组件卸载时兜底调用，避免全局监听与 userSelect 残留
+let stopResize: (() => void) | null = null
+
 /** 底缘手柄拖拽：mousedown 后跟踪全局 mousemove 调整高度，mouseup 收尾 */
 function onResizeStart(e: MouseEvent) {
   e.preventDefault()
   userResized = true
   const startY = e.clientY
   const startH = logHeight.value
-  const maxH = window.innerHeight - 120
+  // 极小窗口下保证上限不低于下限，避免 min/max 钳制顺序击穿 240 下限
+  const maxH = Math.max(MIN_LOG_HEIGHT, window.innerHeight - 120)
   document.body.style.userSelect = 'none' // 拖拽期间禁止选中文本
   const onMove = (ev: MouseEvent) => {
+    // mouseup 在窗口外丢失（拖出底缘松手/切窗）：检测到按键已抬起立即收尾自愈
+    if (ev.buttons === 0) return stopResize?.()
     logHeight.value = Math.min(maxH, Math.max(MIN_LOG_HEIGHT, startH + ev.clientY - startY))
   }
-  const onUp = () => {
+  const onUp = () => stopResize?.()
+  stopResize = () => {
+    stopResize = null
     document.body.style.userSelect = ''
     document.removeEventListener('mousemove', onMove)
     document.removeEventListener('mouseup', onUp)
@@ -351,10 +359,11 @@ async function onControl(op: execApi.ControlOp) {
 }
 
 onMounted(async () => {
+  // 先注册 resize 监听：若加载期间用户离开，卸载时的 remove 才必然配对（fitLogHeight 自带空值守卫）
+  window.addEventListener('resize', fitLogHeight)
   await loadDetail()
   // 详情渲染完成后再测量日志框顶部位置计算默认高度
   requestAnimationFrame(fitLogHeight)
-  window.addEventListener('resize', fitLogHeight)
   if (!isFinished.value) startRealtime()
 })
 
@@ -363,6 +372,7 @@ onBeforeUnmount(() => {
   abortFetch = true
   teardownRealtime()
   window.removeEventListener('resize', fitLogHeight)
+  stopResize?.() // 拖拽中途离开页面：兜底清理全局监听与 userSelect
 })
 </script>
 
