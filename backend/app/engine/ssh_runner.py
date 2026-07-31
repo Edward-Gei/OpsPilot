@@ -47,6 +47,19 @@ async def open_connection(
     return await asyncssh.connect(**kwargs)
 
 
+def _env_prelude(env: dict[str, str]) -> str:
+    """凭据 env 前置 export 段：单引号包裹 + `'` 转义为 `'\\''`。
+
+    经 stdin 写入 bash -s，不落盘、不进执行日志；用户脚本内的 set -x
+    在其后才生效，追踪不到这些 export 行。
+    """
+    lines = []
+    for key, value in env.items():
+        safe = value.replace("'", "'\\''")
+        lines.append(f"export {key}='{safe}'")
+    return "\n".join(lines)
+
+
 async def _stream_output(stream, log: LogChannel, step_order: int, prefix: str = "") -> None:
     """逐行读取远端输出写入日志通道（stdout/stderr 各起一个协程）。"""
     async for line in stream:
@@ -121,6 +134,8 @@ async def run_shell_on_host(
 async def run_shell_on_job_host(
     *,
     job_host,
+    credential,
+    env: dict[str, str] | None = None,
     script: str,
     timeout: int,
     step_order: int,
@@ -129,8 +144,8 @@ async def run_shell_on_job_host(
 ) -> tuple[str, int | None, str | None]:
     """SSH→作业主机执行 Shell 脚本，返回 (ExecutionStatus值, 退出码, 失败摘要)。
 
-    执行范式改造后的步骤执行单元：JobHost 凭据字段与 Credential 同构
-    （login_user/auth_type/secret_enc/passphrase_enc），open_connection 直接复用。
+    登录认证来自作业主机关联的凭据（credential 形参）；env 为模板引用凭据的
+    环境变量，经 stdin 前置 export 注入（不落盘不进日志）。
 
     超时口径：ExecutionStatus 无独立 TIMEOUT 态，超时归档为 failed，
     但 error_summary 明确标注“执行超时”以区分普通失败（与旧版
@@ -138,9 +153,11 @@ async def run_shell_on_job_host(
     """
     conn: asyncssh.SSHClientConnection | None = None
     try:
-        conn = await open_connection(job_host.ip, job_host.ssh_port, job_host)
+        conn = await open_connection(job_host.ip, job_host.ssh_port, credential)
         control.register_conn(conn)
         async with conn.create_process("bash -s") as process:
+            if env:
+                process.stdin.write(_env_prelude(env) + "\n")
             process.stdin.write(script + "\n")
             process.stdin.write_eof()
             # stdout/stderr 并发流式收集；整体受步骤超时约束

@@ -28,19 +28,30 @@ from tests.conftest import auth_header, login_for_tokens
 
 JOB_HOST_PAYLOAD = {
     "name": "引擎测试作业主机", "ip": "10.9.9.9", "ssh_port": 22,
-    "login_user": "root", "auth_type": "password", "secret": "S3cret!pass",
     "workdir": "/opt/opspilot/workspace",
+}
+
+CRED_PAYLOAD = {
+    "name": "引擎测试凭据", "login_user": "root", "auth_type": "password",
+    "secret": "S3cret!pass",
 }
 
 
 async def _engine_env(client) -> dict:
-    """引擎测试前置：admin/ops 登录 + 1 台作业主机（job_host:write 仅 admin）。"""
+    """引擎测试前置：admin/ops 登录 + 1 凭据 + 1 台作业主机（主机关联凭据）。"""
     admin_h = auth_header(await login_for_tokens(client, "admin"))
     ops_h = auth_header(await login_for_tokens(client, "ops1"))
-    resp = await client.post("/api/v1/job-hosts", json=JOB_HOST_PAYLOAD, headers=admin_h)
+    resp = await client.post("/api/v1/credentials", json=CRED_PAYLOAD, headers=admin_h)
     body = resp.json()
     assert body["code"] == 0, body
-    return {"admin_h": admin_h, "ops_h": ops_h, "job_host_id": body["data"]["id"]}
+    cred_id = body["data"]["id"]
+    resp = await client.post("/api/v1/job-hosts",
+                             json={**JOB_HOST_PAYLOAD, "credential_id": cred_id},
+                             headers=admin_h)
+    body = resp.json()
+    assert body["code"] == 0, body
+    return {"admin_h": admin_h, "ops_h": ops_h, "job_host_id": body["data"]["id"],
+            "credential_id": cred_id}
 
 
 def _step(name: str = "重启服务", **override) -> dict:
@@ -91,7 +102,8 @@ def _fake_job_host_runner(failed_steps: dict[int, str] | None = None):
     """构造 mock 版 run_shell_on_job_host：failed_steps 中的步骤序号返回 failed，其余 success。"""
     failed_steps = failed_steps or {}
 
-    async def _run(*, job_host, script, timeout, step_order, log, control):
+    async def _run(*, job_host, credential, script, env=None, timeout,
+                   step_order, log, control):
         log.write(step_order, f"[fake] step {step_order} on {job_host.ip}: {script.splitlines()[-1]}")
         if step_order in failed_steps:
             return "failed", 1, failed_steps[step_order]
@@ -226,3 +238,26 @@ class TestPipelineScheduler:
             assert all(st.status == "pending" for st in steps)
         # 执行结束后信号键被防御性清理
         assert await fake_redis.get(f"ops:ctrl:{eid}") is None
+
+
+# ---------- 凭据环境变量注入（设计 2026-07-31：CRED_<ALIAS>_* 前置 export） ----------
+
+def test_env_prelude_quoting():
+    """单引号安全转义：值含单引号/换行（私钥）也能原样还原。"""
+    from app.engine.ssh_runner import _env_prelude
+
+    prelude = _env_prelude({"CRED_DB_SECRET": "pa'ss\nline2", "CRED_DB_USER": "root"})
+    assert "export CRED_DB_SECRET='pa'\\''ss\nline2'" in prelude
+    assert "export CRED_DB_USER='root'" in prelude
+
+
+def test_build_cred_env():
+    """按别名组装 CRED_<ALIAS大写>_USER/_SECRET；无口令不注入 _PASSPHRASE。"""
+    from types import SimpleNamespace
+    from app.core.security import encrypt_text
+    from app.engine.pipeline import build_cred_env
+
+    cred = SimpleNamespace(login_user="root", secret_enc=encrypt_text("s3cret"),
+                           passphrase_enc=None)
+    env = build_cred_env("mysql", cred)
+    assert env == {"CRED_MYSQL_USER": "root", "CRED_MYSQL_SECRET": "s3cret"}

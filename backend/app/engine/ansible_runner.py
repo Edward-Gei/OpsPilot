@@ -23,6 +23,7 @@ logger = logging.getLogger("opspilot.engine.ansible")
 async def run_ansible_on_job_host(
     *,
     job_host,
+    credential,
     playbook: str,
     timeout: int,
     step_order: int,
@@ -33,12 +34,14 @@ async def run_ansible_on_job_host(
     """SSH→作业主机→SFTP 上传 playbook→执行 ansible-playbook→仅取退出码。
 
     返回 (ExecutionStatus值, 退出码, 失败摘要)。
+    playbook 步骤不注入凭据环境变量（命令行内联 env 有 ps 泄露风险，
+    凭据注入仅 shell 步骤支持）。
     """
     workdir = (job_host.workdir or "/tmp").rstrip("/")
     run_dir = f"{workdir}/opspilot/exec_{execution_id}_step_{step_order}"
     conn: asyncssh.SSHClientConnection | None = None
     try:
-        conn = await open_connection(job_host.ip, job_host.ssh_port, job_host)
+        conn = await open_connection(job_host.ip, job_host.ssh_port, credential)
         control.register_conn(conn)
         await conn.run(f"mkdir -p {shlex.quote(run_dir)}", check=True)
         async with conn.start_sftp_client() as sftp:

@@ -29,9 +29,11 @@ from app.core.constants import (
     TicketStatus,
 )
 from app.core.database import async_session_factory
+from app.core.security import decrypt_text
 from app.models.auth import User
 from app.models.cmdb import JobHost
 from app.models.execution import Execution, ExecutionStep
+from app.models.job import Credential
 from app.models.ticket import Ticket, TicketStep
 from app.engine import ansible_runner, control as ctrl, events, ssh_runner
 from app.engine.logs import LogChannel
@@ -43,6 +45,18 @@ def render_script(content: str, params: dict) -> str:
     """用 Jinja2 沙箱渲染脚本参数（02 §4.4：SandboxedEnvironment 防模板注入）。"""
     env = SandboxedEnvironment(autoescape=False, keep_trailing_newline=True)
     return env.from_string(content).render(**(params or {}))
+
+
+def build_cred_env(alias: str, cred) -> dict[str, str]:
+    """按引用别名组装凭据环境变量（CRED_<ALIAS大写>_USER/_SECRET/_PASSPHRASE）。"""
+    prefix = f"CRED_{alias.upper()}"
+    env = {
+        f"{prefix}_USER": cred.login_user,
+        f"{prefix}_SECRET": decrypt_text(cred.secret_enc),
+    }
+    if cred.passphrase_enc:
+        env[f"{prefix}_PASSPHRASE"] = decrypt_text(cred.passphrase_enc)
+    return env
 
 
 class PipelineRunner:
@@ -57,8 +71,11 @@ class PipelineRunner:
         self.execution: Execution = None
         self.ticket: Ticket = None
         self.strategy: dict = {}
-        # 作业主机对象（含凭据字段，工单快照关联的 job_host 表行）
+        # 作业主机对象（工单快照关联的 job_host 表行）
         self.job_host: JobHost | None = None
+        self.credential: Credential | None = None   # 作业主机登录凭据（建连用）
+        self.cred_env: dict[str, str] = {}          # 模板引用凭据 env（shell 步骤注入）
+        self.cred_error: str | None = None          # 凭据加载失败原因（步骤级失败归档）
 
     # ---------- 入口 ----------
 
@@ -109,12 +126,28 @@ class PipelineRunner:
             return False
         self.ticket = await s.get(Ticket, self.execution.ticket_id)
         self.strategy = self.ticket.exec_strategy_snap or {}
-        # 加载作业主机（含凭据，直接从 job_host 表取）
+        # 加载作业主机（登录认证随关联凭据）
         jh_id = self.ticket.job_host_id
         self.job_host = await s.get(JobHost, jh_id)
         if self.job_host is None:
             logger.error("工单 %s 关联的作业主机 %s 不存在", self.ticket.id, jh_id)
             return False
+        # 加载登录凭据与引用凭据；失败原因记 cred_error，由步骤按失败归档（用户可见）
+        if self.job_host.credential_id:
+            self.credential = await s.get(Credential, self.job_host.credential_id)
+        if self.credential is None:
+            self.cred_error = "作业主机未关联凭据或凭据已删除，请在系统设置中重新关联"
+            return True
+        for ref in self.ticket.credential_refs or []:
+            cred = await s.get(Credential, ref["credential_id"])
+            if cred is None:
+                self.cred_error = f"引用凭据 {ref.get('credential_name') or ref['credential_id']} 已被删除"
+                break
+            try:
+                self.cred_env.update(build_cred_env(ref["alias"], cred))
+            except RuntimeError as exc:   # 密文损坏：decrypt_text 统一转译
+                self.cred_error = str(exc)
+                break
         return True
 
     # ---------- 状态迁移辅助 ----------
@@ -205,6 +238,17 @@ class PipelineRunner:
         await s.commit()
         await self._publish_step(step)
 
+        # 凭据加载失败：不建立 SSH 会话，按步骤失败归档（错误对用户可见）
+        if self.cred_error:
+            self.log.write(step.step_order, f"[opspilot] {self.cred_error}")
+            step.status = ExecutionStatus.FAILED.value
+            step.exit_code = None
+            step.error_summary = self.cred_error[:500]
+            step.finished_at = datetime.now()
+            await s.commit()
+            await self._publish_step(step)
+            return True
+
         # 渲染脚本参数（渲染失败 = 整步骤失败，不建立 SSH 会话）
         try:
             script = render_script(tstep.content_snap, tstep.params or {})
@@ -222,13 +266,14 @@ class PipelineRunner:
         jh = self.job_host
         if tstep.script_type_snap == ScriptType.PLAYBOOK.value:
             status, exit_code, summary = await ansible_runner.run_ansible_on_job_host(
-                job_host=jh, playbook=script, timeout=tstep.timeout,
-                step_order=step.step_order, log=self.log, control=self.control,
-                execution_id=self.eid,
+                job_host=jh, credential=self.credential, playbook=script,
+                timeout=tstep.timeout, step_order=step.step_order, log=self.log,
+                control=self.control, execution_id=self.eid,
             )
         else:
             status, exit_code, summary = await ssh_runner.run_shell_on_job_host(
-                job_host=jh, script=script, timeout=tstep.timeout,
+                job_host=jh, credential=self.credential, script=script,
+                env=self.cred_env or None, timeout=tstep.timeout,
                 step_order=step.step_order, log=self.log, control=self.control,
             )
         step.status = status
