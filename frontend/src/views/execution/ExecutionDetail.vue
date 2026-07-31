@@ -126,7 +126,8 @@ async function fetchSegment(seg: LogSegment): Promise<void> {
       if (data.eof) break
     }
   } catch {
-    /* 日志文件未生成等场景静默（该段本轮跳过） */
+    // 本轮未确认读到文件尾：重置 eof，禁止上层用陈旧 eof 置 done 而永久跳过收尾日志
+    seg.eof = false
   }
 }
 
