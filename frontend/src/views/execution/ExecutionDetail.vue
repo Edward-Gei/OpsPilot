@@ -261,7 +261,6 @@ function startRealtime() {
 /** 终态/离开页面：停止全部轮询 */
 function teardownRealtime() {
   pollAbort = true
-  abortFetch = true
   if (logTimer) {
     clearInterval(logTimer)
     logTimer = null
@@ -310,7 +309,11 @@ onMounted(async () => {
   if (!isFinished.value) startRealtime()
 })
 
-onBeforeUnmount(teardownRealtime)
+onBeforeUnmount(() => {
+  // 离开页面：中断拉取循环（终态 teardown 不置此标志，保证终态补拉能跑完）
+  abortFetch = true
+  teardownRealtime()
+})
 </script>
 
 <template>
