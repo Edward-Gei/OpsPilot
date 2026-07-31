@@ -121,18 +121,32 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/credentials` | `credential:read` | 列表（不含密文）；模板步骤选凭据用 |
+| GET | `/credentials` | `credential:read` | 列表（不含密文）；作业主机关联与模板引用凭据选择用 |
 | POST | `/credentials` | `credential:write` | `{name, login_user, auth_type, secret, passphrase?}` |
 | PUT | `/credentials/{id}` | `credential:write` | secret 传空 = 不变更 |
-| DELETE | `/credentials/{id}` | `credential:write` | 被模板/进行中工单引用时 42201 |
+| DELETE | `/credentials/{id}` | `credential:write` | 被作业主机（`job_host.credential_id`）或模板（`ticket_template.credential_refs`）引用时 42201 |
 | GET | `/templates` | `template:read` | 分页；keyword/type/status |
-| POST | `/templates` | `template:write` | 全量配置：`{name, type, description, app_id, steps:[{name, script_type, content, params_schema, credential_id, timeout}], exec_strategy, approval_enabled, approval_nodes:[{node_order, role_id, approve_mode}], allow_withdraw, allow_transfer, allow_countersign, notify_rules, visible_role_ids}` → 创建 v1 |
-| GET | `/templates/{id}` | `template:read` | 当前版本全量配置详情 |
-| PUT | `/templates/{id}` | `template:write` | 全量更新；规则任一变更自动升版；仅改名/说明不升版 |
+| POST | `/templates` | `template:write` | 全量配置：`{name, type, description, app_id, steps:[{name, script_type, content, params_schema, credential_id, timeout}], exec_strategy, approval_enabled, approval_nodes:[{node_order, role_id, approve_mode}], allow_withdraw, allow_transfer, allow_countersign, notify_rules, visible_role_ids, credential_refs:[{alias, credential_id}]}` → 创建 v1；credential_refs 为模板级引用凭据声明（alias 字母开头、大小写不敏感去重），shell 步骤执行时注入 `CRED_<ALIAS大写>_USER/_SECRET/_PASSPHRASE` 环境变量 |
+| GET | `/templates/{id}` | `template:read` | 当前版本全量配置详情；credential_refs 回显附 credential_name |
+| PUT | `/templates/{id}` | `template:write` | 全量更新；规则任一变更自动升版（含 credential_refs 变更）；仅改名/说明不升版 |
 | PUT | `/templates/{id}/status` | `template:write` | `{status: enabled/disabled}`；禁用后不可被提交，不影响已提交工单 |
 | DELETE | `/templates/{id}` | `template:write` | 被进行中工单引用时 42201 |
 | GET | `/templates/{id}/versions` | `template:read` | 版本列表 |
 | GET | `/templates/{id}/versions/{version}` | `template:read` | 历史版本全量快照 |
+
+### 5.1 作业主机（`/job-hosts`，系统设置维护）
+
+登录认证随关联凭据（凭据管理）走，主机侧不再填写任何账号/密文字段。
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/job-hosts` | `job_host:read` | 分页；响应含 `credential_id / credential_name`，无任何密文字段 |
+| POST | `/job-hosts` | `job_host:write` | `{name, ip, ssh_port?, credential_id, workdir?}`；credential_id 必填，凭据不存在 40401 |
+| GET | `/job-hosts/{id}` | `job_host:read` | 详情 |
+| PUT | `/job-hosts/{id}` | `job_host:write` | 编辑；`credential_id` 传值即切换关联凭据 |
+| DELETE | `/job-hosts/{id}` | `job_host:write` | 被模板引用时 42201 |
+| POST | `/job-hosts/{id}/test` | `job_host:write` | 连通性测试：以关联凭据实时取账号/密文建连 |
+| PUT | `/job-hosts/{id}/status` | `job_host:write` | 启用/禁用；禁用后不可被新模板选用 |
 
 ## 6. 工单中心（`/tickets`）
 
@@ -145,7 +159,7 @@
 | POST | `/tickets` | `ticket:write` | 提交工单：`{template_id, params}`；服务端固化五重快照（主机/步骤内容/审批节点/策略/版本）；免审直接入执行队列，否则进入 approving 并发待审批通知 |
 | GET | `/tickets` | `ticket:read` | 分页；status/creator/app/keyword/时间范围 |
 | GET | `/tickets/todo` | `ticket:approve` | 待我审批（当前节点角色 ∩ 我的角色）+ 角标计数 |
-| GET | `/tickets/{id}` | `ticket:read` | 详情（只读）：基本信息 + 参数 + 主机快照 + 步骤快照 + 审批时间线 + execution 概要 |
+| GET | `/tickets/{id}` | `ticket:read` | 详情（只读）：基本信息 + 参数 + 主机快照 + 步骤快照 + 引用凭据快照（`credential_refs`，含 credential_name，不含密文）+ 审批时间线 + execution 概要 |
 | POST | `/tickets/{id}/approve` | `ticket:approve` | `{action: approve/reject, comment}`；校验当前节点角色归属（可审批自己创建的工单）；驳回 comment 必填；末节点通过→自动入执行队列 |
 | POST | `/tickets/{id}/cancel` | `ticket:write` | 撤销（审批前作废）：仅创建人、approving 状态、且 allow_withdraw_snap=true；工单置 cancelled |
 | POST | `/tickets/{id}/abort` | `execution:control` | 中止：queued/running/paused；停止派发后续目标（在跑目标不打断），未派发置 skipped，工单终态 interrupted(user_abort)；仅创建人或 admin |
@@ -155,7 +169,7 @@
 
 控制类接口（abort/pause/resume/force-abort）均写审计（操作人/IP/时间/工单ID/当时状态）并触发通知；审批人不能代替提交人撤销（只能审批通过/驳回）。状态不匹配返回 40901。
 
-**提交时服务端校验**：模板 enabled 且在我的可见范围；应用存在且关联主机 ≥1；凭据存在；参数满足汇总 params_schema（required/fixed）；审批节点角色存在。
+**提交时服务端校验**：模板 enabled 且在我的可见范围；应用存在且关联主机 ≥1；凭据存在；参数满足汇总 params_schema（required/fixed）；审批节点角色存在。提交时冻结模板 credential_refs 为 `[{alias, credential_id, credential_name}]` 快照，执行时按 credential_id 实时取密文。
 
 > 已删除：`PUT/DELETE /tickets/{id}`（无草稿可编辑）、`POST /tickets/{id}/submit`（并入创建）、`POST /tickets/{id}/copy`。
 
