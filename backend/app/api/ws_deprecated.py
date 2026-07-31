@@ -1,4 +1,11 @@
-"""执行实时通道 WS 网关（04-API §8）：/ws/executions/{id}?token=。
+"""【已弃用】执行实时通道 WS 网关（原 04-API §8：/ws/executions/{id}?token=）。
+
+弃用说明（2026-07）：
+    前端实时日志已全面改用长轮询方案（事件 = GET /executions/{id}/events
+    长轮询；日志 = GET /executions/{id}/logs 按 offset 定时增量拉取），
+    原因：切换目标主机后 WS 订阅失效导致日志无法实时更新，且 WS
+    断线重连/令牌过期链路复杂、故障面大。本模块已从 main.py 摘除注册，
+    代码保留备查，如需回切恢复 main.py 中的 include_router 即可。
 
 协议（服务端 → 客户端，JSON）：
     {"type":"snapshot","seq":N,"data":{执行全量状态+主机明细}}   连接建立后首推

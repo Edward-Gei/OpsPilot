@@ -12,7 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api.v1 import api_router
-from app.api.ws import router as ws_router
 from app.audit import audit_writer
 from app.core import redis as redis_mod
 from app.core.config import settings
@@ -103,8 +102,9 @@ def create_app() -> FastAPI:
         return ok(checks)
 
     app.include_router(api_router, prefix=settings.api_prefix)
-    # WS 网关挂应用根路径（nginx /ws/ 代理直达，不过 api_prefix）
-    app.include_router(ws_router)
+    # WS 网关已弃用（见 app/api/ws_deprecated.py）：实时日志改用长轮询
+    # （/executions/{id}/events + /logs 增量拉取），回切时恢复下行注册
+    # app.include_router(ws_router)
     return app
 
 

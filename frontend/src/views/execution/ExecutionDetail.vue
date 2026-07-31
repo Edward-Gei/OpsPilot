@@ -1,6 +1,10 @@
 <script setup lang="ts">
-// 执行详情页（M5）：步骤×主机矩阵 + 实时日志（WS）+ 执行控制
-// 实时通道：WS snapshot 首推 → log/event 增量；断线自动降级长轮询并重连
+// 执行详情页（M5）：步骤×主机矩阵 + 实时日志 + 执行控制
+// 实时通道（纯长轮询，WS 已弃用）：
+//   状态事件 = /events 长轮询（服务端挂起 30s，有事件立即返回）
+//   日志追加 = /logs 每 2s 按 offset 增量拉取（Jenkins 式尾随效果）
+// 弃用 WS 原因：切换目标主机后 WS 订阅失效导致日志无法实时更新，
+// 长轮询无连接状态、无订阅概念，切主机即重置偏移量拉取，天然免疫该类 bug
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
@@ -16,7 +20,6 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons-vue'
 import * as execApi from '@/api/execution'
-import { refreshTokenPair } from '@/api/http'
 import { useUserStore } from '@/stores/user'
 import { fmtTime } from '@/views/ticket/meta'
 import { execStatusMeta, hostStatusMeta, interruptReasonText, triggeredByText } from './meta'
@@ -79,7 +82,7 @@ const hostColumns = [
   { title: '失败摘要', dataIndex: 'error_summary', key: 'summary', ellipsis: true },
 ]
 
-// ---------- 日志面板（历史 REST + 实时 WS 追加） ----------
+// ---------- 日志面板（历史 REST + 定时增量拉取追加） ----------
 const focusIp = ref<string | null>(null)
 const logLines = ref<string[]>([])
 const logEof = ref(true)
@@ -96,7 +99,7 @@ function logIpOf(step: execApi.ExecutionStepInfo | null, hostIp: string | null):
   return step.script_type === 'playbook' ? 'ansible' : hostIp
 }
 
-/** 切换日志焦点：拉历史日志 + 通知 WS 只推该焦点 */
+/** 切换日志焦点：重置偏移量拉历史，后续增量由日志轮询定时器接管 */
 function focusHost(row: execApi.ExecutionHostRow | null) {
   const ip = logIpOf(activeStepInfo.value, row?.ip ?? null)
   focusIp.value = ip
@@ -104,14 +107,17 @@ function focusHost(row: execApi.ExecutionHostRow | null) {
   logOffset.value = 0
   logEof.value = true
   if (!ip) return
-  sendSubscribe()
   void fetchHistoryLogs(true)
 }
 
-/** 拉取历史日志：reset=true 整体替换（切焦点），false 从当前偏移续拉（加载更多/断线补齐） */
+// 日志请求在飞标志：轮询 tick 遇上一请求未完成时跳过，避免慢网下请求堆叠
+let logFetching = false
+
+/** 拉取日志：reset=true 整体替换（切焦点），false 从当前偏移续拉（轮询增量/加载更多） */
 async function fetchHistoryLogs(reset: boolean) {
   if (!focusIp.value) return
   const seq = ++logReqSeq
+  logFetching = true
   try {
     const data = await execApi.getExecutionLogs(executionId, {
       step_order: activeStep.value,
@@ -130,6 +136,8 @@ async function fetchHistoryLogs(reset: boolean) {
     logEof.value = data.eof
   } catch {
     /* 日志文件未生成等场景静默（面板显示空态） */
+  } finally {
+    logFetching = false
   }
 }
 
@@ -154,28 +162,25 @@ function scrollLogToBottom() {
   })
 }
 
-// ---------- WebSocket 实时通道 ----------
-let ws: WebSocket | null = null
-let reconnectTimer: number | null = null
-let reconnectDelay = 5000 // 重连退避：5s 起步翻倍至 60s 上限，连上后复位
-let pollAbort = false // 长轮询降级循环停止标志
-let polling = false // 降级轮询单飞：重连风暴下避免叠加多个并发轮询循环占满连接
-const wsConnected = ref(false)
+// ---------- 长轮询实时通道（事件长轮询 + 日志定时增量） ----------
+let pollAbort = false // 事件长轮询循环停止标志
+let polling = false // 事件轮询单飞：避免叠加多个并发循环占满连接
+let logTimer: number | null = null // 日志增量拉取定时器（2s）
+const pollActive = ref(false) // 实时通道指示灯：事件轮询循环在跑即为活跃
 let lastSeq = 0
+// 日志轮询间隔：2s 拉一次增量，观感接近 Jenkins 控制台实时输出
+const LOG_POLL_INTERVAL = 2000
 
-function sendSubscribe() {
-  if (ws?.readyState === WebSocket.OPEN && focusIp.value) {
-    ws.send(JSON.stringify({ type: 'subscribe_log', step: activeStep.value, ip: focusIp.value }))
-  }
-}
-
-/** 应用状态事件（WS event / 长轮询 events 共用） */
+/** 应用状态事件（/events 长轮询返回的增量事件） */
 function applyEvent(kind: string, data: Record<string, unknown>) {
   if (!detail.value) return
   if (kind === 'execution_status') {
     detail.value.status = data.status as execApi.ExecutionStatus
     if (data.ticket_status) detail.value.ticket_status = data.ticket_status as string
-    if (isFinished.value) teardownRealtime()
+    if (isFinished.value) {
+      void fetchHistoryLogs(false) // 终态前最后一段日志可能未到轮询 tick，补拉一次
+      teardownRealtime()
+    }
   } else if (kind === 'step_status') {
     const step = detail.value.steps.find((s) => s.step_order === data.step_order)
     if (step) {
@@ -197,65 +202,12 @@ function applyEvent(kind: string, data: Record<string, unknown>) {
   }
 }
 
-function connectWs() {
-  if (ws || isFinished.value) return // 已有连接（含握手中）不重复建，避免并行连接泄漏
-  ws = new WebSocket(execApi.executionWsUrl(executionId))
-  ws.onopen = () => {
-    wsConnected.value = true
-    reconnectDelay = 5000 // 连上后退避复位
-    pollAbort = true // WS 恢复后停掉降级长轮询
-  }
-  ws.onmessage = (e) => {
-    let msg: Record<string, unknown>
-    try {
-      msg = JSON.parse(e.data as string)
-    } catch {
-      return
-    }
-    if (msg.type === 'ping') {
-      ws?.send(JSON.stringify({ type: 'pong' }))
-    } else if (msg.type === 'snapshot') {
-      // 首推快照：整体替换（断线重连后以快照对齐状态）
-      lastSeq = (msg.seq as number) ?? 0
-      const snap = msg.data as execApi.ExecutionDetail
-      detail.value = { ...detail.value, ...snap }
-      if (snap.hosts) allHosts.value = snap.hosts
-      if (activeStep.value === 0 && snap.steps.length) selectStep(snap.steps[0].step_order)
-      else {
-        sendSubscribe()
-        void fetchHistoryLogs(false) // 断线期间的日志断档从当前偏移补齐
-      }
-    } else if (msg.type === 'log') {
-      if (msg.step === activeStep.value && msg.ip === focusIp.value) {
-        appendLogLines((msg.lines as string[]) ?? [])
-      }
-    } else if (msg.type === 'event') {
-      lastSeq = Math.max(lastSeq, (msg.seq as number) ?? 0)
-      const data = msg.data as Record<string, unknown>
-      applyEvent(data.kind as string, data)
-    }
-  }
-  ws.onclose = (e) => {
-    wsConnected.value = false
-    ws = null
-    if (isFinished.value) return
-    void startPollFallback()
-    // 指数退避重连；4401=令牌过期被拒，先静默换新令牌再连，避免持续被拒刷屏
-    const delay = reconnectDelay
-    reconnectDelay = Math.min(reconnectDelay * 2, 60000)
-    reconnectTimer = window.setTimeout(async () => {
-      if (e.code === 4401) await refreshTokenPair()
-      connectWs()
-    }, delay)
-  }
-  ws.onerror = () => ws?.close()
-}
-
-/** WS 断线降级：长轮询补事件（单飞；日志断档由重连后 REST 历史拉取补齐） */
-async function startPollFallback() {
-  if (polling) return // 已有轮询循环在跑：不再叠加
+/** 事件主通道：/events 长轮询循环（服务端挂起 30s，有事件立即返回） */
+async function startEventPoll() {
+  if (polling) return // 已有循环在跑：不再叠加
   polling = true
   pollAbort = false
+  pollActive.value = true
   try {
     while (!pollAbort && !isFinished.value) {
       try {
@@ -265,6 +217,7 @@ async function startPollFallback() {
         for (const evt of data.events) applyEvent(evt.kind, evt.data)
         if (data.finished) {
           await loadDetail() // 终态兜底对齐（可能错过 host/step 事件）
+          void fetchHistoryLogs(false) // 补拉收尾日志后结束
           return
         }
       } catch {
@@ -273,22 +226,29 @@ async function startPollFallback() {
     }
   } finally {
     polling = false
+    pollActive.value = false
   }
 }
 
-/** 终态/离开页面：关闭全部实时通道 */
+/** 日志轮询 tick：从当前偏移拉增量追加（在飞/无焦点/已终态则跳过） */
+function tickLogPoll() {
+  if (logFetching || !focusIp.value || isFinished.value) return
+  void fetchHistoryLogs(false)
+}
+
+/** 启动全部实时轮询（事件长轮询 + 日志定时增量） */
+function startRealtime() {
+  void startEventPoll()
+  if (!logTimer) logTimer = window.setInterval(tickLogPoll, LOG_POLL_INTERVAL)
+}
+
+/** 终态/离开页面：停止全部轮询 */
 function teardownRealtime() {
   pollAbort = true
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer)
-    reconnectTimer = null
+  if (logTimer) {
+    clearInterval(logTimer)
+    logTimer = null
   }
-  if (ws) {
-    ws.onclose = null // 避免触发重连
-    ws.close()
-    ws = null
-  }
-  wsConnected.value = false
 }
 
 // ---------- 执行控制（04 §6：仅创建人或 admin，权限 execution:control） ----------
@@ -330,7 +290,7 @@ async function onControl(op: execApi.ControlOp) {
 
 onMounted(async () => {
   await loadDetail()
-  if (!isFinished.value) connectWs()
+  if (!isFinished.value) startRealtime()
 })
 
 onBeforeUnmount(teardownRealtime)
@@ -354,7 +314,7 @@ onBeforeUnmount(teardownRealtime)
           <a-tag v-if="detail?.interrupt_reason" color="warning">
             {{ interruptReasonText[detail.interrupt_reason] || detail.interrupt_reason }}
           </a-tag>
-          <span class="ws-dot" :class="{ on: wsConnected }" :title="wsConnected ? '实时通道已连接' : '实时通道未连接（降级轮询）'" />
+          <span class="ws-dot" :class="{ on: pollActive }" :title="pollActive ? '实时轮询中' : '实时轮询已停止（执行已结束）'" />
         </div>
         <div class="op-hero-sub">
           {{ detail?.title }}（应用：{{ detail?.app_name || '—' }}）
@@ -458,7 +418,7 @@ onBeforeUnmount(teardownRealtime)
         </template>
       </a-table>
 
-      <!-- 日志面板：终端风格，历史 REST + 实时 WS 追加 -->
+      <!-- 日志面板：终端风格，历史 REST + 定时增量轮询追加 -->
       <div class="log-panel">
         <div class="log-head">
           <span>

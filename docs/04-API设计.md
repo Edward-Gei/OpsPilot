@@ -8,8 +8,8 @@
 
 ## 1. 通用约定
 
-- **Base URL**：`/api/v1`；WebSocket：`/ws`。运行时以 FastAPI 自动生成的 OpenAPI（`/api/v1/docs`）为最终契约，本文与已实现代码对齐。连通性探测：`GET /api/v1/ping`（公开，返回 `{pong:true}`）；健康检查 `GET /healthz`（见 §11）。
-- **认证**：`Authorization: Bearer <access_token>`；WS 经 `?token=` 传递。个人访问密钥（`opsp_` 前缀，见 §2.1）可作为 Bearer 凭证直调平台 API，权限与所属用户实时一致。
+- **Base URL**：`/api/v1`。运行时以 FastAPI 自动生成的 OpenAPI（`/api/v1/docs`）为最终契约，本文与已实现代码对齐。连通性探测：`GET /api/v1/ping`（公开，返回 `{pong:true}`）；健康检查 `GET /healthz`（见 §11）。实时刷新全部走 REST 长轮询（见 §8，WebSocket 已弃用）。
+- **认证**：`Authorization: Bearer <access_token>`。个人访问密钥（`opsp_` 前缀，见 §2.1）可作为 Bearer 凭证直调平台 API，权限与所属用户实时一致。
 - **响应包裹**：
 
 ```json
@@ -166,24 +166,19 @@
 | GET | `/executions` | `execution:read` | 分页；ticket_no/app/creator/status/时间 |
 | GET | `/executions/{id}` | `execution:read` | 汇总 + 步骤列表（状态/批次/统计） |
 | GET | `/executions/{id}/hosts` | `execution:read` | `?step_order=&status=` 主机明细分页 |
-| GET | `/executions/{id}/logs` | `execution:read` | `?step_order=&ip=&offset=&limit=` 读日志文件（历史回看，按行偏移） |
-| GET | `/executions/{id}/events` | `execution:read` | 长轮询降级通道：`?since_seq=` 30s 挂起返回增量事件 |
+| GET | `/executions/{id}/logs` | `execution:read` | `?step_order=&ip=&offset=&limit=` 读日志文件（按行偏移；历史回看 + 前端 2s 定时增量拉取实现实时刷新） |
+| GET | `/executions/{id}/events` | `execution:read` | 实时状态长轮询主通道：`?since_seq=` 30s 挂起返回增量事件 |
 
 > 执行域为**只读查询**；控制操作（中止/暂停/恢复/强制中止）在工单控制面（§6），权限 `execution:control` 且（创建人 或 admin）。原 `POST /executions/{id}/stop|resume` 已移除。
 
-## 8. WebSocket 协议（`/ws/executions/{id}?token=`）
+## 8. 实时通道（长轮询；WebSocket 已弃用）
 
-服务端 → 客户端消息（JSON 行）：
+执行详情页实时刷新采用纯长轮询方案（均复用 §7 只读接口，无独立协议）：
 
-```json
-{"type":"snapshot","seq":0,"data":{execution全量状态}}     // 连接建立后首推
-{"type":"log","seq":101,"step":1,"ip":"10.0.0.1","lines":["..."],"ts":"..."}  // 100ms聚合
-{"type":"event","seq":102,"data":{"kind":"host_status|step_status|execution_status", ...}}
-{"type":"ping"}                                            // 30s 心跳
-```
+- **状态事件**：`GET /executions/{id}/events?since_seq=` 长轮询循环，服务端有新事件立即返回，否则挂起至 30s 返回空列表；`seq` 单调递增，客户端持有 `last_seq` 续拉；`finished=true` 时结束轮询。
+- **实时日志**：`GET /executions/{id}/logs?step_order=&ip=&offset=` 每 2s 按行偏移增量拉取追加（Jenkins 式尾随）；切换主机即重置 `offset=0` 重拉，无订阅状态。
 
-客户端 → 服务端：`{"type":"pong"}`；`{"type":"subscribe_log","step":1,"ip":"10.0.0.1"}`（切换日志焦点，服务端只推焦点主机 log，event 全推）。
-`seq` 单调递增；断线重连后以 REST `events?since_seq=` 补齐。鉴权失败关闭码 4401，无权限 4403。
+> **WebSocket 已弃用（2026-07）**：原 `/ws/executions/{id}?token=` 网关（snapshot/log/event/ping 协议）因切换目标主机后订阅失效导致日志无法实时更新，且断线重连/令牌过期链路复杂，已从应用摘除注册。代码保留在 `backend/app/api/ws_deprecated.py` 备查，回切需恢复 `main.py` 注册与 nginx `/ws/` 代理。
 
 ## 9. 审计（`/audit`）
 

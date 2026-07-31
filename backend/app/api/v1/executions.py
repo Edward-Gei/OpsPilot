@@ -1,7 +1,9 @@
 """执行记录路由（04-API §7，只读）：权限 execution:read。
 
 执行域为只读查询；控制操作（中止/暂停/恢复/强制中止）在工单控制面
-（tickets.py，权限 execution:control）。/events 为 WS 断线后的长轮询降级通道。
+（tickets.py，权限 execution:control）。/events 为前端实时状态的长轮询主通道
+（WS 已弃用，见 app/api/ws_deprecated.py），日志实时刷新由 /logs 按 offset
+定时增量拉取实现。
 """
 import asyncio
 
@@ -95,7 +97,7 @@ async def poll_execution_events(
     _: User = Depends(require_perm("execution:read")),
     since_seq: int = Query(0, ge=0),
 ) -> dict:
-    """长轮询降级通道：有新事件立即返回，否则挂起至 30s 超时返回空列表。
+    """前端实时状态主通道：有新事件立即返回，否则挂起至 30s 超时返回空列表。
 
     终态执行不挂起（不会再有新事件），直接返回增量后结束轮询。
     """

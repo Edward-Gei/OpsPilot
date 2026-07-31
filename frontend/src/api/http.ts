@@ -62,12 +62,6 @@ async function tryRefresh(): Promise<boolean> {
   return false
 }
 
-/** 主动刷新令牌对（WS 被 4401 拒后重连前调用）：复用 40102 的单飞 Promise */
-export function refreshTokenPair(): Promise<boolean> {
-  refreshing = refreshing ?? tryRefresh().finally(() => (refreshing = null))
-  return refreshing
-}
-
 /** 会话失效：清令牌并回登录页 */
 function forceLogin(): void {
   clearTokens()

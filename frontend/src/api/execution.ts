@@ -1,7 +1,6 @@
 // 执行中心 API（04-API设计 §7/§8，M5）
 // 执行域只读；控制操作挂工单控制面（§6：/tickets/{id}/abort 等）
 import { request } from './http'
-import { getAccessToken } from './token'
 import type { PageResult } from './system'
 import type { ExecStrategy } from './ticket'
 
@@ -136,7 +135,7 @@ export function getExecutionLogs(
   })
 }
 
-/** 长轮询降级通道：WS 断线时以 since_seq 补齐增量事件（服务端最长挂 30s） */
+/** 事件实时主通道：长轮询以 since_seq 拉增量事件（服务端最长挂 30s，有事件立即返回） */
 export function pollExecutionEvents(id: number, sinceSeq: number) {
   return request<{ events: ExecutionEvent[]; last_seq: number; finished: boolean }>({
     url: `/executions/${id}/events`,
@@ -158,11 +157,3 @@ export function controlTicket(ticketId: number, op: ControlOp) {
   })
 }
 
-// ---------- WebSocket ----------
-
-/** 组装执行实时通道地址（nginx /ws/ 直达 API，token 走 query 参数） */
-export function executionWsUrl(id: number): string {
-  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  const token = getAccessToken() ?? ''
-  return `${proto}://${window.location.host}/ws/executions/${id}?token=${encodeURIComponent(token)}`
-}

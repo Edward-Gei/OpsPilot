@@ -36,8 +36,8 @@
 
 | 容器名 | 镜像 | 职责 | 对宿主机暴露端口 |
 | --- | --- | --- | --- |
-| `opspilot-nginx` | `frontend/` 构建（nginx:1.27-alpine） | 静态资源 + `/api` `/ws` 反向代理 | `${NGINX_HTTP_PORT:-8080}` → 80 |
-| `opspilot-api` | `backend/` 构建（python:3.11-slim） | REST API + WebSocket + Alembic 迁移 | 无（仅 compose 内网） |
+| `opspilot-nginx` | `frontend/` 构建（nginx:1.27-alpine） | 静态资源 + `/api` 反向代理 | `${NGINX_HTTP_PORT:-8080}` → 80 |
+| `opspilot-api` | `backend/` 构建（python:3.11-slim） | REST API（含实时长轮询）+ Alembic 迁移 | 无（仅 compose 内网） |
 | `opspilot-worker` | 与 api 共用镜像，入口 `app.worker_main` | 工单执行引擎（SSH/Ansible）、通知投递 | 无 |
 | `opspilot-mysql` | mysql:8.0 | 业务数据库（utf8mb4 全局） | 无 |
 | `opspilot-redis` | redis:7-alpine（AOF 开启） | 执行队列 / 缓存 | 无 |
@@ -260,7 +260,7 @@ docker exec opspilot-api python -m pytest tests/ -q
 
 ### 8.3 修改 `deploy/nginx.conf`
 
-在现有 `server` 块基础上调整（保留原有 `/`、`/api/`、`/ws/`、`/healthz` 四个 location 不变）：
+在现有 `server` 块基础上调整（保留原有 `/`、`/api/`、`/healthz` 三个 location 不变）：
 
 ```nginx
 # HTTP 仅做跳转
@@ -279,7 +279,7 @@ server {
     ssl_protocols       TLSv1.2 TLSv1.3;
 
     # ……以下原样保留现有配置：root/index/client_max_body_size/gzip
-    # 及 location /、/api/、/ws/、/healthz 四段（WebSocket 的 Upgrade 头配置对 wss 同样生效）
+    # 及 location /、/api/、/healthz 三段（实时日志走 /api 长轮询，无需额外配置）
 }
 ```
 
@@ -412,7 +412,7 @@ docker compose up -d --no-build
 | worker 未启动 | `docker compose ps` | worker 依赖 api healthy，先解决 api 问题 |
 | 页面打不开（连接拒绝） | `docker logs opspilot-nginx`；`ss -lntp \| grep 8080` | 端口被占用：改 `.env` 的 `NGINX_HTTP_PORT` 后 `docker compose up -d nginx`；防火墙未放行入站端口 |
 | 页面能开但接口全 502 | `curl http://localhost:8080/healthz` | api 未 healthy 或崩溃，回到第一行排查 |
-| 实时日志（WebSocket）频繁断开 | 浏览器控制台 + `docker logs opspilot-nginx` | 本机 nginx 已配置 3600s 超时；若前置还有企业级 LB/代理，需在其上放开 WebSocket 升级与空闲超时 |
+| 实时日志不刷新 | 浏览器网络面板（/events、/logs 请求）+ `docker logs opspilot-nginx` | 实时日志为 REST 长轮询（/events 挂起 30s + /logs 每 2s 增量拉取）；若前置企业级 LB/代理，需确认其读超时 ≥ 60s，避免长轮询挂起期间被提前切断 |
 | 工单一直排队不执行 | `docker logs -f opspilot-worker` | worker 挂了（compose 会自动拉起）；全局并发被占满（系统配置 `exec.global_concurrency`，默认 50）；redis 异常 `docker exec opspilot-redis redis-cli ping` |
 | worker 重启后任务状态 | 执行详情页 | 设计行为：queued 任务自动重认领重跑；重启时 running/paused 的任务标记 interrupted 并记录原因，需人工确认后重新发起 |
 | 通知未送达 | `docker logs opspilot-worker`；通知配置页"发送测试" | 渠道未启用/配置错误；部署机到 SMTP/Webhook 端点的出站网络不通（§2.3） |
