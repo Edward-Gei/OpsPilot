@@ -72,6 +72,7 @@ interface LogSegment {
   eof: boolean // 服务端已读到当前文件尾
   done: boolean // 步骤已终态且 eof：不再拉取
   truncated: boolean // 触发行数上限后段头部已丢弃较早日志
+  dropped: number // 头部已丢弃行数（供渲染 key 计算绝对行号，裁剪时保留行 key 稳定）
 }
 const segments = ref<LogSegment[]>([])
 const logBox = ref<HTMLElement | null>(null)
@@ -81,6 +82,8 @@ const logHeight = ref(440)
 const LOG_CAP = 20000
 // 拉取在飞标志：轮询 tick 遇上一轮未完成时跳过，避免慢网下请求堆叠
 let logFetching = false
+// 单飞被拦时登记重跑：终态补拉不能被静默吞掉（定时器已停，无下轮兜底）
+let refetchQueued = false
 // 离开页面中断拉取循环标志
 let abortFetch = false
 // 步骤终态集合（与后端步骤状态机一致）
@@ -97,7 +100,7 @@ function ensureSegment(step: { step_order: number; step_name: string }): LogSegm
   if (!seg) {
     seg = {
       step_order: step.step_order, step_name: step.step_name,
-      lines: [], offset: 0, eof: false, done: false, truncated: false,
+      lines: [], offset: 0, eof: false, done: false, truncated: false, dropped: 0,
     }
     segments.value.push(seg)
     segments.value.sort((a, b) => a.step_order - b.step_order)
@@ -134,6 +137,7 @@ function trimToCapacity() {
     const drop = Math.min(overflow, seg.lines.length)
     if (drop > 0) {
       seg.lines.splice(0, drop)
+      seg.dropped += drop
       seg.truncated = true
       overflow -= drop
     }
@@ -142,7 +146,11 @@ function trimToCapacity() {
 
 /** 拉取一轮：按步骤顺序对所有"已开跑且未 done"的段拉增量并推进 done 标记 */
 async function fetchAllSegments(): Promise<void> {
-  if (logFetching || !detail.value) return
+  if (!detail.value) return
+  if (logFetching) {
+    refetchQueued = true
+    return
+  }
   logFetching = true
   try {
     for (const step of detail.value.steps) {
@@ -150,12 +158,19 @@ async function fetchAllSegments(): Promise<void> {
       if (!hasLog(step.status)) continue
       const seg = ensureSegment(step)
       if (seg.done) continue
+      // 拉取前捕获终态判定：保证 done 仅在"终态之后完整读到文件尾"时置位，
+      // 避免 await 期间状态被事件推进导致用旧 eof 误判截尾
+      const wasFinal = STEP_FINAL.includes(step.status)
       await fetchSegment(seg)
-      // 步骤已终态且拉到文件尾：该段完成，后续轮询不再触碰
-      if (seg.eof && STEP_FINAL.includes(step.status)) seg.done = true
+      if (wasFinal && seg.eof) seg.done = true
     }
   } finally {
     logFetching = false
+    // 在飞期间有补拉请求被拦：立即重跑一轮，保证终态收尾日志不丢
+    if (refetchQueued) {
+      refetchQueued = false
+      void fetchAllSegments()
+    }
   }
 }
 
@@ -181,7 +196,7 @@ function locateStep(order: number) {
   const box = logBox.value
   const el = box?.querySelector<HTMLElement>(`[data-step="${order}"]`)
   if (!box || !el) return
-  nearBottom = false // 定位阅读期间暂停自动跟底
+  nearBottom = false // 定位到非末段时暂停跟底（定位点距底 <40px 时 scroll 事件会重新恢复跟底）
   box.scrollTop = el.offsetTop
 }
 
@@ -418,7 +433,7 @@ onBeforeUnmount(() => {
             ━━━ 步骤 {{ seg.step_order }} · {{ seg.step_name }} ━━━
           </div>
           <div v-if="seg.truncated" class="log-trunc">…较早日志已省略…</div>
-          <div v-for="(line, i) in seg.lines" :key="i" class="log-line">{{ line }}</div>
+          <div v-for="(line, i) in seg.lines" :key="seg.dropped + i" class="log-line">{{ line }}</div>
         </template>
         <div v-if="!segments.length" class="log-empty">暂无日志输出</div>
       </div>
