@@ -1,22 +1,17 @@
 <script setup lang="ts">
-// 作业主机配置面板（嵌入系统设置页）：分页列表 + 创建/编辑抽屉（密文任何接口不回显，编辑留空=不变更）
+// 作业主机配置面板（嵌入系统设置页）：分页列表 + 创建/编辑抽屉（登录认证随关联凭据，主机侧只选不填）
 // + 连通性测试 / 启用禁用 / 删除（job_host:read / job_host:write）
 import { onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { PlusOutlined, SearchOutlined } from '@ant-design/icons-vue'
 import * as jobHostApi from '@/api/jobHost'
+import * as jobApi from '@/api/job'
 import { makeResizable, onResizeColumn } from '@/utils/table'
 import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 const canWrite = userStore.hasPerm('job_host:write')
 
-// 认证方式彩色标签（与凭据管理页风格一致）
-const authText: Record<string, { text: string; color: string }> = {
-  password: { text: '密码', color: 'geekblue' },
-  private_key: { text: '私钥', color: 'purple' },
-}
-const authOptions = Object.entries(authText).map(([value, v]) => ({ label: v.text, value }))
 const enabledOptions = [
   { label: '已启用', value: 'true' },
   { label: '已禁用', value: 'false' },
@@ -40,15 +35,14 @@ const columns = ref(makeResizable([
   { title: '名称', dataIndex: 'name', key: 'name', width: 140, ellipsis: true },
   { title: 'IP 地址', dataIndex: 'ip', key: 'ip', width: 130 },
   { title: 'SSH 端口', dataIndex: 'ssh_port', key: 'ssh_port', width: 90 },
-  { title: '登录用户', dataIndex: 'login_user', key: 'login_user', width: 110, ellipsis: true },
-  { title: '认证方式', key: 'auth_type', width: 100 },
+  { title: '关联凭据', key: 'credential', width: 160, ellipsis: true },
   { title: '工作目录', dataIndex: 'workdir', key: 'workdir', width: 190, ellipsis: true },
   { title: '启用状态', key: 'enabled', width: 95 },
   { title: '最近测试', key: 'last_check', width: 180 },
   { title: '操作', key: 'action', width: canWrite ? 200 : 60, fixed: 'right' as const },
 ]))
 
-/** 拉取作业主机列表（响应仅含 has_passphrase 布尔，无任何密文字段） */
+/** 拉取作业主机列表（响应仅含 credential_name，无任何密文字段） */
 async function loadList() {
   loading.value = true
   try {
@@ -84,12 +78,19 @@ const editForm = reactive({
   name: '',
   ip: '',
   ssh_port: 22,
-  login_user: '',
-  auth_type: 'password' as 'password' | 'private_key',
-  secret: '',
-  passphrase: '',
+  credential_id: undefined as number | undefined,
   workdir: DEFAULT_WORKDIR,
 })
+
+// 凭据选项：凭据管理中的凭据（登录认证随凭据走，主机侧只选不填）
+const credOptions = ref<{ label: string; value: number }[]>([])
+async function loadCredOptions() {
+  const data = await jobApi.listCredentials({ page: 1, page_size: 100 })
+  credOptions.value = data.items.map((c) => ({
+    value: c.id,
+    label: `${c.name}（${c.login_user} · ${c.auth_type === 'password' ? '密码' : '私钥'}）`,
+  }))
+}
 
 function openCreate() {
   editing.value = null
@@ -97,46 +98,35 @@ function openCreate() {
     name: '',
     ip: '',
     ssh_port: 22,
-    login_user: '',
-    auth_type: 'password',
-    secret: '',
-    passphrase: '',
+    credential_id: undefined,
     workdir: DEFAULT_WORKDIR,
   })
+  loadCredOptions()
   editVisible.value = true
 }
 
-/** 编辑：回填基础信息，密文不回显（secret 留空提交 = 不变更） */
+/** 编辑：回填基础信息与关联凭据 */
 function openEdit(row: jobHostApi.JobHost) {
   editing.value = row
   Object.assign(editForm, {
     name: row.name,
     ip: row.ip,
     ssh_port: row.ssh_port,
-    login_user: row.login_user,
-    auth_type: row.auth_type,
-    secret: '',
-    passphrase: '',
+    credential_id: row.credential_id ?? undefined,
     workdir: row.workdir,
   })
+  loadCredOptions()
   editVisible.value = true
 }
 
-/**
- * 提交创建/编辑。
- * 创建必填密文；编辑 secret 留空 = 不变更密文（但变更认证方式时必须重填，前端同步拦截）
- */
+/** 提交创建/编辑（登录账号与密文随关联凭据，主机侧不再填写） */
 async function onSubmitEdit() {
-  if (!editForm.name || !editForm.ip || !editForm.login_user) {
-    message.warning('请填写名称、IP 地址与登录用户')
+  if (!editForm.name || !editForm.ip) {
+    message.warning('请填写名称与 IP 地址')
     return
   }
-  if (!editing.value && !editForm.secret) {
-    message.warning('请填写密文内容')
-    return
-  }
-  if (editing.value && editForm.auth_type !== editing.value.auth_type && !editForm.secret) {
-    message.warning('变更认证方式时必须重新填写密文内容')
+  if (!editForm.credential_id) {
+    message.warning('请选择关联凭据')
     return
   }
   editLoading.value = true
@@ -146,10 +136,7 @@ async function onSubmitEdit() {
         name: editForm.name,
         ip: editForm.ip,
         ssh_port: editForm.ssh_port,
-        login_user: editForm.login_user,
-        auth_type: editForm.auth_type,
-        secret: editForm.secret || undefined,
-        passphrase: editForm.passphrase || undefined,
+        credential_id: editForm.credential_id,
         workdir: editForm.workdir || DEFAULT_WORKDIR,
       }
       await jobHostApi.updateJobHost(editing.value.id, payload)
@@ -159,10 +146,7 @@ async function onSubmitEdit() {
         name: editForm.name,
         ip: editForm.ip,
         ssh_port: editForm.ssh_port,
-        login_user: editForm.login_user,
-        auth_type: editForm.auth_type,
-        secret: editForm.secret,
-        passphrase: editForm.passphrase || undefined,
+        credential_id: editForm.credential_id,
         workdir: editForm.workdir || DEFAULT_WORKDIR,
       }
       await jobHostApi.createJobHost(payload)
@@ -272,10 +256,9 @@ onMounted(loadList)
       }"
     >
       <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'auth_type'">
-          <a-tag :color="authText[record.auth_type]?.color">
-            {{ authText[record.auth_type]?.text || record.auth_type }}
-          </a-tag>
+        <template v-if="column.key === 'credential'">
+          <span v-if="record.credential_name">{{ record.credential_name }}</span>
+          <a-tag v-else color="orange">未关联凭据</a-tag>
         </template>
         <template v-else-if="column.key === 'enabled'">
           <a-switch
@@ -316,7 +299,7 @@ onMounted(loadList)
       </template>
     </a-table>
 
-    <!-- 创建/编辑抽屉：密文不回显，编辑留空表示不修改 -->
+    <!-- 创建/编辑抽屉：登录认证随关联凭据，主机侧只选凭据 -->
     <a-drawer
       v-model:open="editVisible"
       :title="editing ? '编辑作业主机' : '新建作业主机'"
@@ -334,37 +317,15 @@ onMounted(loadList)
             <a-input-number v-model:value="editForm.ssh_port" :min="1" :max="65535" style="width: 100%" />
           </a-form-item>
         </div>
-        <div class="form-row">
-          <a-form-item label="登录用户" required class="form-col">
-            <a-input v-model:value="editForm.login_user" placeholder="如 opspilot" />
-          </a-form-item>
-          <a-form-item label="认证方式" required class="form-col">
-            <a-select v-model:value="editForm.auth_type" :options="authOptions" />
-          </a-form-item>
-        </div>
-        <a-form-item :label="editForm.auth_type === 'password' ? '登录密码' : '私钥内容'" :required="!editing">
-          <!-- 密码用掩码输入框，私钥用多行文本 -->
-          <a-input-password
-            v-if="editForm.auth_type === 'password'"
-            v-model:value="editForm.secret"
-            :placeholder="editing ? '留空表示不修改' : '请输入登录密码'"
+        <a-form-item label="关联凭据" required>
+          <a-select
+            v-model:value="editForm.credential_id"
+            :options="credOptions"
+            show-search
+            option-filter-prop="label"
+            placeholder="选择凭据管理中的凭据"
           />
-          <a-textarea
-            v-else
-            v-model:value="editForm.secret"
-            :rows="6"
-            :placeholder="editing ? '留空表示不修改' : '-----BEGIN OPENSSH PRIVATE KEY-----'"
-            class="secret-textarea"
-          />
-          <div v-if="editing" class="form-tip">
-            出于安全考虑不回显已保存的密文；变更认证方式时必须重新填写
-          </div>
-        </a-form-item>
-        <a-form-item v-if="editForm.auth_type === 'private_key'" label="私钥口令（可选）">
-          <a-input-password
-            v-model:value="editForm.passphrase"
-            :placeholder="editing ? '仅在填写时更新口令' : '私钥有口令保护时填写'"
-          />
+          <div class="form-tip">登录账号与密文随凭据管理维护；如需新增请先到 作业中心 → 凭据管理 创建</div>
         </a-form-item>
         <a-form-item label="工作目录">
           <a-input v-model:value="editForm.workdir" :placeholder="DEFAULT_WORKDIR" />
@@ -419,10 +380,6 @@ onMounted(loadList)
   font-size: 12px;
   color: var(--text-3);
   margin-top: 6px;
-}
-.secret-textarea {
-  font-family: Consolas, 'Courier New', monospace;
-  font-size: 12px;
 }
 .drawer-footer {
   display: flex;
