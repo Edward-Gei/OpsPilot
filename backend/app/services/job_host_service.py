@@ -1,8 +1,7 @@
 """作业主机业务服务：CRUD + 连通性测试 + 启用/禁用（执行范式改造）。
 
-安全约束（与凭据模块一致）：
-- secret / passphrase 入库前经 core/security.encrypt_text 加密（AES-256-GCM）；
-- 任何查询接口不返回密文字段（schema 层 JobHostDetailResponse 不含密文）；
+安全约束：
+- 登录认证引用凭据管理（credential_id），本模块不再持有任何密文字段；
 - 删除保护：被工单模板（ticket_template.job_host_id）引用时 42201。
 """
 import asyncio
@@ -15,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.response import Errors
 from app.engine.ssh_runner import open_connection
 from app.models.cmdb import JobHost
-from app.models.job import TicketTemplate
+from app.models.job import Credential, TicketTemplate
 
 # 连通性测试整体超时（秒）：建连 + 执行 echo ok
 _TEST_TIMEOUT = 10
@@ -71,12 +70,32 @@ async def _ensure_ip_port_unique(
         raise Errors.rejected(f"作业主机 {ip}:{ssh_port} 已存在")
 
 
+async def _ensure_credential_exists(session: AsyncSession, credential_id: int) -> None:
+    """关联凭据存在性校验（40401）。"""
+    if await session.get(Credential, credential_id) is None:
+        raise Errors.not_found("关联凭据不存在")
+
+
+async def credential_names(
+    session: AsyncSession, credential_ids: list[int | None]
+) -> dict[int, str]:
+    """批量取凭据 id→名称映射（列表/详情序列化补充 credential_name 用）。"""
+    ids = {i for i in credential_ids if i}
+    if not ids:
+        return {}
+    rows = await session.execute(
+        select(Credential.id, Credential.name).where(Credential.id.in_(ids))
+    )
+    return dict(rows.all())
+
+
 async def create_job_host(
     session: AsyncSession, *, data: dict, created_by: int | None
 ) -> JobHost:
-    """新增作业主机；data 中的 secret_enc/passphrase_enc 已在路由层加密。"""
+    """新增作业主机；登录认证引用凭据（credential_id 已在 schema 层必填）。"""
     await _ensure_name_unique(session, data["name"])
     await _ensure_ip_port_unique(session, data["ip"], data["ssh_port"])
+    await _ensure_credential_exists(session, data["credential_id"])
     jh = JobHost(**data, created_by=created_by)
     session.add(jh)
     await session.flush()
@@ -94,6 +113,8 @@ async def update_job_host(session: AsyncSession, job_host_id: int, *, data: dict
     new_port = data.get("ssh_port", jh.ssh_port)
     if new_ip != jh.ip or new_port != jh.ssh_port:
         await _ensure_ip_port_unique(session, new_ip, new_port, exclude_id=job_host_id)
+    if data.get("credential_id") and data["credential_id"] != jh.credential_id:
+        await _ensure_credential_exists(session, data["credential_id"])
     for field, value in data.items():
         setattr(jh, field, value)
     await session.flush()
@@ -117,18 +138,22 @@ async def delete_job_host(session: AsyncSession, job_host_id: int) -> JobHost:
 
 
 async def test_connectivity(session: AsyncSession, job_host_id: int) -> dict:
-    """连通性测试：SSH 连接作业主机执行 echo ok，结果落 last_check_* 字段。
-
-    JobHost 与 Credential 凭据字段同构（login_user/auth_type/secret_enc/
-    passphrase_enc），直接复用 ssh_runner.open_connection 建连（即用即解密）。
-    """
+    """连通性测试：按关联凭据 SSH 连接作业主机执行 echo ok，结果落 last_check_* 字段。"""
     jh = await get_job_host(session, job_host_id)
+    cred = await session.get(Credential, jh.credential_id) if jh.credential_id else None
+    if cred is None:
+        checked_at = datetime.now()
+        jh.last_check_at = checked_at
+        jh.last_check_ok = False
+        jh.last_check_msg = "未关联凭据，请先在凭据管理中创建并关联"
+        await session.flush()
+        return {"ok": False, "message": jh.last_check_msg, "checked_at": checked_at}
     ok, message = False, ""
     conn: asyncssh.SSHClientConnection | None = None
     try:
         async def _probe() -> tuple[bool, str]:
             nonlocal conn
-            conn = await open_connection(jh.ip, jh.ssh_port, jh)
+            conn = await open_connection(jh.ip, jh.ssh_port, cred)
             result = await conn.run("echo ok")
             if result.exit_status == 0 and "ok" in str(result.stdout):
                 return True, "连接成功"
