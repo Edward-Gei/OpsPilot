@@ -40,6 +40,9 @@ class Ticket(Base):
         String(32), comment="终态为 interrupted 时的起因：user_abort/system_crash/worker_lost"
     )
     exec_strategy_snap: Mapped[dict | None] = mapped_column(JSON, comment="执行策略快照（来自模板）")
+    credential_refs: Mapped[list | None] = mapped_column(
+        JSON, comment="引用凭据快照 [{alias, credential_id, credential_name}]；执行时按 id 实时取密文"
+    )
     flow_snap: Mapped[list | None] = mapped_column(
         JSON, comment="审批节点快照 [{node,role_id,role_name,approve_mode}]；免审为 []"
     )

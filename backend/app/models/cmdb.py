@@ -1,7 +1,7 @@
 """CMDB 域模型：主机 / 应用 / 关联 / 作业主机（03-数据库设计 §4）。"""
 from datetime import datetime
 
-from sqlalchemy import Boolean, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import DT3, UBIGINT, Base, created_at_column, pk_column, updated_at_column
@@ -68,7 +68,7 @@ class AppHost(Base):
 
 
 class JobHost(Base):
-    """作业主机（Jenkins agent）：替平台执行 Pipeline 步骤的通用执行节点。"""
+    """作业主机（Jenkins agent）：替平台执行 Pipeline 步骤的通用执行节点；登录认证引用凭据管理（credential_id）。"""
 
     __tablename__ = "job_host"
     __table_args__ = (
@@ -81,10 +81,9 @@ class JobHost(Base):
     name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, comment="作业主机名称")
     ip: Mapped[str] = mapped_column(String(45), nullable=False, comment="IP 地址")
     ssh_port: Mapped[int] = mapped_column(Integer, nullable=False, default=22, comment="SSH 端口")
-    login_user: Mapped[str] = mapped_column(String(64), nullable=False, comment="SSH 登录账号")
-    auth_type: Mapped[str] = mapped_column(String(16), nullable=False, comment="password / private_key")
-    secret_enc: Mapped[str] = mapped_column(Text, nullable=False, comment="密码或私钥密文（AES-256-GCM）")
-    passphrase_enc: Mapped[str | None] = mapped_column(Text, comment="私钥口令密文（可空）")
+    credential_id: Mapped[int | None] = mapped_column(
+        UBIGINT, comment="关联凭据 credential.id（登录认证随凭据管理；API 层必填）"
+    )
     workdir: Mapped[str] = mapped_column(String(255), nullable=False, default="/opt/opspilot/workspace", comment="工作目录")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="启用状态")
     last_check_at: Mapped[datetime | None] = mapped_column(DT3, comment="最近连通性测试时间")

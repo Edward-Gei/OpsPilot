@@ -60,6 +60,9 @@ class TicketTemplate(Base):
     visible_role_ids: Mapped[list | None] = mapped_column(
         JSON, comment="可使用角色 id 数组；空=所有具备 ticket:write 的角色"
     )
+    credential_refs: Mapped[list | None] = mapped_column(
+        JSON, comment="引用凭据 [{alias, credential_id}]；执行时以 CRED_<ALIAS>_* 环境变量注入 shell 步骤"
+    )
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="enabled", comment="enabled/disabled")
     current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, comment="当前生效版本号")
     created_by: Mapped[int | None] = mapped_column(UBIGINT)
