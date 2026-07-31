@@ -21,7 +21,7 @@ from app.engine import control as exec_ctrl
 from app.models.auth import Role, User, UserRole
 from app.models.cmdb import JobHost
 from app.models.execution import Execution, ExecutionStep
-from app.models.job import TicketTemplate
+from app.models.job import Credential, TicketTemplate
 from app.models.ticket import Ticket, TicketApproval, TicketStep
 from app.services import notify_service, template_service
 
@@ -199,6 +199,20 @@ async def create_ticket(
     if tpl.approval_enabled and not flow_snap:
         raise Errors.conflict("模板审批配置异常：已开启审批但无审批节点")
 
+    # 引用凭据快照：提单冻结 alias→凭据 id/名称，执行时按 id 实时取密文
+    ref_ids = [r["credential_id"] for r in (tpl.credential_refs or [])]
+    cred_names: dict[int, str] = {}
+    if ref_ids:
+        rows = await session.execute(
+            select(Credential.id, Credential.name).where(Credential.id.in_(ref_ids))
+        )
+        cred_names = dict(rows.all())
+    credential_refs_snap = [
+        {"alias": r["alias"], "credential_id": r["credential_id"],
+         "credential_name": cred_names.get(r["credential_id"], "")}
+        for r in (tpl.credential_refs or [])
+    ]
+
     ticket = Ticket(
         template_id=tpl.id,
         template_version_snap=tpl.current_version,
@@ -206,10 +220,11 @@ async def create_ticket(
         type=tpl.type,
         params=user_params,
         job_host_id=tpl.job_host_id,
-        job_host_snap={"id": jh.id, "name": jh.name, "ip": jh.ip, "ssh_port": jh.ssh_port,
-                       "login_user": jh.login_user, "workdir": jh.workdir} if jh else {},
+        job_host_snap={"id": jh.id, "name": jh.name, "ip": jh.ip,
+                       "ssh_port": jh.ssh_port, "workdir": jh.workdir} if jh else {},
         status=TicketStatus.APPROVING.value,
         exec_strategy_snap=tpl.exec_strategy or {},
+        credential_refs=credential_refs_snap,
         flow_snap=flow_snap,
         allow_withdraw_snap=tpl.allow_withdraw,
         creator_id=creator.id,

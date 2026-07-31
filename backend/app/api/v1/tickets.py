@@ -160,6 +160,7 @@ async def get_ticket(
         "exec_strategy": t.exec_strategy_snap or {},
         "flow_snap": t.flow_snap or [],
         "allow_withdraw": t.allow_withdraw_snap,
+        "credential_refs": t.credential_refs or [],
         "creator_name": (creator.display_name or creator.username) if creator else str(t.creator_id),
         "job_host": bundle["job_host"],
         "steps": [
