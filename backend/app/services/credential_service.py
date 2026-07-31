@@ -3,15 +3,15 @@
 安全约束（PRD CRED-01/02）：
 - secret / passphrase 入库前经 core/security.encrypt_text 加密；
 - 任何查询接口不返回密文字段，明文仅执行引擎（M5）解密使用；
-- 执行范式改造后模板步骤/工单步骤不再引用凭据（作业主机自带 SSH 凭据字段），
-  凭据为独立管理数据，删除无需引用保护。
+- 凭据被作业主机 / 模板引用时删除保护（42201）。
 """
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.response import Errors
 from app.core.security import encrypt_text
-from app.models.job import Credential
+from app.models.cmdb import JobHost
+from app.models.job import Credential, TicketTemplate
 
 
 async def get_credential_or_404(session: AsyncSession, credential_id: int) -> Credential:
@@ -117,8 +117,29 @@ async def update_credential(
 
 
 async def delete_credential(session: AsyncSession, credential_id: int) -> Credential:
-    """删除凭据；V2 起模板/工单步骤不再引用凭据，直接删除。"""
+    """删除凭据；被作业主机或模板引用时拒绝（42201）。"""
     cred = await get_credential_or_404(session, credential_id)
+    jh_count = (
+        await session.execute(
+            select(func.count()).select_from(JobHost)
+            .where(JobHost.credential_id == credential_id)
+        )
+    ).scalar_one()
+    if jh_count:
+        raise Errors.rejected(f"凭据被 {jh_count} 台作业主机引用，无法删除")
+    # credential_refs 为 JSON 数组，MySQL 侧用 JSON_CONTAINS 精确匹配 credential_id
+    tpl_count = (
+        await session.execute(
+            select(func.count()).select_from(TicketTemplate).where(
+                func.json_contains(
+                    func.coalesce(TicketTemplate.credential_refs, "[]"),
+                    f'{{"credential_id": {credential_id}}}',
+                )
+            )
+        )
+    ).scalar_one()
+    if tpl_count:
+        raise Errors.rejected(f"凭据被 {tpl_count} 个工单模板引用，无法删除")
     await session.delete(cred)
     await session.flush()
     return cred

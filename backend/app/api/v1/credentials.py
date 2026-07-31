@@ -91,7 +91,7 @@ async def delete_credential(
     session: DbSession,
     actor: User = Depends(require_perm("credential:write")),
 ) -> dict:
-    """删除凭据；被进行中工单步骤引用时 42201。"""
+    """删除凭据；被作业主机或模板引用时 42201。"""
     cred = await credential_service.delete_credential(session, credential_id)
     audit.log(module="job", action="credential.delete", actor_id=actor.id,
               actor_name=actor.username, source_ip=get_client_ip(request),
