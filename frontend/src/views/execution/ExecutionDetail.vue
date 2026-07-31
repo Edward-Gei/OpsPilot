@@ -216,6 +216,8 @@ let stopResize: (() => void) | null = null
 
 /** 底缘手柄拖拽：mousedown 后跟踪全局 mousemove 调整高度，mouseup 收尾 */
 function onResizeStart(e: MouseEvent) {
+  if (e.button !== 0) return // 仅左键触发拖拽
+  stopResize?.() // 防御：清掉可能残留的上一轮拖拽，避免覆盖 stopResize 泄漏旧监听
   e.preventDefault()
   userResized = true
   const startY = e.clientY
