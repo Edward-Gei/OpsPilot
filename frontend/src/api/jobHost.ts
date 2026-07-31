@@ -1,5 +1,5 @@
 // 作业主机 API（执行范式改造：脚本统一在固定作业主机上执行，04-API §5）
-// 安全红线与凭据一致：secret/passphrase 任何接口不回显，编辑传 ****** 或不传 = 不变更密文
+// 登录认证随关联凭据（凭据管理）；主机侧只选凭据不填密文
 import { request } from './http'
 import type { PageResult } from './system'
 
@@ -8,9 +8,8 @@ export interface JobHost {
   name: string
   ip: string
   ssh_port: number
-  login_user: string
-  auth_type: 'password' | 'private_key'
-  has_passphrase: boolean
+  credential_id: number | null
+  credential_name: string | null
   workdir: string
   enabled: boolean
   last_check_at: string | null
@@ -24,22 +23,16 @@ export interface JobHostCreate {
   name: string
   ip: string
   ssh_port?: number
-  login_user: string
-  auth_type: 'password' | 'private_key'
-  secret: string
-  passphrase?: string
+  credential_id: number
   workdir?: string
 }
 
-/** 编辑表单：secret 留空/传 ****** = 不变更密文 */
+/** 编辑表单：credential_id 传值即切换关联凭据 */
 export interface JobHostUpdate {
   name?: string
   ip?: string
   ssh_port?: number
-  login_user?: string
-  auth_type?: 'password' | 'private_key'
-  secret?: string
-  passphrase?: string
+  credential_id?: number
   workdir?: string
 }
 

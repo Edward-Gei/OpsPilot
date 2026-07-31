@@ -87,6 +87,13 @@ export interface NotifyRule {
   channels: string[]
 }
 
+/** 模板引用凭据行：脚本内以 $CRED_<别名大写>_USER / _SECRET / _PASSPHRASE 读取 */
+export interface CredentialRef {
+  alias: string
+  credential_id: number
+  credential_name?: string | null
+}
+
 /** 模板列表行（不含步骤/节点明细） */
 export interface TemplateItem {
   id: number
@@ -111,6 +118,7 @@ export interface TemplateDetail extends TemplateItem {
   visible_role_ids: number[]
   steps: (TemplateStep & { step_order: number })[]
   approval_nodes: ApprovalNode[]
+  credential_refs: CredentialRef[]
 }
 
 /** 模板新建/编辑共用全量配置体（04-API §5） */
@@ -128,6 +136,7 @@ export interface TemplateForm {
   allow_countersign: boolean
   notify_rules: NotifyRule[]
   visible_role_ids: number[]
+  credential_refs?: CredentialRef[]
   changelog?: string
 }
 

@@ -48,13 +48,12 @@ export interface TicketBrief {
   created_at: string | null
 }
 
-/** 提交时固化的作业主机快照（login_user 仅工单详情快照携带） */
+/** 提交时固化的作业主机快照（登录认证随关联凭据，快照不含账号信息） */
 export interface JobHostSnap {
   id: number
   name: string
   ip: string
   ssh_port: number
-  login_user?: string
   workdir: string
 }
 
@@ -97,6 +96,8 @@ export interface TicketDetail extends TicketBrief {
   steps: TicketStepSnap[]
   approvals: ApprovalRecord[]
   execution: ExecutionBrief | null
+  /** 提单时冻结的模板引用凭据（执行时按 credential_id 实时取密文） */
+  credential_refs?: { alias: string; credential_id: number; credential_name: string }[]
 }
 
 export interface TicketQuery {
