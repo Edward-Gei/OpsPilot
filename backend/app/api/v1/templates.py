@@ -10,7 +10,7 @@ from app.core.deps import DbSession, get_client_ip, require_perm
 from app.core.response import ok
 from app.models.auth import User
 from app.schemas.job import TemplateStatusRequest, TemplateUpsertRequest
-from app.services import template_service
+from app.services import job_host_service, template_service
 
 router = APIRouter(prefix="/templates", tags=["工单模板"])
 
@@ -110,6 +110,9 @@ async def get_template(
     steps = await template_service.get_template_steps(session, template_id)
     nodes = await template_service.get_template_nodes(session, template_id)
     data = _tpl_brief(tpl)
+    cred_names = await job_host_service.credential_names(
+        session, [r["credential_id"] for r in (tpl.credential_refs or [])]
+    )
     data.update({
         "exec_strategy": tpl.exec_strategy or {},
         "allow_withdraw": tpl.allow_withdraw,
@@ -117,6 +120,10 @@ async def get_template(
         "allow_countersign": tpl.allow_countersign,
         "notify_rules": tpl.notify_rules or [],
         "visible_role_ids": tpl.visible_role_ids or [],
+        "credential_refs": [
+            {**r, "credential_name": cred_names.get(r["credential_id"])}
+            for r in (tpl.credential_refs or [])
+        ],
         "steps": [_step_row(s) for s in steps],
         "approval_nodes": [_node_row(n) for n in nodes],
     })

@@ -122,6 +122,21 @@ class NotifyRuleInput(BaseModel):
         return v
 
 
+class CredentialRefInput(BaseModel):
+    """模板引用凭据行：执行时以 CRED_<ALIAS大写>_USER/_SECRET/_PASSPHRASE 注入 shell 步骤。"""
+
+    alias: str = Field(min_length=1, max_length=32)
+    credential_id: int
+
+    @field_validator("alias")
+    @classmethod
+    def validate_alias(cls, v: str) -> str:
+        """别名限标识符格式（映射为环境变量名的一部分）。"""
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", v):
+            raise ValueError(f"凭据别名 {v} 不合法：仅限字母/数字/下划线且以字母开头")
+        return v
+
+
 class TemplateUpsertRequest(BaseModel):
     """模板新建/编辑共用全量配置体（04-API §5）。
 
@@ -142,6 +157,10 @@ class TemplateUpsertRequest(BaseModel):
     allow_countersign: bool = False
     notify_rules: list[NotifyRuleInput] = Field(default_factory=list)
     visible_role_ids: list[int] = Field(default_factory=list, description="空=所有具备 ticket:write 的角色")
+    credential_refs: list[CredentialRefInput] = Field(
+        default_factory=list, max_length=10,
+        description="引用凭据；脚本内以 $CRED_<别名大写>_USER/_SECRET 读取"
+    )
     changelog: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
@@ -156,6 +175,16 @@ class TemplateUpsertRequest(BaseModel):
         else:
             self.approval_nodes = []
         return self
+
+    @field_validator("credential_refs")
+    @classmethod
+    def validate_ref_alias_unique(cls, v: list[CredentialRefInput]) -> list[CredentialRefInput]:
+        """别名大写后不允许重复（环境变量名冲突）。"""
+        names = [r.alias.upper() for r in v]
+        dup = {n for n in names if names.count(n) > 1}
+        if dup:
+            raise ValueError(f"凭据别名重复: {sorted(dup)}")
+        return v
 
 
 class TemplateStatusRequest(BaseModel):

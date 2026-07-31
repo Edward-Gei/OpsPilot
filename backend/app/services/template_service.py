@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.response import Errors
 from app.models.auth import Role
 from app.models.cmdb import JobHost
-from app.models.job import TemplateApprovalNode, TemplateStep, TemplateVersion, TicketTemplate
+from app.models.job import Credential, TemplateApprovalNode, TemplateStep, TemplateVersion, TicketTemplate
 from app.models.ticket import Ticket
 
 # 进行中工单状态集合（引用保护判定用；原定义在 cmdb_service，执行范式改造后本地维护）
@@ -122,6 +122,13 @@ async def _validate_refs(session: AsyncSession, data: dict) -> None:
         )
         if role_ids - found_roles:
             raise Errors.param(f"角色不存在: {sorted(role_ids - found_roles)}")
+    ref_ids = {r["credential_id"] for r in data.get("credential_refs") or []}
+    if ref_ids:
+        found = set(
+            (await session.execute(select(Credential.id).where(Credential.id.in_(ref_ids)))).scalars()
+        )
+        if ref_ids - found:
+            raise Errors.param(f"引用凭据不存在: {sorted(ref_ids - found)}")
 
 
 def _build_snapshot(data: dict) -> dict:
@@ -140,6 +147,7 @@ def _build_snapshot(data: dict) -> dict:
         "allow_countersign": data["allow_countersign"],
         "notify_rules": data["notify_rules"],
         "visible_role_ids": data["visible_role_ids"],
+        "credential_refs": data.get("credential_refs") or [],
     }
 
 
@@ -147,6 +155,7 @@ def _build_snapshot(data: dict) -> dict:
 _RULE_KEYS = (
     "job_host_id", "steps", "exec_strategy", "approval_enabled", "approval_nodes",
     "allow_withdraw", "allow_transfer", "allow_countersign", "notify_rules", "visible_role_ids",
+    "credential_refs",
 )
 
 
@@ -199,6 +208,7 @@ def _apply_basic(tpl: TicketTemplate, data: dict) -> None:
     tpl.allow_countersign = data["allow_countersign"]
     tpl.notify_rules = data["notify_rules"]
     tpl.visible_role_ids = data["visible_role_ids"]
+    tpl.credential_refs = data.get("credential_refs") or []
 
 
 async def create_template(
