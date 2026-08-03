@@ -8,6 +8,7 @@ import * as authApi from '@/api/auth'
 const router = useRouter()
 const form = reactive({ email: '' })
 const loading = ref(false)
+const checking = ref(true)
 const enabled = ref(false)
 const submitted = ref(false)
 const universalMessage = '如果该邮箱已绑定本地账号，系统将发送密码重置邮件，请查收邮箱。'
@@ -17,6 +18,8 @@ onMounted(async () => {
     enabled.value = (await authApi.fetchSsoOptions()).forgot_password_enabled
   } catch {
     enabled.value = false
+  } finally {
+    checking.value = false
   }
 })
 
@@ -53,7 +56,8 @@ async function submit() {
       </div>
     </div>
     <div class="form-side">
-      <div class="form-card">
+      <div class="form-card" :class="{ 'is-checking': checking }">
+        <div v-if="checking" class="capability-loading"><a-spin size="small" /><span>正在检查邮件服务...</span></div>
         <h2>找回密码</h2>
         <div class="sub">通过已绑定邮箱申请密码重置</div>
         <p v-if="!enabled" class="system-hint">当前系统未配置密码重置邮件服务，请联系管理员重置密码。</p>
@@ -89,6 +93,8 @@ async function submit() {
 .fi { width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.2); color: #bfdbfe; display: flex; align-items: center; justify-content: center; }
 .form-side { flex: 1; background: linear-gradient(145deg, #f8fafc 0%, #eef2ff 52%, #ecfeff 100%); display: flex; align-items: center; justify-content: center; padding: 40px; }
 .form-card { position: relative; overflow: hidden; width: 400px; background: rgba(255,255,255,.94); border: 1px solid rgba(99,102,241,.2); border-radius: 22px; padding: 42px 40px 34px; box-shadow: 0 20px 50px rgba(30,41,99,.16), 0 4px 14px rgba(14,116,144,.08); }
+.form-card.is-checking > :not(.capability-loading) { visibility: hidden; }
+.capability-loading { min-height: 88px; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text-3); font-size: 13px; }
 .form-card::before { content: ''; position: absolute; inset: 0 0 auto; height: 5px; background: linear-gradient(90deg, #06b6d4, #2563eb 48%, #7c3aed); }
 .form-card h2 { font-size: 24px; font-weight: 800; margin: 0 0 10px; color: #111827; letter-spacing: -.2px; }
 .sub, .system-hint, .result { color: var(--text-3); line-height: 1.7; }
