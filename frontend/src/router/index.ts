@@ -14,6 +14,18 @@ const router = createRouter({
       meta: { title: '登录' },
     },
     {
+      path: '/forgot-password',
+      name: 'forgot-password',
+      component: () => import('@/views/ForgotPassword.vue'),
+      meta: { title: '找回密码' },
+    },
+    {
+      path: '/reset-password',
+      name: 'reset-password',
+      component: () => import('@/views/ResetPassword.vue'),
+      meta: { title: '重置密码' },
+    },
+    {
       path: '/',
       component: BasicLayout,
       children: [
@@ -122,7 +134,7 @@ const router = createRouter({
 // 登录守卫：未登录回登录页；已登录补拉用户信息；meta.perm 权限过滤
 router.beforeEach(async (to) => {
   const userStore = useUserStore()
-  if (to.name === 'login') {
+  if (to.name === 'login' || to.name === 'forgot-password' || to.name === 'reset-password') {
     // 已登录访问登录页直接回工作台（携带 SSO ticket 时放行走换票流程）
     if (userStore.isLoggedIn() && !to.query.ticket) return { path: '/' }
     return true

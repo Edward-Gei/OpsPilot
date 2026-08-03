@@ -281,3 +281,15 @@ notify:config system:config
 ```
 
 内置角色映射：admin=全部（含 job_host:read/write，仅 admin 具备）；ops=cmdb:*、credential:read、template:*、ticket:read/write、execution:read/control（控制类接口另有对象级校验：仅工单创建人或 admin）；approver=cmdb:read、ticket:read/approve、execution:read；auditor=cmdb:read、execution:read、audit:*。
+
+## 15. 密码重置接口
+
+| 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/auth/sso/options` | 公开 | 返回 `sso_enabled`、`forgot_password_enabled` |
+| GET | `/auth/password-policy` | 公开 | 返回当前密码策略 |
+| POST | `/auth/forgot-password` | 公开 | 接收 `{email}`，所有分支 HTTP 200 且统一文案 |
+| GET | `/auth/reset-password/validate?token=` | 公开 | 返回 `valid/expired/used/invalid` |
+| POST | `/auth/reset-password` | 公开 | 接收 `{token,new_password}`，成功后吊销全部 Refresh |
+
+密码重置申请不返回邮箱存在性、账号来源、发送结果或限流原因；审计仅记录 `pwd_reset_requested`、`pwd_reset_success`、`pwd_reset_failed`。

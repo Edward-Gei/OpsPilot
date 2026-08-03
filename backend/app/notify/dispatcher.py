@@ -14,6 +14,7 @@ import logging
 import socket
 from datetime import datetime, timedelta
 
+from app import audit
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +39,21 @@ SCAN_BATCH = 100
 
 # 队列消息触发后的延迟（秒）：给业务事务留出 commit 时间，降低竞态空扫概率
 _QUEUE_SETTLE_DELAY = 1.0
+
+
+async def _audit_terminal_password_reset_failure(record: NotificationRecord) -> None:
+    if record.event != "password_reset" or record.channel_type != "email" or record.status != "failed":
+        return
+    key = redis_mod.KEY_PWD_RESET_NOTIFICATION_IP.format(record_id=record.id)
+    source_ip = await redis_mod.redis_client.get(key)
+    audit.log(
+        module="auth",
+        action="pwd_reset_failed",
+        result="failed",
+        source_ip=source_ip,
+        detail={"reason": "email_send_failed", "error": record.error},
+    )
+    await redis_mod.redis_client.delete(key)
 
 
 async def _resolve_emails(session: AsyncSession, receiver: str | None) -> list[str]:
@@ -79,13 +95,14 @@ async def dispatch_record(session: AsyncSession, record: NotificationRecord) -> 
     channel_row = (
         await session.execute(select(NotifyChannel).where(NotifyChannel.type == record.channel_type))
     ).scalar_one_or_none()
-    if channel_row is None or not channel_row.enabled:
+    security_email = record.event == "password_reset" and record.channel_type == "email"
+    if channel_row is None or (not channel_row.enabled and not security_email):
         record.status = "failed"
         record.error = "渠道未启用"
         return
     receivers: list[str] = []
     if record.channel_type == "email":
-        receivers = await _resolve_emails(session, record.receiver)
+        receivers = [record.receiver] if security_email and record.receiver else await _resolve_emails(session, record.receiver)
         if not receivers:
             record.status = "failed"
             record.error = "收件人均未配置邮箱"
@@ -103,6 +120,7 @@ async def dispatch_record(session: AsyncSession, record: NotificationRecord) -> 
         await get_channel(record.channel_type).send(message, channel_row.config or {}, secret)
     except ChannelSendError as exc:
         _schedule_retry(record, str(exc))
+        await _audit_terminal_password_reset_failure(record)
         logger.warning("通知 #%s [%s/%s] 发送失败: %s", record.id, record.event, record.channel_type, exc)
         return
     except Exception as exc:  # noqa: BLE001 渠道实现漏转的异常兜底为可重试

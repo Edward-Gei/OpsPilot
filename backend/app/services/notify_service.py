@@ -167,6 +167,34 @@ async def emit(
         logger.warning("通知队列 XADD 失败（事件 %s），等待定时扫描兜底", event.value)
 
 
+async def emit_security_email(
+    session: AsyncSession, *, receiver: str, title: str, content: str, source_ip: str | None = None
+) -> None:
+    """落密码重置安全邮件记录，不经过事件映射或站内信。"""
+    record = NotificationRecord(
+        event="password_reset",
+        channel_type=NotifyChannelType.EMAIL.value,
+        receiver=receiver,
+        title=title,
+        content=content,
+        status="pending",
+    )
+    session.add(record)
+    await session.flush()
+    if source_ip:
+        await redis_mod.redis_client.set(
+            redis_mod.KEY_PWD_RESET_NOTIFICATION_IP.format(record_id=record.id),
+            source_ip,
+            ex=86400,
+        )
+    try:
+        await redis_mod.redis_client.xadd(
+            redis_mod.NOTIFY_QUEUE, {"event": "password_reset"}, maxlen=10000, approximate=True
+        )
+    except Exception:  # noqa: BLE001 队列失败由扫描兜底
+        logger.warning("密码重置邮件队列提示失败，等待定时扫描兜底")
+
+
 async def _emit_inapp(
     session: AsyncSession,
     event: NotifyEvent,

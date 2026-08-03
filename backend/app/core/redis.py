@@ -12,6 +12,9 @@
     auth:mfa:pending:{uid}  MFA 绑定中的待确认 secret（TTL 600s）
     auth:oidc:state:{state} OIDC 授权码流程 state 防伪造（TTL 600s）
     auth:sso:ticket:{tk}    SSO 回调一次性换票（TTL 60s）
+    pwd_reset:{user_id}    密码重置 token 哈希（TTL 配置）
+    pwd_reset:lookup:{hash} token 哈希到用户 ID 索引（TTL 配置）
+    auth:refresh:{user_id} 用户 Refresh jti 集合
 """
 import redis.asyncio as aioredis
 
@@ -44,6 +47,14 @@ KEY_USER_PERMS = "auth:perms:{user_id}"
 KEY_MFA_PENDING = "auth:mfa:pending:{user_id}"
 KEY_OIDC_STATE = "auth:oidc:state:{state}"
 KEY_SSO_TICKET = "auth:sso:ticket:{ticket}"
+KEY_PWD_RESET = "pwd_reset:{user_id}"
+KEY_PWD_RESET_LOOKUP = "pwd_reset:lookup:{token_hash}"
+KEY_PWD_RESET_USED = "pwd_reset:used:{token_hash}"
+KEY_PWD_RESET_EMAIL_COOLDOWN = "pwd_reset:email:cooldown:{email}"
+KEY_PWD_RESET_EMAIL_DAILY = "pwd_reset:email:daily:{date}:{email}"
+KEY_PWD_RESET_IP_HOURLY = "pwd_reset:ip:hourly:{hour}:{ip}"
+KEY_PWD_RESET_NOTIFICATION_IP = "pwd_reset:notification_ip:{record_id}"
+KEY_USER_REFRESH = "auth:refresh:{user_id}"
 
 
 

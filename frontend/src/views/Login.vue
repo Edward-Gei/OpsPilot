@@ -42,6 +42,7 @@ const totpSecret = ref('')
 
 // SSO 选项（OIDC 未配置则隐藏按钮）
 const oidcEnabled = ref(false)
+const forgotPasswordEnabled = ref(false)
 
 // 产品价值点：与 PRD 模块定位一致
 const features = [
@@ -58,7 +59,9 @@ onMounted(async () => {
     await runFlow(() => authApi.ssoExchange(ticket))
   }
   try {
-    oidcEnabled.value = (await authApi.fetchSsoOptions()).oidc_enabled
+    const options = await authApi.fetchSsoOptions()
+    oidcEnabled.value = options.oidc_enabled
+    forgotPasswordEnabled.value = options.forgot_password_enabled
   } catch {
     /* 选项获取失败不影响密码登录 */
   }
@@ -223,6 +226,9 @@ function onOidcLogin() {
             >
               登 录
             </a-button>
+            <div v-if="forgotPasswordEnabled" class="forgot-link">
+              <a @click="router.push('/forgot-password')">忘记密码？</a>
+            </div>
           </a-form>
           <template v-if="oidcEnabled">
             <div class="divider">其他登录方式</div>
@@ -466,25 +472,35 @@ function onOidcLogin() {
 /* ===== 右侧表单区 ===== */
 .form-side {
   flex: 1;
-  background: var(--bg-layout);
+  background: linear-gradient(145deg, #f8fafc 0%, #eef2ff 52%, #ecfeff 100%);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 40px;
 }
 .form-card {
+  position: relative;
+  overflow: hidden;
   width: 400px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 40px;
-  box-shadow: var(--shadow-card-hover);
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 22px;
+  padding: 42px 40px 34px;
+  box-shadow: 0 20px 50px rgba(30, 41, 99, 0.16), 0 4px 14px rgba(14, 116, 144, 0.08);
+}
+.form-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 5px;
+  background: linear-gradient(90deg, #06b6d4, #2563eb 48%, #7c3aed);
 }
 .form-card h2 {
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 800;
   margin: 0 0 10px;
-  color: var(--text-1);
+  color: #111827;
+  letter-spacing: -0.2px;
 }
 .form-card .sub {
   font-size: 13px;
@@ -495,16 +511,44 @@ function onOidcLogin() {
 .form-card :deep(.ant-form-item-label > label) {
   font-size: 15px;
   font-weight: 700;
+  color: #334155;
+}
+.form-card :deep(.ant-input),
+.form-card :deep(.ant-input-affix-wrapper) {
+  border-color: #dbe4f0;
+  background: #f8fafc;
+  border-radius: 10px;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+.form-card :deep(.ant-input:hover),
+.form-card :deep(.ant-input-affix-wrapper:hover),
+.form-card :deep(.ant-input:focus),
+.form-card :deep(.ant-input-affix-wrapper-focused) {
+  border-color: #06b6d4;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.14);
 }
 .login-btn {
   height: 46px;
   font-size: 15px;
   font-weight: 700;
-  letter-spacing: 2px;
-  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+  letter-spacing: 1px;
+  border-radius: 10px;
+  background: linear-gradient(100deg, #2563eb, #4f46e5 55%, #7c3aed);
   border: 0;
-  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
+  box-shadow: 0 10px 20px rgba(79, 70, 229, 0.24);
   margin-top: 4px;
+  transition: transform 0.2s, box-shadow 0.2s, filter 0.2s;
+}
+.login-btn:hover {
+  filter: saturate(1.12) brightness(1.05);
+  transform: translateY(-1px);
+  box-shadow: 0 13px 24px rgba(79, 70, 229, 0.3);
+}
+.forgot-link {
+  text-align: right;
+  margin-top: 12px;
+  font-size: 13px;
 }
 .divider {
   display: flex;
@@ -596,6 +640,19 @@ function onOidcLogin() {
 @media (max-width: 900px) {
   .brand {
     display: none;
+  }
+  .form-side {
+    padding: 24px 16px;
+  }
+  .form-card {
+    width: min(400px, 100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .login-btn,
+  .form-card :deep(.ant-input),
+  .form-card :deep(.ant-input-affix-wrapper) {
+    transition: none;
   }
 }
 </style>

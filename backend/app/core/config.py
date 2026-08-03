@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     refresh_token_days: int = 7                        # Refresh Token 有效期（天）
     mfa_token_minutes: int = 5                         # MFA 挑战令牌有效期（分钟，仅限 /auth/mfa/*）
     pwd_change_token_minutes: int = 10                 # 强制改密令牌有效期（分钟，仅限 PUT /auth/password）
+    reset_token_ttl_minutes: int = 30                   # 忘记密码令牌有效期（分钟）
+    public_base_url: str = "http://localhost:8080"     # 邮件链接公共地址
 
     # 审计与执行
     audit_retention_days: int = 365                    # 审计日志保留天数（按 PRD 放配置文件）

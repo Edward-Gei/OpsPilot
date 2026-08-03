@@ -16,6 +16,7 @@ import asyncio
 import pytest
 from sqlalchemy import select
 
+from app import audit
 from app.core.constants import NotifyEvent
 from app.core.security import decrypt_text, encrypt_text
 from app.models.auth import User
@@ -285,6 +286,26 @@ class TestDispatcher:
             # 第 4 次（重试耗尽）→ failed
             await disp.dispatch_record(session, record)
             assert record.status == "failed" and record.retry_count == disp.MAX_RETRY
+
+    async def test_password_reset_terminal_send_failure_is_audited(self, db_factory, seed, monkeypatch):
+        await self._seed_channel(db_factory)
+        fake = _FakeChannel(error="SMTP connection failed")
+        monkeypatch.setattr(disp, "get_channel", lambda _t: fake)
+        entries = []
+        monkeypatch.setattr(audit, "log", lambda **kwargs: entries.append(kwargs))
+        async with db_factory() as session:
+            record = _record(event="password_reset", receiver="ops1@example.com")
+            session.add(record)
+            await session.flush()
+            await disp.redis_mod.redis_client.set(
+                f"pwd_reset:notification_ip:{record.id}",
+                "203.0.113.9",
+            )
+            for _ in range(disp.MAX_RETRY + 1):
+                await disp.dispatch_record(session, record)
+                record.next_retry_at = None
+            assert record.status == "failed"
+        assert any(entry["action"] == "pwd_reset_failed" and entry["source_ip"] == "203.0.113.9" for entry in entries)
 
     async def test_scan_once_picks_due_records(self, db_factory, seed, monkeypatch):
         """扫描兜底：只处理到期 pending（未到期跳过），成功后回写落库。"""
