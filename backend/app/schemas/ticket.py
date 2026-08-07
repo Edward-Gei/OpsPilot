@@ -24,6 +24,14 @@ class TicketCreateRequest(BaseModel):
 
     template_id: int
     params: dict[str, str] = Field(default_factory=dict, description="汇总参数值 {name: value}")
+    prepare_id: str | None = Field(default=None, description="动态参数预生成令牌")
+
+
+class TicketPrepareRequest(BaseModel):
+    """创建工单前执行流程模板动态参数脚本。"""
+
+    template_id: int
+    params: dict[str, str] = Field(default_factory=dict)
 
 
 class ApproveRequest(BaseModel):

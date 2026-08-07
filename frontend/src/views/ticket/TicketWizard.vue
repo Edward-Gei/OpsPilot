@@ -49,6 +49,8 @@ watch(
 const formLoading = ref(false)
 const form = ref<ticketApi.TemplateFormDesc | null>(null)
 const paramValues = reactive<Record<string, string>>({})
+const paramOptions = reactive<Record<string, string[]>>({})
+const prepareId = ref<string | undefined>()
 
 /** 选定模板进入第二步：拉取表单描述并按默认值初始化参数 */
 async function next() {
@@ -60,6 +62,8 @@ async function next() {
   try {
     form.value = await ticketApi.getTemplateFormDesc(selectedId.value)
     Object.keys(paramValues).forEach((k) => delete paramValues[k])
+    Object.keys(paramOptions).forEach((k) => delete paramOptions[k])
+    prepareId.value = undefined
     for (const p of form.value.params) paramValues[p.name] = p.default ?? ''
     step.value = 1
   } catch {
@@ -86,7 +90,7 @@ async function onSubmit() {
   if (!form.value) return
   // 必填参数前端预校验（后端 40001 兜底）
   for (const p of form.value.params) {
-    if (p.required && !paramValues[p.name]?.trim()) {
+    if (p.required && p.source !== 'generated' && !paramValues[p.name]?.trim()) {
       message.warning(`请填写必填参数「${p.label || p.name}」`)
       return
     }
@@ -98,7 +102,15 @@ async function onSubmit() {
     for (const [k, v] of Object.entries(paramValues)) {
       if (v.trim()) params[k] = v
     }
-    const res = await ticketApi.createTicket(form.value.template.id, params)
+    const prepared = await ticketApi.prepareTicket(form.value.template.id, params)
+    Object.assign(paramOptions, prepared.options)
+    const optionNames = Object.keys(prepared.options)
+    if (optionNames.some((name) => !params[name])) {
+      message.info('动态参数已生成，请选择候选值后再次提交')
+      return
+    }
+    prepareId.value = prepared.prepare_id
+    const res = await ticketApi.createTicket(form.value.template.id, params, prepareId.value)
     if (res.status === 'queued') message.success(`工单 ${res.ticket_no} 已提交，免审进入执行队列`)
     else message.success(`工单 ${res.ticket_no} 已提交，等待第 ${res.current_node} 节点审批`)
     emit('update:open', false)
@@ -157,7 +169,7 @@ const jobHostText = computed(() => {
             </div>
             <div class="tpl-card-desc">{{ t.description || '暂无说明' }}</div>
             <div class="tpl-card-foot">
-              <a-tag color="cyan">v{{ t.current_version }}</a-tag>
+              <a-tag color="cyan">{{ t.process_name || '流程模板' }}</a-tag>
               <a-tag :color="t.approval_enabled ? 'gold' : 'default'">{{ t.approval_enabled ? '需审批' : '免审' }}</a-tag>
             </div>
           </div>
@@ -173,7 +185,7 @@ const jobHostText = computed(() => {
     <template v-else-if="form">
       <div class="w-tpl-head">
         <b>{{ form.template.name }}</b>
-        <a-tag color="cyan">v{{ form.template.current_version }}</a-tag>
+        <a-tag color="cyan">{{ form.template.process_name }}</a-tag>
         <span class="w-tpl-tip">标题将使用模板名，提交后作业主机/脚本/审批流固化为快照</span>
       </div>
 
@@ -187,7 +199,8 @@ const jobHostText = computed(() => {
             <span class="w-param-name">{{ p.name }}</span>
             <span v-if="p.description" class="w-param-desc">{{ p.description }}</span>
           </template>
-          <a-input v-model:value="paramValues[p.name]" :placeholder="p.default ? `默认：${p.default}` : ''" />
+          <a-select v-if="paramOptions[p.name]?.length || p.input_type === 'enum'" v-model:value="paramValues[p.name]" :options="(paramOptions[p.name] || p.options || []).map((v) => ({ label: v, value: v }))" />
+          <a-input v-else v-model:value="paramValues[p.name]" :placeholder="p.default ? `默认：${p.default}` : ''" />
         </a-form-item>
       </a-form>
 
@@ -201,7 +214,7 @@ const jobHostText = computed(() => {
           </a-tag>
         </a-descriptions-item>
         <a-descriptions-item label="审批流" :span="2">
-          <template v-if="form.flow.length">
+          <template v-if="form.flow?.length">
             <a-tag v-for="n in form.flow" :key="n.node" color="gold">
               节点{{ n.node }}：{{ n.role_name }}（{{ approveModeText[n.approve_mode as keyof typeof approveModeText] || n.approve_mode }}）
             </a-tag>

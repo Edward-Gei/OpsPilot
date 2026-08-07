@@ -13,6 +13,7 @@ from app.api.v1.notify import router as notify_router
 from app.api.v1.roles import router as roles_router
 from app.api.v1.search import router as search_router
 from app.api.v1.templates import router as templates_router
+from app.api.v1.process_templates import router as process_templates_router
 from app.api.v1.system import router as system_router
 from app.api.v1.tickets import router as tickets_router
 from app.api.v1.tokens import router as tokens_router
@@ -28,6 +29,7 @@ api_router.include_router(cmdb_router)
 api_router.include_router(credentials_router)
 api_router.include_router(job_hosts_router)
 api_router.include_router(templates_router)
+api_router.include_router(process_templates_router)
 api_router.include_router(tickets_router)
 api_router.include_router(executions_router)
 api_router.include_router(notify_router)

@@ -62,8 +62,22 @@ const router = createRouter({
         {
           path: 'job/templates',
           name: 'job-templates',
-          component: () => import('@/views/job/TemplateList.vue'),
+          redirect: '/job/templates/tickets',
           meta: { title: '模板管理', perm: 'template:read' },
+          children: [
+            {
+              path: 'tickets',
+              name: 'job-template-tickets',
+              component: () => import('@/views/job/TicketTemplateList.vue'),
+              meta: { title: '工单模板', perm: 'template:read', menuKey: 'job-template-tickets' },
+            },
+            {
+              path: 'processes',
+              name: 'job-template-processes',
+              component: () => import('@/views/job/ProcessTemplateList.vue'),
+              meta: { title: '流程模板', perm: 'template:read', menuKey: 'job-template-processes' },
+            },
+          ],
         },
         {
           path: 'job/credentials',

@@ -108,6 +108,7 @@ async function submit() {
 .back { display: block; margin-top: 22px; text-align: center; color: #2563eb; font-weight: 600; }
 .back:hover { color: #7c3aed; }
 .foot { text-align: center; font-size: 12px; color: var(--text-3); margin-top: 26px; }
+
 @media (max-width: 900px) { .brand { display: none; } .form-side { padding: 24px 16px; } .form-card { width: min(400px, 100%); } }
 @media (prefers-reduced-motion: reduce) { .login-btn, .form-card :deep(.ant-input), .form-card :deep(.ant-input-affix-wrapper) { transition: none; } }
 </style>

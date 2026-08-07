@@ -186,6 +186,7 @@ h2 { margin: 0 0 10px; color: #111827; font-size: 24px; font-weight: 800; line-h
 .back-link { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; margin-top: 18px; color: #2563eb; font-weight: 600; }
 .back-link:hover { color: #7c3aed; }
 .foot { margin-top: 16px; color: var(--text-3); font-size: 12px; text-align: center; }
+
 @media (max-width: 900px) { .brand { display: none; } .form-side { padding: 24px 16px; } .form-card { padding: 38px 28px 30px; } }
 @media (prefers-reduced-motion: reduce) { .form-card :deep(.ant-input), .form-card :deep(.ant-input-affix-wrapper), .login-btn { transition: none; } }
 </style>

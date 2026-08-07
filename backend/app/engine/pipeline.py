@@ -34,7 +34,7 @@ from app.models.auth import User
 from app.models.cmdb import JobHost
 from app.models.execution import Execution, ExecutionStep
 from app.models.job import Credential
-from app.models.ticket import Ticket, TicketStep
+from app.models.ticket import Ticket, TicketApproval, TicketStep
 from app.engine import ansible_runner, control as ctrl, events, ssh_runner
 from app.engine.logs import LogChannel
 
@@ -97,6 +97,8 @@ class PipelineRunner:
                 await self._mark_running()
                 try:
                     aborted = await self._run_steps()
+                    if aborted is None:
+                        return
                 except Exception:
                     # 引擎内异常：非业务失败，按系统崩溃口径中断（决策三）
                     logger.exception("执行 %s 引擎异常", self.eid)
@@ -138,16 +140,6 @@ class PipelineRunner:
         if self.credential is None:
             self.cred_error = "作业主机未关联凭据或凭据已删除，请在系统设置中重新关联"
             return True
-        for ref in self.ticket.credential_refs or []:
-            cred = await s.get(Credential, ref["credential_id"])
-            if cred is None:
-                self.cred_error = f"引用凭据 {ref.get('credential_name') or ref['credential_id']} 已被删除"
-                break
-            try:
-                self.cred_env.update(build_cred_env(ref["alias"], cred))
-            except RuntimeError as exc:   # 密文损坏：decrypt_text 统一转译
-                self.cred_error = str(exc)
-                break
         return True
 
     # ---------- 状态迁移辅助 ----------
@@ -216,10 +208,27 @@ class PipelineRunner:
         }
         fail_fast = bool(self.strategy.get("fail_fast", True))
         for step in steps:
+            if step.status == ExecutionStatus.SUCCESS.value:
+                continue
             # 检查点②：每步骤开始前
             if not await self._checkpoint():
                 return True
             tstep = ticket_steps[step.step_order]
+            # 步骤前审批：未通过时保留 queued 执行实例，等待审批 API 重新入队。
+            if tstep.approval_role_id_snap:
+                approved = (await s.execute(
+                    select(TicketApproval.id).where(
+                        TicketApproval.ticket_id == self.ticket.id,
+                        TicketApproval.step_order == step.step_order,
+                        TicketApproval.action == "approve",
+                    ).limit(1)
+                )).scalar_one_or_none()
+                if approved is None:
+                    self.ticket.status = TicketStatus.APPROVING.value
+                    self.ticket.current_step = step.step_order
+                    self.execution.status = ExecutionStatus.QUEUED.value
+                    await s.commit()
+                    return None
             step_failed = await self._run_one_step(step, tstep)
             # 检查点③：每步骤结束后
             if self.control.abort:

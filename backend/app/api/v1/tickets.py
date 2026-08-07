@@ -14,8 +14,8 @@ from app.core.deps import DbSession, get_client_ip, require_perm
 from app.core.response import ok
 from app.engine import control as exec_ctrl
 from app.models.auth import User
-from app.schemas.ticket import ApproveRequest, TicketCreateRequest
-from app.services import ticket_service
+from app.schemas.ticket import ApproveRequest, TicketCreateRequest, TicketPrepareRequest
+from app.services import parameter_prepare_service, ticket_service
 
 router = APIRouter(prefix="/tickets", tags=["工单"])
 
@@ -26,14 +26,15 @@ def _ticket_brief(t, creator_names: dict[int, str] | None = None) -> dict:
         "id": t.id,
         "ticket_no": t.ticket_no,
         "template_id": t.template_id,
-        "template_version": t.template_version_snap,
         "type": t.type,
         "title": t.title,
         "job_host_id": t.job_host_id,
         "job_host_name": (t.job_host_snap or {}).get("name", ""),
         "status": t.status,
-        "current_node": t.current_node,
-        "total_nodes": len(t.flow_snap or []),
+        "process_template_id": t.process_template_id_snap,
+        "process_name": t.process_name_snap,
+        "current_step": t.current_step,
+        "total_steps": len((t.flow_snap or {}).get("steps", [])),
         "creator_id": t.creator_id,
         "creator_name": (creator_names or {}).get(t.creator_id, str(t.creator_id)),
         "submitted_at": t.submitted_at.isoformat() if t.submitted_at else None,
@@ -62,12 +63,15 @@ async def list_usable_templates(
 ) -> dict:
     """可提交模板：enabled + visible_role_ids 过滤（空=所有 ticket:write 角色可用）。"""
     tpls = await ticket_service.list_visible_templates(session, user_id=actor.id)
-    return ok({"items": [
-        {"id": t.id, "name": t.name, "type": t.type, "description": t.description,
-         "job_host_id": t.job_host_id, "approval_enabled": t.approval_enabled,
-         "current_version": t.current_version}
-        for t in tpls
-    ]})
+    items = []
+    for t in tpls:
+        process = await ticket_service.template_service.get_process_or_404(session, t.process_template_id)
+        if process.status != "enabled":
+            continue
+        items.append({"id": t.id, "name": t.name, "type": t.type, "description": t.description,
+                     "job_host_id": t.job_host_id, "process_template_id": t.process_template_id,
+                     "process_name": process.name})
+    return ok({"items": items})
 
 
 @router.get("/templates/{template_id}/form", summary="提交表单描述")
@@ -81,6 +85,15 @@ async def get_template_form(
     return ok(form)
 
 
+@router.post("/prepare", summary="预生成动态参数")
+async def prepare_ticket(req: TicketPrepareRequest, session: DbSession,
+                         _: User = Depends(require_perm("ticket:write"))):
+    """在创建工单前执行流程模板动态脚本，结果仅短期保存。"""
+    return ok(await parameter_prepare_service.prepare_parameters(
+        session, template_id=req.template_id, params=req.params
+    ))
+
+
 # ---------- 提交 / 列表 / 待办 ----------
 
 @router.post("", summary="提交工单")
@@ -91,16 +104,15 @@ async def create_ticket(
     actor: User = Depends(require_perm("ticket:write")),
 ) -> dict:
     """提交工单：只填参数，标题=模板名；服务端固化五重快照后进入审批或直接执行。"""
-    ticket = await ticket_service.create_ticket(
-        session, creator=actor, template_id=req.template_id, params=req.params
-    )
+    ticket = await ticket_service.create_ticket(session, creator=actor, template_id=req.template_id,
+                                                params=req.params, prepare_id=req.prepare_id)
     audit.log(module="ticket", action="ticket.create", actor_id=actor.id,
               actor_name=actor.username, source_ip=get_client_ip(request),
               target_type="ticket", target_id=str(ticket.id), target_name=ticket.ticket_no,
               detail={"template_id": req.template_id, "status": ticket.status,
                       "nodes": len(ticket.flow_snap or [])})
     return ok({"id": ticket.id, "ticket_no": ticket.ticket_no,
-               "status": ticket.status, "current_node": ticket.current_node})
+               "status": ticket.status, "current_step": ticket.current_step})
 
 
 @router.get("", summary="工单列表")
@@ -158,9 +170,8 @@ async def get_ticket(
     data.update({
         "params": t.params or {},
         "exec_strategy": t.exec_strategy_snap or {},
-        "flow_snap": t.flow_snap or [],
+        "flow_snap": t.flow_snap or {},
         "allow_withdraw": t.allow_withdraw_snap,
-        "credential_refs": t.credential_refs or [],
         "creator_name": (creator.display_name or creator.username) if creator else str(t.creator_id),
         "job_host": bundle["job_host"],
         "steps": [
@@ -177,7 +188,7 @@ async def get_ticket(
         # 审批时间线：display_name 优先，兼容审批人被删除的极端情况
         "approvals": [
             {
-                "node_order": a.node_order,
+                "step_order": a.step_order,
                 "action": a.action,
                 "comment": a.comment,
                 "approver_id": a.approver_id,
@@ -213,7 +224,7 @@ async def approve_ticket(
               actor_name=actor.username, source_ip=get_client_ip(request),
               target_type="ticket", target_id=str(ticket.id), target_name=ticket.ticket_no,
               detail={"status": ticket.status, "comment": req.comment})
-    return ok({"status": ticket.status, "current_node": ticket.current_node})
+    return ok({"status": ticket.status, "current_step": ticket.current_step})
 
 
 @router.post("/{ticket_id}/cancel", summary="撤回工单")

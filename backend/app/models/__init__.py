@@ -2,10 +2,11 @@
 from app.models.base import Base
 from app.models.auth import ApiToken, Permission, Role, RolePermission, User, UserRole
 from app.models.cmdb import AppHost, Application, Host, JobHost
-from app.models.job import Credential, TemplateApprovalNode, TemplateStep, TemplateVersion, TicketTemplate
+from app.models.job import Credential, ProcessStep, ProcessTemplate, TicketTemplate
 from app.models.ticket import (
     Ticket,
     TicketApproval,
+    TicketParameterPrepare,
     TicketStep,
 )
 from app.models.execution import Execution, ExecutionStep
@@ -16,8 +17,8 @@ __all__ = [
     "Base",
     "User", "Role", "Permission", "UserRole", "RolePermission", "ApiToken",
     "Host", "Application", "AppHost", "JobHost",
-    "Credential", "TicketTemplate", "TemplateStep", "TemplateApprovalNode", "TemplateVersion",
-    "Ticket", "TicketStep", "TicketApproval",
+    "Credential", "ProcessTemplate", "ProcessStep", "TicketTemplate",
+    "Ticket", "TicketStep", "TicketApproval", "TicketParameterPrepare",
     "Execution", "ExecutionStep",
     "NotifyChannel", "NotifyChannelEvent", "NotificationRecord", "UserNotification",
     "AuditLog", "SystemConfig",

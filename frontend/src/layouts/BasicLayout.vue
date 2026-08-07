@@ -11,6 +11,7 @@ import {
   BellOutlined,
   CloudServerOutlined,
   CodeOutlined,
+  DownOutlined,
   FileDoneOutlined,
   KeyOutlined,
   LogoutOutlined,
@@ -40,6 +41,7 @@ const themeStore = useThemeStore()
 const userStore = useUserStore()
 
 interface MenuItem {
+  children?: MenuItem[]
   key: string
   label: string
   icon: Component
@@ -122,6 +124,7 @@ const menuGroups = computed(() =>
 
 // 当前高亮菜单：跟随路由（详情页可用 meta.menuKey 指定归属菜单）
 const activeKey = computed(() => (route.meta.menuKey as string) || (route.name as string) || 'dashboard')
+const templateMenuOpen = ref(route.path.startsWith('/job/templates'))
 // 顶栏标题：跟随路由 meta
 const pageTitle = computed(() => (route.meta.title as string) || '工作台')
 
@@ -133,6 +136,10 @@ const roleNames = computed(() => me.value?.roles.map((r) => r.name).join(' / ') 
 
 // 菜单点击：未开放模块给出里程碑提示，不跳转
 function onMenuClick(item: MenuItem) {
+  if (item.key === 'job-templates') {
+    templateMenuOpen.value = !templateMenuOpen.value
+    return
+  }
   if (item.milestone) {
     message.info(`「${item.label}」将在 ${item.milestone} 里程碑开放`)
     return
@@ -141,7 +148,10 @@ function onMenuClick(item: MenuItem) {
 }
 
 onMounted(loadTodoCount)
-watch(() => route.path, loadTodoCount)
+watch(() => route.path, (path) => {
+  loadTodoCount()
+  if (path.startsWith('/job/templates')) templateMenuOpen.value = true
+})
 
 // ===== 站内通知（NOTIFY-06）：铃铛角标 30s 轮询 + 下拉面板最近 20 条 =====
 const unreadCount = ref(0)
@@ -358,18 +368,39 @@ async function onLogout() {
       </div>
       <template v-for="group in menuGroups" :key="group.title">
         <div class="menu-group">{{ group.title }}</div>
-        <div
-          v-for="item in group.items"
-          :key="item.key"
-          class="menu-item"
-          :class="{ active: activeKey === item.key, locked: !!item.milestone }"
-          @click="onMenuClick(item)"
-        >
-          <component :is="item.icon" class="menu-icon" />
-          <span>{{ item.label }}</span>
-          <span v-if="item.milestone" class="badge">{{ item.milestone }}</span>
-          <span v-else-if="item.count" class="badge badge-count">{{ item.count }}</span>
-        </div>
+        <template v-for="item in group.items" :key="item.key">
+          <div
+            class="menu-item"
+            :class="{ active: activeKey === item.key || (item.key === 'job-templates' && route.path.startsWith('/job/templates')), locked: !!item.milestone }"
+            @click="onMenuClick(item)"
+          >
+            <component :is="item.icon" class="menu-icon" />
+            <span>{{ item.label }}</span>
+            <span v-if="item.milestone" class="badge">{{ item.milestone }}</span>
+            <span v-else-if="item.count" class="badge badge-count">{{ item.count }}</span>
+            <DownOutlined
+              v-if="item.key === 'job-templates'"
+              class="menu-caret"
+              :class="{ expanded: templateMenuOpen }"
+            />
+          </div>
+          <template v-if="item.key === 'job-templates' && templateMenuOpen">
+          <div class="menu-subitems">
+          <FileDoneOutlined class="menu-subicon" />
+          <div
+            class="menu-subitem"
+            :class="{ active: activeKey === 'job-template-tickets' }"
+            @click.stop="router.push('/job/templates/tickets')"
+          >工单模板</div>
+          <CodeOutlined class="menu-subicon" />
+          <div
+            class="menu-subitem"
+            :class="{ active: activeKey === 'job-template-processes' }"
+            @click.stop="router.push('/job/templates/processes')"
+          >流程模板</div>
+          </div>
+          </template>
+        </template>
       </template>
       <div class="sider-user">
         <a-avatar class="user-avatar" :size="34">{{ avatarChar }}</a-avatar>
@@ -637,6 +668,14 @@ async function onLogout() {
 .menu-icon {
   font-size: 16px;
 }
+.menu-caret {
+  margin-left: auto;
+  font-size: 12px;
+  transition: transform 0.15s ease;
+}
+.menu-caret.expanded {
+  transform: rotate(180deg);
+}
 .badge {
   margin-left: auto;
   font-size: 10px;
@@ -657,6 +696,36 @@ async function onLogout() {
 }
 .menu-item.active .badge-count {
   background: rgba(255, 255, 255, 0.25);
+}
+.menu-subitem {
+  margin: 1px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.menu-subitems {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  align-items: center;
+  margin-left: 28px;
+}
+.menu-subicon {
+  color: var(--text-3);
+  font-size: 14px;
+}
+.menu-subitem.active + .menu-subicon {
+  color: var(--primary);
+}
+.menu-subitem:hover {
+  background: var(--bg-hover);
+}
+.menu-subitem.active {
+  color: var(--primary);
+  background: var(--bg-hover);
+  font-weight: 600;
 }
 .sider-user {
   margin-top: auto;

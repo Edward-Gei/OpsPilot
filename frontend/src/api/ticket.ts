@@ -33,14 +33,18 @@ export interface TicketBrief {
   id: number
   ticket_no: string
   template_id: number
-  template_version: number
+  process_template_id?: number | null
+  process_name?: string | null
+  template_version?: number
   type: string
   title: string
   job_host_id: number
   job_host_name: string | null
   status: TicketStatus
-  current_node: number
-  total_nodes: number
+  current_step: number
+  total_steps: number
+  current_node?: number
+  total_nodes?: number
   creator_id: number
   creator_name: string
   submitted_at: string | null
@@ -69,7 +73,8 @@ export interface TicketStepSnap {
 
 /** 审批时间线行 */
 export interface ApprovalRecord {
-  node_order: number
+  step_order: number
+  node_order?: number
   action: 'approve' | 'reject'
   comment: string | null
   approver_id: number
@@ -91,6 +96,7 @@ export interface TicketDetail extends TicketBrief {
   params: Record<string, string>
   exec_strategy: Partial<ExecStrategy>
   flow_snap: FlowNodeSnap[]
+  template_version?: number
   allow_withdraw: boolean
   job_host: JobHostSnap | null
   steps: TicketStepSnap[]
@@ -119,8 +125,10 @@ export interface UsableTemplate {
   type: string
   description: string | null
   job_host_id: number
-  approval_enabled: boolean
-  current_version: number
+  process_template_id: number
+  process_name?: string
+  approval_enabled?: boolean
+  current_version?: number
 }
 
 /** 提交表单参数行（汇总后，不含 fixed） */
@@ -130,6 +138,9 @@ export interface FormParam {
   default: string | null
   required: boolean
   description: string | null
+  input_type?: 'text' | 'enum'
+  options?: string[]
+  source?: 'user' | 'generated' | 'fixed'
 }
 
 /** 提交表单描述：汇总参数 + 作业主机/步骤/审批节点/策略只读预览 */
@@ -139,8 +150,10 @@ export interface TemplateFormDesc {
     name: string
     type: string
     description: string | null
-    current_version: number
-    approval_enabled: boolean
+    process_template_id: number
+    process_name: string
+    current_version?: number
+    approval_enabled?: boolean
     allow_withdraw: boolean
   }
   params: FormParam[]
@@ -151,6 +164,7 @@ export interface TemplateFormDesc {
     script_type: string
     timeout: number
   }[]
+  generator?: { enabled: boolean; timeout?: number | null }
   flow: FlowNodeSnap[]
   exec_strategy: Partial<ExecStrategy>
 }
@@ -181,17 +195,23 @@ export function getTicket(id: number) {
 }
 
 /** 提交工单：只填参数，标题=模板名；免审入队 queued，否则 approving（TICKET-01/M5） */
-export function createTicket(templateId: number, params: Record<string, string>) {
-  return request<{ id: number; ticket_no: string; status: TicketStatus; current_node: number }>({
+export function prepareTicket(templateId: number, params: Record<string, string>) {
+  return request<{ prepare_id: string; values: Record<string, string>; options: Record<string, string[]>; expires_at: string }>({
+    url: '/tickets/prepare', method: 'post', data: { template_id: templateId, params },
+  })
+}
+
+export function createTicket(templateId: number, params: Record<string, string>, prepareId?: string) {
+  return request<{ id: number; ticket_no: string; status: TicketStatus; current_step: number; current_node?: number }>({
     url: '/tickets',
     method: 'post',
-    data: { template_id: templateId, params },
+    data: { template_id: templateId, params, prepare_id: prepareId },
   })
 }
 
 /** 审批：驳回时 comment 必填（后端 40001 校验） */
 export function approveTicket(id: number, action: 'approve' | 'reject', comment?: string) {
-  return request<{ status: TicketStatus; current_node: number }>({
+  return request<{ status: TicketStatus; current_step: number }>({
     url: `/tickets/${id}/approve`,
     method: 'post',
     data: { action, comment },

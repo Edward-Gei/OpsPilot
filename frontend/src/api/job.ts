@@ -54,6 +54,94 @@ export type TemplateStatus = 'enabled' | 'disabled'
 export type ScriptType = 'shell' | 'playbook'
 export type ApproveMode = 'any' | 'all' | 'seq'
 
+export type ProcessParamSource = 'fixed' | 'user' | 'generated'
+export type ProcessInputType = 'text' | 'enum'
+
+export interface ProcessParam {
+  name: string
+  label?: string | null
+  source: ProcessParamSource
+  input_type: ProcessInputType
+  options: string[]
+  default?: string | null
+  required: boolean
+  description?: string | null
+}
+
+export interface ProcessStep {
+  step_order?: number
+  name: string
+  script_type: ScriptType
+  content: string
+  timeout: number
+  approval_role_id?: number | null
+}
+
+export interface ProcessTemplateItem {
+  id: number
+  name: string
+  description: string | null
+  status: TemplateStatus
+  params_schema: ProcessParam[]
+  generator_script?: string | null
+  generator_timeout?: number | null
+  exec_strategy: Partial<ExecStrategy>
+  steps_count?: number | null
+  ticket_template_refs?: number | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface ProcessTemplateForm {
+  name: string
+  description?: string
+  params_schema: ProcessParam[]
+  generator_script?: string | null
+  generator_timeout?: number | null
+  exec_strategy: ExecStrategy
+  steps: ProcessStep[]
+}
+
+export interface TicketTemplateForm {
+  name: string
+  type: TemplateType
+  description?: string
+  job_host_id: number
+  process_template_id: number
+  allow_withdraw: boolean
+  notify_rules: NotifyRule[]
+  visible_role_ids: number[]
+  status?: TemplateStatus
+}
+
+export function defaultExecStrategy(): ExecStrategy {
+  return { timeout: 600, fail_fast: true, kill_on_stop: false }
+}
+
+export function listProcessTemplates(params: { page?: number; page_size?: number; keyword?: string; status?: string } = {}) {
+  return request<PageResult<ProcessTemplateItem>>({ url: '/process-templates', method: 'get', params })
+}
+
+export function getProcessTemplate(id: number) {
+  return request<ProcessTemplateItem & { steps: ProcessStep[] }>({ url: `/process-templates/${id}`, method: 'get' })
+}
+
+export function createProcessTemplate(data: ProcessTemplateForm) {
+  return request<{ id: number }>({ url: '/process-templates', method: 'post', data })
+}
+
+export function updateProcessTemplate(id: number, data: ProcessTemplateForm) {
+  return request<{ id: number }>({ url: `/process-templates/${id}`, method: 'put', data })
+}
+
+export function setProcessTemplateStatus(id: number, status: TemplateStatus) {
+  return request<{ status: TemplateStatus }>({ url: `/process-templates/${id}/status`, method: 'put', data: { status } })
+}
+
+export function deleteProcessTemplate(id: number) {
+  return request<null>({ url: `/process-templates/${id}`, method: 'delete' })
+}
+
 /** 步骤参数定义行（03-数据库设计 §4.3）；fixed=锁定默认值，提交人不可见不可改 */
 export interface TemplateParam {
   name: string
@@ -184,12 +272,12 @@ export function getTemplate(id: number) {
   return request<TemplateDetail>({ url: `/templates/${id}`, method: 'get' })
 }
 
-export function createTemplate(data: TemplateForm) {
+export function createTemplate(data: TemplateForm | TicketTemplateForm) {
   return request<{ id: number }>({ url: '/templates', method: 'post', data })
 }
 
 /** 编辑模板：响应带 version_bumped 标记是否生成了新版本 */
-export function updateTemplate(id: number, data: TemplateForm) {
+export function updateTemplate(id: number, data: TemplateForm | TicketTemplateForm) {
   return request<{ current_version: number; version_bumped: boolean }>({
     url: `/templates/${id}`,
     method: 'put',
