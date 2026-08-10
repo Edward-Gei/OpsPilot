@@ -35,7 +35,7 @@ const loading = ref(false)
 
 /** 终态判定：终态后关闭实时通道，不再重连 */
 const isFinished = computed(() =>
-  ['success', 'failed', 'terminated', 'interrupted'].includes(detail.value?.status ?? ''),
+  ['success', 'failed', 'terminated', 'interrupted', 'rejected', 'cancelled'].includes(detail.value?.status ?? ''),
 )
 
 /** 初始加载 / 断线恢复：REST 拉全量详情（含步骤列表） */
@@ -412,23 +412,25 @@ onBeforeUnmount(() => {
         <a-button class="back-btn" @click="router.push({ name: 'execution-list' })">
           <ArrowLeftOutlined />返回列表
         </a-button>
-        <a-popconfirm v-if="showControl('pause')" title="确认暂停执行？在跑步骤将先跑完。" @confirm="onControl('pause')">
+        <a-popconfirm v-if="showControl('pause')" placement="bottom" overlay-class-name="execution-control-popconfirm" title="确认暂停执行？在跑步骤将先跑完。" @confirm="onControl('pause')">
           <a-button :loading="controlling" class="op-btn-orange"><PauseCircleOutlined />暂停</a-button>
         </a-popconfirm>
-        <a-popconfirm v-if="showControl('resume')" title="确认恢复执行？" @confirm="onControl('resume')">
+        <a-popconfirm v-if="showControl('resume')" placement="bottom" overlay-class-name="execution-control-popconfirm" title="确认恢复执行？" @confirm="onControl('resume')">
           <a-button :loading="controlling" class="op-btn-green"><PlayCircleOutlined />恢复</a-button>
         </a-popconfirm>
-        <a-popconfirm v-if="showControl('abort')" title="确认中止？未派发步骤将置为跳过。" @confirm="onControl('abort')">
-          <a-button :loading="controlling" danger><StopOutlined />中止</a-button>
+        <a-popconfirm v-if="showControl('abort')" placement="bottom" overlay-class-name="execution-control-popconfirm" title="确认终止？未派发步骤将置为跳过。" @confirm="onControl('abort')">
+          <a-button :loading="controlling" danger><StopOutlined />终止</a-button>
         </a-popconfirm>
         <a-popconfirm
           v-if="showControl('force-abort')"
-          title="强制中止将强杀在跑 SSH 会话，可能造成作业主机业务中断，确认继续？"
-          ok-text="强制中止"
+          placement="bottom"
+          overlay-class-name="execution-control-popconfirm"
+          title="强制终止将强杀在跑 SSH 会话，可能造成作业主机业务中断，确认继续？"
+          ok-text="强制终止"
           ok-type="danger"
           @confirm="onControl('force-abort')"
         >
-          <a-button :loading="controlling" type="primary" danger>强制中止</a-button>
+          <a-button :loading="controlling" type="primary" danger><ThunderboltOutlined />强制终止</a-button>
         </a-popconfirm>
       </div>
     </div>
@@ -510,6 +512,9 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+:global(.execution-control-popconfirm.ant-popover-placement-bottom) {
+  transform-origin: center top;
 }
 /* 实时通道指示灯 */
 .ws-dot {

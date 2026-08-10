@@ -13,9 +13,9 @@ from app.models.auth import User, UserRole
 from app.models.cmdb import JobHost
 from app.models.execution import Execution, ExecutionStep
 from app.models.job import Credential, ProcessStep, ProcessTemplate, TicketTemplate
-from app.models.notify import NotificationRecord
+from app.models.notify import NotificationRecord, NotifyChannelEvent
 from app.models.ticket import Ticket, TicketParameterPrepare, TicketStep
-from app.services import parameter_prepare_service, ticket_service
+from app.services import parameter_prepare_service, seed as seed_service, ticket_service
 
 
 async def _template(session, *, creator_id: int, role_id: int | None = None) -> TicketTemplate:
@@ -214,6 +214,73 @@ async def test_paused_ticket_cannot_be_rejected_or_skip_steps(db_factory, seed):
         with pytest.raises(BizError):
             await ticket_service.approve_ticket(session, ticket.id, actor=creator, action="reject", comment="blocked")
         assert ticket.status == TicketStatus.PAUSED.value
+
+
+@pytest.mark.asyncio
+async def test_withdraw_queued_ticket_cancels_execution_and_skips_pending_steps(db_factory, seed):
+    """撤回排队工单时关闭执行实例，Worker 后续不会继续处理步骤。"""
+    async with db_factory() as session:
+        creator = await session.get(User, seed["users"]["ops1"])
+        template = await _template(session, creator_id=creator.id)
+        ticket = await ticket_service.create_ticket(session, creator=creator, template_id=template.id, params={})
+        execution = (await session.execute(select(Execution).where(Execution.ticket_id == ticket.id))).scalar_one()
+        steps = list((await session.execute(
+            select(ExecutionStep).where(ExecutionStep.execution_id == execution.id)
+        )).scalars())
+        assert ticket.status == TicketStatus.QUEUED.value
+        assert steps and all(step.status == HostExecStatus.PENDING.value for step in steps)
+
+        await ticket_service.cancel_ticket(session, ticket.id, actor=creator)
+        assert ticket.status == TicketStatus.CANCELLED.value
+        assert execution.status == "cancelled"
+        assert execution.finished_at is not None
+        assert all(step.status == HostExecStatus.SKIPPED.value for step in steps)
+
+
+@pytest.mark.asyncio
+async def test_withdraw_running_ticket_is_rejected(db_factory, seed):
+    """运行中的工单不允许撤回，避免状态关闭但作业进程仍继续执行。"""
+    async with db_factory() as session:
+        creator = await session.get(User, seed["users"]["ops1"])
+        template = await _template(session, creator_id=creator.id)
+        ticket = Ticket(
+            ticket_no="T-RUNNING-WITHDRAW", template_id=template.id, title="running",
+            type="daily_ops", params={}, job_host_id=template.job_host_id,
+            job_host_snap={"name": "notify-test-host"}, process_template_id_snap=template.process_template_id,
+            process_name_snap="notify-test-process", status=TicketStatus.RUNNING.value,
+            flow_snap={}, exec_strategy_snap={}, allow_withdraw_snap=True,
+            creator_id=creator.id,
+        )
+        session.add(ticket)
+        await session.flush()
+        with pytest.raises(BizError):
+            await ticket_service.cancel_ticket(session, ticket.id, actor=creator)
+        assert ticket.status == TicketStatus.RUNNING.value
+
+
+@pytest.mark.asyncio
+async def test_notify_mapping_removal_survives_default_seed(db_factory):
+    """用户删除默认事件渠道后，服务重启补种子不得恢复该映射。"""
+    async with db_factory() as session:
+        await seed_service._ensure_notify_defaults(session)
+        await session.flush()
+        target = (await session.execute(
+            select(NotifyChannelEvent).where(
+                NotifyChannelEvent.event == NotifyEvent.TICKET_APPROVED.value,
+                NotifyChannelEvent.channel_type == "email",
+            )
+        )).scalar_one()
+        await session.delete(target)
+        await session.flush()
+
+        await seed_service._ensure_notify_defaults(session)
+        remaining = (await session.execute(
+            select(NotifyChannelEvent).where(
+                NotifyChannelEvent.event == NotifyEvent.TICKET_APPROVED.value,
+                NotifyChannelEvent.channel_type == "email",
+            )
+        )).scalar_one_or_none()
+        assert remaining is None
 
 
 @pytest.mark.asyncio

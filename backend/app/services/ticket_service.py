@@ -369,6 +369,22 @@ async def cancel_ticket(session: AsyncSession, ticket_id: int, *, actor: User) -
     ticket.status = TicketStatus.CANCELLED.value
     ticket.finished_at = datetime.now()
     ticket.current_step = 0
+    execution = (await session.execute(
+        select(Execution).where(Execution.ticket_id == ticket.id)
+        .order_by(Execution.id.desc()).limit(1)
+    )).scalar_one_or_none()
+    if execution and execution.status == ExecutionStatus.QUEUED.value:
+        execution.status = ExecutionStatus.CANCELLED.value
+        execution.finished_at = datetime.now()
+        pending_steps = (await session.execute(
+            select(ExecutionStep).where(
+                ExecutionStep.execution_id == execution.id,
+                ExecutionStep.status == HostExecStatus.PENDING.value,
+            )
+        )).scalars()
+        for execution_step in pending_steps:
+            execution_step.status = HostExecStatus.SKIPPED.value
+            execution_step.finished_at = datetime.now()
     await session.flush()
     return ticket
 

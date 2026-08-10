@@ -8,9 +8,10 @@ export const execStatusMeta: Record<ExecutionStatus, { text: string; color: stri
   paused: { text: '已暂停', color: 'gold' },
   success: { text: '成功', color: 'success' },
   failed: { text: '失败', color: 'error' },
-  terminated: { text: '已中止', color: 'warning' },
+  terminated: { text: '已终止', color: 'warning' },
   interrupted: { text: '已中断', color: 'warning' },
   rejected: { text: '已驳回', color: 'error' },
+  cancelled: { text: '已撤回', color: 'default' },
 }
 
 export const execStatusOptions = Object.entries(execStatusMeta).map(([value, v]) => ({
@@ -31,7 +32,7 @@ export const stepStatusMeta: Record<string, { text: string; color: string }> = {
 
 /** 中断起因展示（工单 interrupt_reason，03 §5.1） */
 export const interruptReasonText: Record<string, string> = {
-  user_abort: '用户中止',
+  user_abort: '用户终止',
   system_crash: '系统崩溃恢复',
   worker_lost: '消息投递超限',
 }

@@ -42,6 +42,7 @@ from app.models import (
 logger = logging.getLogger("opspilot.seed")
 
 _SEED_LOCK = "opspilot:seed"
+_NOTIFY_MAPPING_INIT_KEY = "notify.mapping_initialized"
 
 
 async def run_seed(session: AsyncSession) -> None:
@@ -142,7 +143,7 @@ async def _ensure_system_config(session: AsyncSession) -> None:
 
 
 async def _ensure_notify_defaults(session: AsyncSession) -> None:
-    """通知渠道占位行（6 类型全建、默认禁用）+ 事件默认映射（仅落地渠道）。"""
+    """首次初始化通知映射；后续启动只补渠道占位行，不覆盖用户配置。"""
     existing_channels = {
         c.type for c in (await session.execute(select(NotifyChannel))).scalars()
     }
@@ -153,7 +154,18 @@ async def _ensure_notify_defaults(session: AsyncSession) -> None:
         (e.event, e.channel_type)
         for e in (await session.execute(select(NotifyChannelEvent))).scalars()
     }
-    for event in NotifyEvent:
-        for channel_type in DEFAULT_EVENT_CHANNELS:
-            if (event.value, channel_type) not in existing_events:
+    marker = await session.get(SystemConfig, _NOTIFY_MAPPING_INIT_KEY)
+    if marker is None:
+        marker = SystemConfig(
+            cfg_key=_NOTIFY_MAPPING_INIT_KEY,
+            cfg_value={"value": bool(existing_events)},
+        )
+        session.add(marker)
+        await session.flush()
+    if marker.cfg_value and marker.cfg_value.get("value"):
+        return
+    if not existing_events and not existing_channels:
+        for event in NotifyEvent:
+            for channel_type in DEFAULT_EVENT_CHANNELS:
                 session.add(NotifyChannelEvent(event=event.value, channel_type=channel_type))
+    marker.cfg_value = {"value": True}
