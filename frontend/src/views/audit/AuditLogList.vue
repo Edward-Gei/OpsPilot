@@ -286,7 +286,7 @@ onMounted(refreshAll)
 
     <!-- 详情抽屉：完整字段 + detail JSON 原文 -->
     <a-drawer v-model:open="detailOpen" title="审计详情" :width="520">
-      <a-descriptions v-if="detailRow" :column="1" bordered size="small">
+      <a-descriptions v-if="detailRow" :column="1" bordered size="small" class="op-desc-table">
         <a-descriptions-item label="时间">
           {{ detailRow.created_at ? new Date(detailRow.created_at).toLocaleString() : '—' }}
         </a-descriptions-item>

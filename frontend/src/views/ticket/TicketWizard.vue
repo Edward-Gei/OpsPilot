@@ -215,7 +215,7 @@ const jobHostText = computed(() => {
       </a-form>
 
       <!-- 规则只读预览 -->
-      <a-descriptions bordered size="small" :column="2" class="w-desc">
+      <a-descriptions bordered size="small" :column="{ xs: 1, sm: 2 }" class="w-desc op-desc-table">
         <a-descriptions-item label="作业主机">{{ jobHostText }}</a-descriptions-item>
         <a-descriptions-item label="执行策略">{{ strategyText }}</a-descriptions-item>
         <a-descriptions-item label="执行步骤" :span="2">

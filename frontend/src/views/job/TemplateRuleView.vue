@@ -61,7 +61,7 @@ const strategyRows = computed(() => {
 </script>
 
 <template>
-  <a-descriptions :column="2" bordered size="small">
+  <a-descriptions :column="{ xs: 1, sm: 2 }" bordered size="small" class="op-desc-table">
     <a-descriptions-item label="作业主机">{{ jobHostName || '—' }}</a-descriptions-item>
     <a-descriptions-item label="可见角色">
       <template v-if="rule.visible_role_ids.length">
@@ -86,7 +86,7 @@ const strategyRows = computed(() => {
       <template #header>
         <a-tag color="cyan">步骤 {{ s.step_order }}</a-tag>{{ s.name }}
       </template>
-      <a-descriptions :column="2" bordered size="small">
+      <a-descriptions :column="{ xs: 1, sm: 2 }" bordered size="small" class="op-desc-table">
         <a-descriptions-item label="超时（秒）">{{ s.timeout }}</a-descriptions-item>
       </a-descriptions>
       <div class="sub-title">脚本内容（Shell）</div>
@@ -96,7 +96,7 @@ const strategyRows = computed(() => {
 
   <!-- 执行策略 -->
   <div class="section-title">执行策略</div>
-  <a-descriptions :column="3" bordered size="small">
+  <a-descriptions :column="{ xs: 1, sm: 3 }" bordered size="small" class="op-desc-table">
     <a-descriptions-item v-for="r in strategyRows" :key="r.label" :label="r.label">{{ r.value }}</a-descriptions-item>
   </a-descriptions>
 

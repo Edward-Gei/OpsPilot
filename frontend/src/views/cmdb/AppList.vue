@@ -424,7 +424,7 @@ onMounted(() => {
     <a-drawer v-model:open="detailVisible" :title="detail?.name || '应用详情'" :width="650">
       <a-spin :spinning="detailLoading">
         <template v-if="detail">
-          <a-descriptions :column="1" bordered size="small">
+          <a-descriptions :column="1" bordered size="small" class="op-desc-table">
             <a-descriptions-item label="应用名">{{ detail.name }}</a-descriptions-item>
             <a-descriptions-item label="开发语言">{{ detail.language || '—' }}</a-descriptions-item>
             <a-descriptions-item label="部署方式">

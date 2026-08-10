@@ -484,7 +484,7 @@ onMounted(() => {
           <a-button size="small" class="back-btn" @click="versionDetail = null">
             <ArrowLeftOutlined />返回版本列表
           </a-button>
-          <a-descriptions :column="2" bordered size="small" class="version-head">
+          <a-descriptions :column="{ xs: 1, sm: 2 }" bordered size="small" class="version-head op-desc-table">
             <a-descriptions-item label="版本"><a-tag color="cyan">v{{ versionDetail.version }}</a-tag></a-descriptions-item>
             <a-descriptions-item label="创建时间">
               {{ versionDetail.created_at ? new Date(versionDetail.created_at).toLocaleString() : '—' }}

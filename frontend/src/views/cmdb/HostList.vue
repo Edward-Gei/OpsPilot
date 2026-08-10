@@ -587,7 +587,7 @@ onMounted(() => {
     <a-drawer v-model:open="detailVisible" :title="detail?.hostname || '主机详情'" :width="600">
       <a-spin :spinning="detailLoading">
         <template v-if="detail">
-          <a-descriptions :column="1" bordered size="small">
+          <a-descriptions :column="1" bordered size="small" class="op-desc-table">
             <a-descriptions-item label="主机名">{{ detail.hostname }}</a-descriptions-item>
             <a-descriptions-item label="IP 地址">{{ detail.ip }}</a-descriptions-item>
             <a-descriptions-item label="所属平台">{{ detail.platform || '—' }}</a-descriptions-item>

@@ -215,3 +215,37 @@ body {
 .ant-table-resize-handle-line {
   background: var(--primary);
 }
+
+/* 详情描述表统一采用稳定列宽，避免标签被挤压成逐字竖排；内容列负责长文本换行。 */
+.op-desc-table .ant-descriptions-view > table {
+  table-layout: fixed !important;
+}
+.op-desc-table .ant-descriptions-item-label {
+  width: 108px;
+  min-width: 108px;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+.op-desc-table .ant-descriptions-item-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.op-desc-table .ant-descriptions-item-content > .ant-tag {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+  margin-inline-end: 6px;
+  margin-bottom: 4px;
+}
+@media (max-width: 575px) {
+  .op-desc-table .ant-descriptions-item-label {
+    width: 88px;
+    min-width: 88px;
+    padding-inline: 10px !important;
+  }
+  .op-desc-table .ant-descriptions-item-content {
+    padding-inline: 10px !important;
+  }
+}

@@ -140,7 +140,7 @@ function openExecution() {
           <a-tag v-if="awaiting" color="blue">节点 {{ detail.current_node }}/{{ detail.total_nodes }}</a-tag>
         </div>
 
-        <a-descriptions bordered size="small" :column="2" class="d-desc">
+        <a-descriptions bordered size="small" :column="{ xs: 1, sm: 2 }" class="d-desc op-desc-table">
           <a-descriptions-item label="作业主机">{{ jobHostText }}</a-descriptions-item>
           <a-descriptions-item label="提交人">{{ detail.creator_name }}</a-descriptions-item>
           <a-descriptions-item label="提交时间">{{ fmtTime(detail.submitted_at) }}</a-descriptions-item>
@@ -179,7 +179,7 @@ function openExecution() {
               @click="openExecution"
             >查看执行详情</a-button>
           </div>
-          <a-descriptions bordered size="small" :column="3" class="d-desc">
+          <a-descriptions bordered size="small" :column="{ xs: 1, sm: 2 }" class="d-desc op-desc-table">
             <a-descriptions-item label="状态">
               <a-tag :color="execStatusMeta[detail.execution.status as keyof typeof execStatusMeta]?.color">
                 {{ execStatusMeta[detail.execution.status as keyof typeof execStatusMeta]?.text || detail.execution.status }}
