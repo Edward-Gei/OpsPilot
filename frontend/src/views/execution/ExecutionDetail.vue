@@ -22,7 +22,7 @@ import {
 import * as execApi from '@/api/execution'
 import { useUserStore } from '@/stores/user'
 import { fmtTime } from '@/views/ticket/meta'
-import { execStatusMeta, interruptReasonText, stepStatusMeta, triggeredByText } from './meta'
+import { execStatusMeta, interruptReasonText, stepStatusMeta } from './meta'
 
 const route = useRoute()
 const router = useRouter()
@@ -397,14 +397,13 @@ onBeforeUnmount(() => {
           >
             {{ execStatusMeta[detail.status]?.text || detail.status }}
           </a-tag>
-          <a-tag v-if="detail?.interrupt_reason" color="warning">
+          <a-tag v-if="detail?.interrupt_reason" class="status-tag interrupt-status-tag" color="warning">
             {{ interruptReasonText[detail.interrupt_reason] || detail.interrupt_reason }}
           </a-tag>
           <span class="ws-dot" :class="{ on: pollActive }" :title="pollActive ? '实时轮询中' : '实时轮询已停止（执行已结束）'" />
         </div>
         <div class="op-hero-sub">
           {{ detail?.title }}（作业主机：{{ detail?.job_host_name || '—' }}）
-          · {{ triggeredByText[detail?.triggered_by ?? ''] || detail?.triggered_by }}
           · 开始 {{ fmtTime(detail?.started_at) }} · 结束 {{ fmtTime(detail?.finished_at) }}
         </div>
       </div>
@@ -423,7 +422,7 @@ onBeforeUnmount(() => {
         </a-popconfirm>
         <a-popconfirm
           v-if="showControl('force-abort')"
-          placement="bottom"
+          placement="bottomRight"
           overlay-class-name="execution-control-popconfirm"
           title="强制终止将强杀在跑 SSH 会话，可能造成作业主机业务中断，确认继续？"
           ok-text="强制终止"
@@ -512,9 +511,6 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 8px;
   align-items: center;
-}
-:global(.execution-control-popconfirm.ant-popover-placement-bottom) {
-  transform-origin: center top;
 }
 /* 实时通道指示灯 */
 .ws-dot {

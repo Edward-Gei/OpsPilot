@@ -6,7 +6,7 @@ import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import * as ticketApi from '@/api/ticket'
 import { useUserStore } from '@/stores/user'
-import { execStatusMeta, triggeredByText } from '@/views/execution/meta'
+import { execStatusMeta } from '@/views/execution/meta'
 import { fmtTime, statusMeta } from './meta'
 
 const props = defineProps<{
@@ -142,7 +142,6 @@ function openExecution() {
 
         <a-descriptions bordered size="small" :column="2" class="d-desc">
           <a-descriptions-item label="作业主机">{{ jobHostText }}</a-descriptions-item>
-          <a-descriptions-item label="模板版本">v{{ detail.template_version }}</a-descriptions-item>
           <a-descriptions-item label="提交人">{{ detail.creator_name }}</a-descriptions-item>
           <a-descriptions-item label="提交时间">{{ fmtTime(detail.submitted_at) }}</a-descriptions-item>
           <a-descriptions-item label="完成时间">{{ fmtTime(detail.finished_at) }}</a-descriptions-item>
@@ -187,7 +186,6 @@ function openExecution() {
               </a-tag>
             </a-descriptions-item>
             <a-descriptions-item label="步骤数">{{ detail.execution.total_steps }}</a-descriptions-item>
-            <a-descriptions-item label="触发方式">{{ triggeredByText[detail.execution.triggered_by] || detail.execution.triggered_by }}</a-descriptions-item>
           </a-descriptions>
         </template>
 

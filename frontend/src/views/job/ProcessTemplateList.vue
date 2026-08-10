@@ -17,11 +17,20 @@ const query = reactive({ page: 1, page_size: 20, keyword: '', status: undefined 
 const selectedKeys = ref<number[]>([])
 const statusLoading = ref<number | null>(null)
 const stats = reactive({ all: 0, enabled: 0, disabled: 0 })
+/** 将执行策略压缩为列表摘要，保留关键配置且避免表格单元格过度占用空间。 */
+function strategySummary(strategy: api.ProcessTemplateItem['exec_strategy']): string {
+  const timeout = strategy?.timeout ?? '-'
+  const flag = (value: boolean | undefined, enabled: string, disabled: string) => value === undefined ? '-' : value ? enabled : disabled
+  const failFast = flag(strategy?.fail_fast, '失败即停', '失败继续')
+  const killOnStop = flag(strategy?.kill_on_stop, '终止停止', '终止继续')
+  return `${timeout}秒 / ${failFast} / ${killOnStop}`
+}
 const columns = computed(() => makeResizable([
   { title: '流程名称', dataIndex: 'name', key: 'name', width: 220, ellipsis: true },
   { title: '步骤数', key: 'steps', width: 90 },
   { title: '参数数', key: 'params', width: 90 },
   { title: '引用工单模板', key: 'refs', width: 120 },
+  { title: '执行策略', key: 'strategy', width: 220, ellipsis: true },
   { title: '状态', key: 'status', width: 90 },
   { title: '更新时间', key: 'updated', width: 160 },
   { title: '操作', key: 'action', width: 235, fixed: 'right' as const },
@@ -101,7 +110,7 @@ onMounted(load)
     <div class="op-hero op-hero--indigo"><div class="op-hero-icon"><CodeOutlined /></div><div><div class="op-hero-title">流程模板</div><div class="op-hero-sub">集中维护参数、步骤编排、执行策略和步骤前审批，供工单模板引用</div></div><div class="op-hero-extra"><div class="op-hero-stat"><b>{{ stats.all }}</b><span>全部</span></div><div class="op-hero-stat"><b>{{ stats.enabled }}</b><span>启用</span></div><div class="op-hero-stat"><b>{{ stats.disabled }}</b><span>停用</span></div></div></div>
     <div class="toolbar"><a-input v-model:value="query.keyword" class="kw" allow-clear placeholder="搜索流程模板" @press-enter="search"><template #prefix><SearchOutlined /></template></a-input><a-select v-model:value="query.status" class="status-sel" allow-clear placeholder="状态" :options="[{ label: '启用', value: 'enabled' }, { label: '停用', value: 'disabled' }]" @change="search" /><div class="toolbar-actions"><a-button danger :disabled="!selectedKeys.length" @click="confirmBatchRemove"><DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}</a-button><a-button @click="openCopy"><CopyOutlined />复制模板</a-button><a-button type="primary" @click="edit(null)"><PlusOutlined />新建模板</a-button></div></div>
     <a-table :columns="columns" :data-source="rows" :loading="loading" bordered row-key="id" :scroll="{ x: 1000 }" :row-selection="rowSelection" @resize-column="onResizeColumn" :pagination="{ current: query.page, pageSize: query.page_size, total, showSizeChanger: true, showQuickJumper: true, showTotal: (t: number) => `共 ${t} 个模板`, onChange: pageChange }">
-      <template #bodyCell="{ column, record }"><template v-if="column.key === 'steps'">{{ record.steps_count ?? 0 }}</template><template v-else-if="column.key === 'params'">{{ record.params_schema?.length || 0 }}</template><template v-else-if="column.key === 'refs'"><a-tag :color="record.ticket_template_refs ? 'blue' : 'default'">{{ record.ticket_template_refs || 0 }}</a-tag></template><template v-else-if="column.key === 'status'"><a-switch :checked="record.status === 'enabled'" checked-children="启用" un-checked-children="停用" :loading="statusLoading === record.id" @change="toggle(record as api.ProcessTemplateItem)" /></template><template v-else-if="column.key === 'updated'">{{ record.updated_at ? new Date(record.updated_at).toLocaleString() : '-' }}</template><template v-else-if="column.key === 'action'"><a-space><a-button size="small" class="op-btn-blue" @click="edit(record.id)"><EditOutlined />编辑</a-button><a-popconfirm title="流程模板被工单模板引用时不能删除，确认继续？" @confirm="remove(record as api.ProcessTemplateItem)"><a-button size="small" danger><DeleteOutlined />删除</a-button></a-popconfirm></a-space></template></template>
+      <template #bodyCell="{ column, record }"><template v-if="column.key === 'steps'">{{ record.steps_count ?? 0 }}</template><template v-else-if="column.key === 'params'">{{ record.params_schema?.length || 0 }}</template><template v-else-if="column.key === 'refs'"><a-tag :color="record.ticket_template_refs ? 'blue' : 'default'">{{ record.ticket_template_refs || 0 }}</a-tag></template><template v-else-if="column.key === 'strategy'">{{ strategySummary(record.exec_strategy) }}</template><template v-else-if="column.key === 'status'"><a-switch :checked="record.status === 'enabled'" checked-children="启用" un-checked-children="停用" :loading="statusLoading === record.id" @change="toggle(record as api.ProcessTemplateItem)" /></template><template v-else-if="column.key === 'updated'">{{ record.updated_at ? new Date(record.updated_at).toLocaleString() : '-' }}</template><template v-else-if="column.key === 'action'"><a-space><a-button size="small" class="op-btn-blue" @click="edit(record.id)"><EditOutlined />编辑</a-button><a-popconfirm title="流程模板被工单模板引用时不能删除，确认继续？" @confirm="remove(record as api.ProcessTemplateItem)"><a-button size="small" danger><DeleteOutlined />删除</a-button></a-popconfirm></a-space></template></template>
     </a-table>
     <ProcessTemplateEditor v-model:open="open" :process-id="editingId" :copy-from-id="copyFromId" @saved="load" />
     <a-modal v-model:open="copyOpen" title="复制流程模板" :confirm-loading="copySearching" @ok="confirmCopy">

@@ -21,7 +21,6 @@ export interface ExecutionBrief {
   creator_name: string
   status: ExecutionStatus
   total_steps: number
-  triggered_by: string
   started_at: string | null
   finished_at: string | null
   created_at: string | null
@@ -53,7 +52,6 @@ export interface ExecutionDetail {
   exec_strategy: Partial<ExecStrategy>
   status: ExecutionStatus
   total_steps: number
-  triggered_by: string
   started_at: string | null
   finished_at: string | null
   created_at: string | null

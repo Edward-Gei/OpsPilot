@@ -10,7 +10,7 @@ import {
 import * as execApi from '@/api/execution'
 import { makeResizable, onResizeColumn } from '@/utils/table'
 import { fmtTime } from '@/views/ticket/meta'
-import { execStatusMeta, execStatusOptions, triggeredByText } from './meta'
+import { execStatusMeta, execStatusOptions } from './meta'
 
 const router = useRouter()
 
@@ -32,7 +32,6 @@ const columns = ref(makeResizable([
   { title: '作业主机', key: 'job_host', width: 130, ellipsis: true },
   { title: '状态', key: 'status', width: 100 },
   { title: '步骤数', key: 'scale', width: 110 },
-  { title: '触发方式', key: 'triggered', width: 100 },
   { title: '发起人', dataIndex: 'creator_name', key: 'creator_name', width: 110, ellipsis: true },
   { title: '开始时间', key: 'started', width: 155 },
   { title: '结束时间', key: 'finished', width: 155 },
@@ -164,9 +163,6 @@ onMounted(() => {
         </template>
         <template v-else-if="column.key === 'scale'">
           {{ record.total_steps }} 步骤
-        </template>
-        <template v-else-if="column.key === 'triggered'">
-          {{ triggeredByText[record.triggered_by] || record.triggered_by }}
         </template>
         <template v-else-if="column.key === 'started'">{{ fmtTime(record.started_at) }}</template>
         <template v-else-if="column.key === 'finished'">{{ fmtTime(record.finished_at) }}</template>

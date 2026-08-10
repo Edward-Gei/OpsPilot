@@ -83,7 +83,7 @@ async def _make_active_ticket(db_factory, *, template_id: int) -> None:
     """测试辅助：手工造一条进行中工单 + 步骤快照，用于引用保护验证。"""
     async with db_factory() as session:
         ticket = Ticket(
-            ticket_no="T20260727-0001", template_id=template_id, template_version_snap=1,
+            ticket_no="T20260727-0001", template_id=template_id,
             title="重启 Nginx", type="daily_ops", job_host_id=1,
             job_host_snap={"id": 1, "name": "job-agent-01", "ip": "10.8.0.1",
                            "ssh_port": 22, "workdir": "/opt/opspilot/workspace"},

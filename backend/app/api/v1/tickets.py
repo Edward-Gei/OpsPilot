@@ -201,7 +201,6 @@ async def get_ticket(
             "id": execution.id,
             "status": execution.status,
             "total_steps": execution.total_steps,
-            "triggered_by": execution.triggered_by,
             "created_at": execution.created_at.isoformat() if execution.created_at else None,
         } if execution else None,
     })

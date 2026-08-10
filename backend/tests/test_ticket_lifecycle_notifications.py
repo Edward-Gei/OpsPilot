@@ -172,7 +172,7 @@ async def test_reject_marks_queued_execution_and_skips_pending_steps(db_factory,
         await session.flush()
         template = await _template(session, creator_id=creator.id, role_id=approver_role_id)
         ticket = await ticket_service.create_ticket(session, creator=creator, template_id=template.id, params={})
-        execution = Execution(ticket_id=ticket.id, status="queued", total_steps=2, triggered_by="test")
+        execution = Execution(ticket_id=ticket.id, status="queued", total_steps=2)
         session.add(execution)
         await session.flush()
         ticket_steps = list((await session.execute(
@@ -308,9 +308,7 @@ async def test_pipeline_terminal_lifecycle_emits_event(
         )
         session.add(ticket)
         await session.flush()
-        execution = Execution(
-            ticket_id=ticket.id, status="queued", total_steps=1, triggered_by="test",
-        )
+        execution = Execution(ticket_id=ticket.id, status="queued", total_steps=1)
         session.add(execution)
         await session.flush()
         runner = pipeline.PipelineRunner(execution.id)

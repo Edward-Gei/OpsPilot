@@ -60,7 +60,6 @@ async def list_executions(
             "job_host_id": t.job_host_id, "job_host_name": (t.job_host_snap or {}).get("name", ""),
             "creator_id": t.creator_id, "creator_name": dn or un or str(t.creator_id),
             "status": e.status, "total_steps": e.total_steps,
-            "triggered_by": e.triggered_by,
             "started_at": _iso(e.started_at), "finished_at": _iso(e.finished_at),
             "created_at": _iso(e.created_at),
         }
@@ -93,7 +92,6 @@ async def get_execution_detail(session: AsyncSession, execution_id: int) -> dict
         "exec_strategy": (ticket.exec_strategy_snap or {}) if ticket else {},
         "status": execution.status,
         "total_steps": execution.total_steps,
-        "triggered_by": execution.triggered_by,
         "started_at": _iso(execution.started_at),
         "finished_at": _iso(execution.finished_at),
         "created_at": _iso(execution.created_at),

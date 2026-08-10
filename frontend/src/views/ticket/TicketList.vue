@@ -54,7 +54,6 @@ const columns = ref(makeResizable([
   { title: '工单号', dataIndex: 'ticket_no', key: 'ticket_no', width: 150 },
   { title: '标题（模板名）', dataIndex: 'title', key: 'title', width: 200, ellipsis: true },
   { title: '作业主机', key: 'job_host', width: 130, ellipsis: true },
-  { title: '模板版本', key: 'tpl_version', width: 90 },
   { title: '状态', key: 'status', width: 140 },
   { title: '提交人', dataIndex: 'creator_name', key: 'creator_name', width: 110, ellipsis: true },
   { title: '提交时间', key: 'submitted', width: 155 },
@@ -225,16 +224,10 @@ onMounted(() => {
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'job_host'">{{ record.job_host_name || '—' }}</template>
-        <template v-else-if="column.key === 'tpl_version'">
-          <a-tag color="cyan">v{{ record.template_version }}</a-tag>
-        </template>
         <template v-else-if="column.key === 'status'">
           <a-tag :color="statusMeta[record.status as ticketApi.TicketStatus]?.color">
             {{ statusMeta[record.status as ticketApi.TicketStatus]?.text || record.status }}
           </a-tag>
-          <span v-if="record.status === 'approving'" class="node-hint">
-            节点 {{ record.current_node }}/{{ record.total_nodes }}
-          </span>
         </template>
         <template v-else-if="column.key === 'submitted'">{{ fmtTime(record.submitted_at) }}</template>
         <template v-else-if="column.key === 'action'">
@@ -279,10 +272,5 @@ onMounted(() => {
 }
 .create-btn {
   margin-left: auto;
-}
-.node-hint {
-  font-size: 12px;
-  color: var(--text-3);
-  margin-left: 4px;
 }
 </style>

@@ -43,8 +43,7 @@ class Ticket(Base):
     updated_at: Mapped[datetime] = updated_at_column()
 
     def __init__(self, **kwargs):
-        """兼容开发期旧测试构造参数；不映射回数据库旧列。"""
-        kwargs.pop("template_version_snap", None)
+        """兼容开发期旧测试构造参数，避免历史调用传入已移除字段。"""
         kwargs.pop("credential_refs", None)
         if "current_node" in kwargs and "current_step" not in kwargs:
             kwargs["current_step"] = kwargs.pop("current_node")

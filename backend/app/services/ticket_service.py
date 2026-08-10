@@ -231,7 +231,7 @@ async def create_ticket(session: AsyncSession, *, creator: User, template_id: in
     await session.flush()
     first = await _first_approval_step(session, ticket)
     if first is None or first > 1:
-        await _start_execution(session, ticket, triggered_by="no_approval")
+        await _start_execution(session, ticket)
     else:
         ticket.current_step = first
         await _notify_pending_approval(session, ticket)
@@ -239,11 +239,11 @@ async def create_ticket(session: AsyncSession, *, creator: User, template_id: in
     return ticket
 
 
-async def _start_execution(session: AsyncSession, ticket: Ticket, *, triggered_by: str) -> Execution:
+async def _start_execution(session: AsyncSession, ticket: Ticket) -> Execution:
     ticket.status = TicketStatus.QUEUED.value
     ticket.current_step = 0
     steps = list((await session.execute(select(TicketStep).where(TicketStep.ticket_id == ticket.id).order_by(TicketStep.step_order))).scalars())
-    execution = Execution(ticket_id=ticket.id, status="queued", total_steps=len(steps), triggered_by=triggered_by)
+    execution = Execution(ticket_id=ticket.id, status="queued", total_steps=len(steps))
     session.add(execution)
     await session.flush()
     for step in steps:
@@ -338,7 +338,7 @@ async def approve_ticket(session: AsyncSession, ticket_id: int, *, actor: User, 
         ticket.current_step = next_step or 0
         execution = (await session.execute(select(Execution).where(Execution.ticket_id == ticket.id).order_by(Execution.id.desc()).limit(1))).scalar_one_or_none()
         if execution is None:
-            await _start_execution(session, ticket, triggered_by="approval")
+            await _start_execution(session, ticket)
         else:
             execution.status = "queued"
             ticket.status = TicketStatus.QUEUED.value

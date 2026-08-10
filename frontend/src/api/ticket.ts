@@ -35,7 +35,6 @@ export interface TicketBrief {
   template_id: number
   process_template_id?: number | null
   process_name?: string | null
-  template_version?: number
   type: string
   title: string
   job_host_id: number
@@ -87,7 +86,6 @@ export interface ExecutionBrief {
   id: number
   status: string
   total_steps: number
-  triggered_by: string
   created_at: string | null
 }
 
@@ -96,7 +94,6 @@ export interface TicketDetail extends TicketBrief {
   params: Record<string, string>
   exec_strategy: Partial<ExecStrategy>
   flow_snap: FlowNodeSnap[]
-  template_version?: number
   allow_withdraw: boolean
   job_host: JobHostSnap | null
   steps: TicketStepSnap[]

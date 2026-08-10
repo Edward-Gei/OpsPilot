@@ -22,7 +22,7 @@ async def _seed_data(db_factory, admin_id: int) -> None:
         session.add(Application(name="web-portal", deploy_type="shell"))
         session.add(TicketTemplate(name="web发布模板", type="release", job_host_id=1))
         session.add(Ticket(
-            ticket_no="T20260727-0001", template_id=1, template_version_snap=1,
+            ticket_no="T20260727-0001", template_id=1,
             title="web发布模板", type="release", job_host_id=1,
             job_host_snap={"id": 1, "name": "web-agent"},
             creator_id=admin_id,

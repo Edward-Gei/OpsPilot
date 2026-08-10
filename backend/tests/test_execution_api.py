@@ -130,7 +130,7 @@ class TestExecutionReadApis:
                                  headers=env["ops_h"])).json()["data"]
         assert body["total"] == 1
         item = body["items"][0]
-        assert (item["id"], item["status"], item["triggered_by"]) == (eid, "queued", "no_approval")
+        assert (item["id"], item["status"]) == (eid, "queued")
         assert item["creator_name"] == "ops1" and item["job_host_name"] == "tk-agent-01"
         body = (await client.get("/api/v1/executions", params={"status": "running"},
                                  headers=env["ops_h"])).json()["data"]

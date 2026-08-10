@@ -7,7 +7,7 @@
 - 参数校验：未定义键/固定值键/必填缺失 40001，缺省补默认值；
 - 节点审批推进 / 越级 40302 / 驳回意见必填 / 驳回关闭 / 撤回（含模板禁止撤回）；
 - 末节点通过 → queued + Execution(queued) + 预建执行子表 + XADD ops:exec:queue（M5）；
-- 免审模板：提交直接 queued（triggered_by=no_approval）；
+- 免审模板：提交直接 queued；
 - 待办列表 = 当前节点角色 ∩ 我的角色；通知按模板 notify_rules 落 record（M6 打桩）。
 """
 from sqlalchemy import select
@@ -203,7 +203,6 @@ class TestSubmit:
         detail = (await client.get(f"/api/v1/tickets/{data['id']}",
                                    headers=env["ops_h"])).json()["data"]
         assert detail["title"] == "重启 Nginx"  # 标题=模板名快照
-        assert detail["template_version"] == 1  # 升版前的版本号
         assert detail["params"] == {"svc": "nginx"}  # 缺省补默认值
         assert detail["steps"][0]["content_snap"].startswith("#!/bin/bash")
         assert detail["job_host"]["ip"] == "10.9.0.1"  # 作业主机快照不受后续改动影响
@@ -221,7 +220,7 @@ class TestSubmit:
         assert resp.json()["data"] == {"status": "queued", "current_node": 0}
         async with db_factory() as session:
             execution = (await session.execute(select(Execution))).scalar_one()
-            assert (execution.status, execution.triggered_by) == ("queued", "auto_approve")
+            assert execution.status == "queued"
             assert execution.total_steps == 1
         assert await fake_redis.xlen(EXEC_QUEUE) == 1
 
@@ -271,7 +270,6 @@ class TestSubmit:
         detail = (await client.get(f"/api/v1/tickets/{data['id']}",
                                    headers=env["ops_h"])).json()["data"]
         assert detail["flow_snap"] == [] and detail["total_nodes"] == 0
-        assert detail["execution"]["triggered_by"] == "no_approval"
         assert await fake_redis.xlen(EXEC_QUEUE) == 1
         assert await _notify_rows(db_factory) == []
 

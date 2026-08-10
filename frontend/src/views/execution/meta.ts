@@ -13,7 +13,6 @@ export const execStatusMeta: Record<ExecutionStatus, { text: string; color: stri
   rejected: { text: '已驳回', color: 'error' },
   cancelled: { text: '已撤回', color: 'default' },
 }
-
 export const execStatusOptions = Object.entries(execStatusMeta).map(([value, v]) => ({
   label: v.text,
   value,
@@ -35,10 +34,4 @@ export const interruptReasonText: Record<string, string> = {
   user_abort: '用户终止',
   system_crash: '系统崩溃恢复',
   worker_lost: '消息投递超限',
-}
-
-/** 触发方式展示 */
-export const triggeredByText: Record<string, string> = {
-  auto_approve: '审批通过',
-  no_approval: '免审提交',
 }

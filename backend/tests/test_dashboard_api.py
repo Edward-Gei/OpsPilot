@@ -16,7 +16,7 @@ pytestmark = pytest.mark.asyncio
 def _ticket(no: str, status: str, creator_id: int, created_at: datetime) -> Ticket:
     """最小合法工单行（快照字段填充占位值）。"""
     return Ticket(
-        ticket_no=no, template_id=1, template_version_snap=1, title=f"工单{no}",
+        ticket_no=no, template_id=1, title=f"工单{no}",
         type="daily_ops", job_host_id=1, job_host_snap={"id": 1, "name": "demo-jh"},
         status=status, creator_id=creator_id, submitted_at=created_at, created_at=created_at,
     )

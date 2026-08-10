@@ -5,6 +5,7 @@ import { message, Modal } from 'ant-design-vue'
 import { CodeOutlined, CopyOutlined, DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons-vue'
 import * as api from '@/api/job'
 import { listJobHosts } from '@/api/jobHost'
+import { listRoleOptions } from '@/api/system'
 import { makeResizable, onResizeColumn } from '@/utils/table'
 import { typeOptions, typeText } from './meta'
 import TicketTemplateEditor from './TicketTemplateEditor.vue'
@@ -20,6 +21,7 @@ const canWrite = true
 const rows = ref<Row[]>([])
 const processes = ref<api.ProcessTemplateItem[]>([])
 const hosts = ref<{ id: number; name: string; enabled: boolean }[]>([])
+const roles = ref<{ id: number; name: string }[]>([])
 const loading = ref(false)
 const total = ref(0)
 const selectedKeys = ref<number[]>([])
@@ -32,12 +34,14 @@ const detailOpen = ref(false)
 const query = reactive({ page: 1, page_size: 20, keyword: '', type: undefined as string | undefined, status: undefined as string | undefined })
 const hostMap = computed(() => Object.fromEntries(hosts.value.map((h) => [h.id, h.name])))
 const processMap = computed(() => Object.fromEntries(processes.value.map((p) => [p.id, p.name])))
+const roleMap = computed(() => Object.fromEntries(roles.value.map((role) => [role.id, role.name])))
 const stats = reactive({ all: 0, enabled: 0, disabled: 0 })
 const columns = ref(makeResizable([
   { title: '模板名称', dataIndex: 'name', key: 'name', width: 190, ellipsis: true },
   { title: '类型', key: 'type', width: 90 },
   { title: '作业主机', key: 'host', width: 150, ellipsis: true },
   { title: '流程模板', key: 'process', width: 170, ellipsis: true },
+  { title: '可见角色', key: 'visible_roles', width: 180, ellipsis: true },
   { title: '状态', key: 'status', width: 90 },
   { title: '更新时间', key: 'updated', width: 160 },
   { title: '操作', key: 'action', width: 210, fixed: 'right' as const },
@@ -46,15 +50,17 @@ const columns = ref(makeResizable([
 async function load() {
   loading.value = true
   try {
-    const [data, processData, hostData] = await Promise.all([
+    const [data, processData, hostData, roleData] = await Promise.all([
       api.listTemplates(query),
       api.listProcessTemplates({ page: 1, page_size: 100 }),
       listJobHosts({ page: 1, page_size: 100 }),
+      listRoleOptions(),
     ])
     rows.value = data.items as Row[]
     total.value = data.total
     processes.value = processData.items
     hosts.value = hostData.items.map((h) => ({ id: h.id, name: h.name, enabled: h.enabled }))
+    roles.value = roleData.items
     selectedKeys.value = []
     const [all, enabled, disabled] = await Promise.all([
       api.listTemplates({ page: 1, page_size: 1 }),
@@ -152,6 +158,12 @@ onMounted(load)
         <template v-if="column.key === 'type'"><a-tag :color="typeText[record.type as api.TemplateType]?.color">{{ typeText[record.type as api.TemplateType]?.text || record.type }}</a-tag></template>
         <template v-else-if="column.key === 'host'">{{ hostMap[record.job_host_id] || `#${record.job_host_id}` }}</template>
         <template v-else-if="column.key === 'process'"><a-tag color="cyan">{{ processMap[record.process_template_id] || `#${record.process_template_id}` }}</a-tag></template>
+        <template v-else-if="column.key === 'visible_roles'">
+          <template v-if="record.visible_role_ids?.length">
+            <a-tag v-for="roleId in record.visible_role_ids" :key="roleId" color="blue">{{ roleMap[roleId] || roleId }}</a-tag>
+          </template>
+          <span v-else>全部角色</span>
+        </template>
         <template v-else-if="column.key === 'status'"><a-switch :checked="record.status === 'enabled'" checked-children="启用" un-checked-children="停用" :loading="statusLoading === record.id" @change="toggle(record as Row)" /></template>
         <template v-else-if="column.key === 'updated'">{{ record.updated_at ? new Date(record.updated_at).toLocaleString() : '-' }}</template>
         <template v-else-if="column.key === 'action'"><a-space><a-button size="small" class="op-btn-cyan" @click="openDetail(record as Row)"><EyeOutlined />详情</a-button><a-button v-if="canWrite" size="small" class="op-btn-blue" @click="startEdit(record as Row)"><EditOutlined />编辑</a-button><a-popconfirm title="确认删除该工单模板？" @confirm="remove(record as Row)"><a-button v-if="canWrite" size="small" danger><DeleteOutlined />删除</a-button></a-popconfirm></a-space></template>

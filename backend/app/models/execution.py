@@ -21,7 +21,6 @@ class Execution(Base):
     ticket_id: Mapped[int] = mapped_column(UBIGINT, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued", comment="执行状态")
     total_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="步骤总数")
-    triggered_by: Mapped[str] = mapped_column(String(16), nullable=False, default="approval", comment="触发来源")
     started_at: Mapped[datetime | None] = mapped_column(DT3)
     finished_at: Mapped[datetime | None] = mapped_column(DT3)
     created_at: Mapped[datetime] = created_at_column()
