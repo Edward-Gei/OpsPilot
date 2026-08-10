@@ -6,6 +6,8 @@ import { message } from 'ant-design-vue'
 import {
   AppstoreAddOutlined,
   DeleteOutlined,
+  EditOutlined,
+  EyeOutlined,
   PlusOutlined,
   SearchOutlined,
 } from '@ant-design/icons-vue'
@@ -365,11 +367,11 @@ onMounted(() => {
         </template>
         <template v-else-if="column.key === 'action'">
           <a-space>
-            <a-button size="small" class="op-btn-cyan" @click="openDetail(record as cmdbApi.AppItem)">详情</a-button>
+            <a-button size="small" class="op-btn-cyan" @click="openDetail(record as cmdbApi.AppItem)"><EyeOutlined />详情</a-button>
             <template v-if="canWrite">
-              <a-button size="small" class="op-btn-blue" @click="openEdit(record as cmdbApi.AppItem)">编辑</a-button>
+              <a-button size="small" class="op-btn-blue" @click="openEdit(record as cmdbApi.AppItem)"><EditOutlined />编辑</a-button>
               <a-popconfirm title="确认删除该应用？" @confirm="onDelete(record as cmdbApi.AppItem)">
-                <a-button size="small" danger>删除</a-button>
+                <a-button size="small" danger><DeleteOutlined />删除</a-button>
               </a-popconfirm>
             </template>
           </a-space>

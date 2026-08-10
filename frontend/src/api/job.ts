@@ -198,6 +198,7 @@ export interface TemplateItem {
 
 /** 模板详情 = 主表全部规则 + 步骤 + 审批节点（当前生效配置） */
 export interface TemplateDetail extends TemplateItem {
+  process_template_id: number
   exec_strategy: Partial<ExecStrategy>
   allow_withdraw: boolean
   allow_transfer: boolean

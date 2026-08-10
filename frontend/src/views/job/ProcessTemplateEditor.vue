@@ -8,7 +8,7 @@ import { defaultExecStrategy, type ExecStrategy } from '@/api/ticket'
 import { listRoleOptions } from '@/api/system'
 import CodeEditor from '@/components/CodeEditor.vue'
 
-const props = defineProps<{ open: boolean; processId: number | null }>()
+const props = defineProps<{ open: boolean; processId: number | null; copyFromId?: number | null }>()
 const emit = defineEmits<{ 'update:open': [boolean]; saved: [] }>()
 const activeTab = ref('base')
 const loading = ref(false)
@@ -26,14 +26,15 @@ function reset() {
   Object.assign(form, { name: '', description: '', params_schema: [], generator_script: '', generator_timeout: 60, exec_strategy: defaultExecStrategy(), steps: [emptyStep()] })
   activeTab.value = 'base'; stepActive.value = [0]
 }
-watch(() => [props.open, props.processId], async ([open]) => {
+watch(() => [props.open, props.processId, props.copyFromId], async ([open]) => {
   if (!open) return
   reset(); roles.value = (await listRoleOptions()).items
-  if (!props.processId) return
+  const sourceId = props.processId ?? props.copyFromId
+  if (!sourceId) return
   loading.value = true
   try {
-    const data = await api.getProcessTemplate(props.processId)
-    Object.assign(form, { name: data.name, description: data.description || '', params_schema: (data.params_schema || []).map((p) => ({ ...emptyParam(), ...p, options: [...(p.options || [])] })), generator_script: data.generator_script || '', generator_timeout: data.generator_timeout || 60, exec_strategy: { ...defaultExecStrategy(), ...data.exec_strategy }, steps: (data.steps || []).map((s) => ({ name: s.name, script_type: s.script_type, content: s.content, timeout: s.timeout, approval_role_id: s.approval_role_id ?? null })) })
+    const data = await api.getProcessTemplate(sourceId)
+    Object.assign(form, { name: props.copyFromId && !props.processId ? `${data.name}-副本` : data.name, description: data.description || '', params_schema: (data.params_schema || []).map((p) => ({ ...emptyParam(), ...p, options: [...(p.options || [])] })), generator_script: data.generator_script || '', generator_timeout: data.generator_timeout || 60, exec_strategy: { ...defaultExecStrategy(), ...data.exec_strategy }, steps: (data.steps || []).map((s) => ({ name: s.name, script_type: s.script_type, content: s.content, timeout: s.timeout, approval_role_id: s.approval_role_id ?? null })) })
     stepActive.value = form.steps.map((_, index) => index)
   } finally { loading.value = false }
 }, { immediate: true })
@@ -74,7 +75,7 @@ async function save() {
 </script>
 
 <template>
-  <a-modal :open="open" :title="processId ? '编辑流程模板' : '新建流程模板'" :confirm-loading="saving" :width="960" @ok="save" @update:open="(value: boolean) => emit('update:open', value)">
+  <a-modal :open="open" :title="processId ? '编辑流程模板' : copyFromId ? '复制流程模板' : '新建流程模板'" :confirm-loading="saving" :width="960" @ok="save" @update:open="(value: boolean) => emit('update:open', value)">
     <a-spin :spinning="loading">
       <a-tabs v-model:active-key="activeTab">
         <a-tab-pane key="base" tab="基础信息"><a-form layout="vertical"><div class="form-row"><a-form-item label="流程名称" required class="form-col"><a-input v-model:value="form.name" placeholder="例如：应用发布流程" /></a-form-item><a-form-item label="生成脚本超时（秒）" class="form-col-sm"><a-input-number v-model:value="form.generator_timeout" :min="1" :max="3600" class="full-w" /></a-form-item></div><a-form-item label="说明"><a-textarea v-model:value="form.description" :rows="3" /></a-form-item></a-form></a-tab-pane>
@@ -87,5 +88,6 @@ async function save() {
 </template>
 
 <style scoped>
-.form-row { display: flex; gap: 16px; }.form-col { flex: 1; }.form-col-sm { width: 150px; }.full-w { width: 100%; }.checks { display: flex; align-items: flex-end; gap: 16px; }.label-tip { font-size: 12px; color: var(--text-3); margin-top: 6px; }.param-alert { margin-bottom: 14px; }.param-block { padding: 10px 0; border-bottom: 1px solid var(--border); }.param-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }.param-name { width: 130px; }.param-label { width: 110px; }.param-source { width: 135px; }.param-type { width: 110px; }.param-default { width: 180px; }.param-desc { flex: 1; }.option-list { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 8px; }.option-list :deep(.ant-tag) { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; }.option-list :deep(.ant-input) { width: 120px; }.param-detail { padding-left: 8px; }.add-step-btn { margin-top: 12px; }.section-title { font-weight: 600; margin: 4px 0 12px; }
+.form-row { display: flex; gap: 16px; }.form-col { flex: 1; }.form-col-sm { width: 150px; }.full-w { width: 100%; }.checks { display: flex; align-items: flex-end; gap: 16px; }.label-tip { font-size: 12px; color: var(--text-3); margin-top: 6px; }.param-alert { margin-bottom: 14px; }.param-block { padding: 14px 0 12px; border-bottom: 1px solid var(--border); }.param-row { display: grid; grid-template-columns: 150px 150px 160px 120px minmax(56px, auto) 36px; align-items: center; gap: 8px; margin-bottom: 8px; }.param-row > * { min-width: 0; width: 100%; }.param-name { width: 100%; }.param-label { width: 100%; }.param-source { width: 100%; }.param-type { width: 100%; }.param-default { width: 100%; }.param-desc { width: 100%; }.param-detail { grid-template-columns: minmax(340px, 1fr) minmax(180px, 260px) auto; padding-left: 0; }.param-detail .op-btn-green { width: auto; white-space: nowrap; justify-self: start; }.option-list { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 0; }.option-list :deep(.ant-tag) { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; }.option-list :deep(.ant-input) { width: 120px; }.add-step-btn { margin-top: 12px; }.section-title { font-weight: 600; margin: 4px 0 12px; }
+@media (max-width: 760px) { .param-row { grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) 36px; }.param-row > .param-source, .param-row > .param-type { grid-column: span 1; }.param-row > .ant-checkbox-wrapper { grid-column: span 1; }.param-detail { grid-template-columns: minmax(220px, 1fr) minmax(160px, 0.75fr) auto; } }
 </style>

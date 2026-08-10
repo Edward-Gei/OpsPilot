@@ -3,6 +3,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
+  EyeOutlined,
   SearchOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons-vue'
@@ -171,6 +172,7 @@ onMounted(() => {
         <template v-else-if="column.key === 'finished'">{{ fmtTime(record.finished_at) }}</template>
         <template v-else-if="column.key === 'action'">
           <a-button size="small" class="op-btn-cyan" @click="openDetail(record as execApi.ExecutionBrief)">
+            <EyeOutlined />
             详情
           </a-button>
         </template>

@@ -95,6 +95,7 @@ onMounted(loadList)
         <template v-else-if="column.key === 'submitted'">{{ fmtTime(record.submitted_at) }}</template>
         <template v-else-if="column.key === 'action'">
           <a-button size="small" class="op-btn-green" @click="openApprove(record as ticketApi.TicketBrief)">
+            <AuditOutlined />
             审批
           </a-button>
         </template>

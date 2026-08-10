@@ -6,8 +6,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import dayjs, { type Dayjs } from 'dayjs'
 import {
+  EyeOutlined,
   FileDoneOutlined,
   PlusOutlined,
+  RollbackOutlined,
   SearchOutlined,
 } from '@ant-design/icons-vue'
 import * as ticketApi from '@/api/ticket'
@@ -238,6 +240,7 @@ onMounted(() => {
         <template v-else-if="column.key === 'action'">
           <a-space>
             <a-button size="small" class="op-btn-cyan" @click="openDetail(record as ticketApi.TicketBrief)">
+              <EyeOutlined />
               详情
             </a-button>
             <!-- 审批中：仅创建人可撤回（模板 allow_withdraw=false 时后端拒绝） -->
@@ -246,7 +249,7 @@ onMounted(() => {
               title="确认撤回该工单？"
               @confirm="onCancel(record as ticketApi.TicketBrief)"
             >
-              <a-button size="small" class="op-btn-orange">撤回</a-button>
+              <a-button size="small" class="op-btn-orange"><RollbackOutlined />撤回</a-button>
             </a-popconfirm>
           </a-space>
         </template>

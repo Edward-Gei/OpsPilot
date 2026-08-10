@@ -8,6 +8,8 @@ import {
   CloudServerOutlined,
   DeleteOutlined,
   DownloadOutlined,
+  EditOutlined,
+  EyeOutlined,
   PlusOutlined,
   SearchOutlined,
   UploadOutlined,
@@ -468,11 +470,11 @@ onMounted(() => {
         </template>
         <template v-else-if="column.key === 'action'">
           <a-space>
-            <a-button size="small" class="op-btn-cyan" @click="openDetail(record as cmdbApi.HostItem)">详情</a-button>
+            <a-button size="small" class="op-btn-cyan" @click="openDetail(record as cmdbApi.HostItem)"><EyeOutlined />详情</a-button>
             <template v-if="canWrite">
-              <a-button size="small" class="op-btn-blue" @click="openEdit(record as cmdbApi.HostItem)">编辑</a-button>
+              <a-button size="small" class="op-btn-blue" @click="openEdit(record as cmdbApi.HostItem)"><EditOutlined />编辑</a-button>
               <a-popconfirm title="确认删除该主机？" @confirm="onDelete(record as cmdbApi.HostItem)">
-                <a-button size="small" danger>删除</a-button>
+                <a-button size="small" danger><DeleteOutlined />删除</a-button>
               </a-popconfirm>
             </template>
           </a-space>

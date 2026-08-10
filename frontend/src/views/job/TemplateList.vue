@@ -9,6 +9,9 @@ import {
   CodeOutlined,
   CopyOutlined,
   DeleteOutlined,
+  EditOutlined,
+  EyeOutlined,
+  HistoryOutlined,
   PlusOutlined,
   SearchOutlined,
 } from '@ant-design/icons-vue'
@@ -408,12 +411,12 @@ onMounted(() => {
         </template>
         <template v-else-if="column.key === 'action'">
           <a-space>
-            <a-button size="small" class="op-btn-cyan" @click="openDetail(record as jobApi.TemplateItem)">详情</a-button>
-            <a-button size="small" class="op-btn-purple" @click="openVersions(record as jobApi.TemplateItem)">版本</a-button>
+            <a-button size="small" class="op-btn-cyan" @click="openDetail(record as jobApi.TemplateItem)"><EyeOutlined />详情</a-button>
+            <a-button size="small" class="op-btn-purple" @click="openVersions(record as jobApi.TemplateItem)"><HistoryOutlined />版本</a-button>
             <template v-if="canWrite">
-              <a-button size="small" class="op-btn-blue" @click="openEdit(record as jobApi.TemplateItem)">编辑</a-button>
+              <a-button size="small" class="op-btn-blue" @click="openEdit(record as jobApi.TemplateItem)"><EditOutlined />编辑</a-button>
               <a-popconfirm title="确认删除该模板？（版本历史一并删除）" @confirm="onDelete(record as jobApi.TemplateItem)">
-                <a-button size="small" danger>删除</a-button>
+                <a-button size="small" danger><DeleteOutlined />删除</a-button>
               </a-popconfirm>
             </template>
           </a-space>
@@ -522,7 +525,7 @@ onMounted(() => {
             </template>
             <template v-else-if="column.key === 'action'">
               <a-button size="small" class="op-btn-cyan" @click="openVersionDetail(record as jobApi.TemplateVersionItem)">
-                查看
+                <EyeOutlined />查看
               </a-button>
             </template>
           </template>

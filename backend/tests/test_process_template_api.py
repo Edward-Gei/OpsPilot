@@ -68,6 +68,15 @@ async def test_ticket_template_has_no_credential_or_embedded_rules(client, seed)
     assert "credential_refs" not in detail and "steps" not in detail and "approval_nodes" not in detail
 
 
+async def test_ops_can_load_template_reference_options(client):
+    """模板编辑器依赖的作业主机和角色选项对运维角色可读。"""
+    _, ops, _ = await _env(client)
+    hosts = await client.get("/api/v1/job-hosts", headers=ops)
+    roles = await client.get("/api/v1/roles/options", headers=ops)
+    assert hosts.json()["code"] == 0
+    assert roles.json()["code"] == 0
+
+
 def test_generated_parameter_output_supports_value_and_options():
     values, options = _parse_output('{"release": ["blue", "green"], "version": "2026.08"}', ["release", "version"])
     assert values == {"version": "2026.08"}

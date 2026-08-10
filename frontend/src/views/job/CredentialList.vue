@@ -4,6 +4,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import {
   DeleteOutlined,
+  EditOutlined,
   KeyOutlined,
   PlusOutlined,
   SearchOutlined,
@@ -308,9 +309,9 @@ onMounted(() => {
         </template>
         <template v-else-if="column.key === 'action'">
           <a-space v-if="canWrite">
-            <a-button size="small" class="op-btn-blue" @click="openEdit(record as jobApi.CredentialItem)">编辑</a-button>
+            <a-button size="small" class="op-btn-blue" @click="openEdit(record as jobApi.CredentialItem)"><EditOutlined />编辑</a-button>
             <a-popconfirm title="确认删除该凭据？" @confirm="onDelete(record as jobApi.CredentialItem)">
-              <a-button size="small" danger>删除</a-button>
+              <a-button size="small" danger><DeleteOutlined />删除</a-button>
             </a-popconfirm>
           </a-space>
           <template v-else>—</template>

@@ -169,6 +169,7 @@ BUILTIN_ROLES: dict[str, dict] = {
         "permissions": [
             "cmdb:read", "cmdb:write",
             "credential:read",
+            "job_host:read",
             "template:read", "template:write",
             "ticket:read", "ticket:write",
             "execution:read", "execution:control",

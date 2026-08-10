@@ -5,6 +5,7 @@ import { message } from 'ant-design-vue'
 import {
   DownOutlined,
   ExportOutlined,
+  EyeOutlined,
   SafetyCertificateOutlined,
   SearchOutlined,
 } from '@ant-design/icons-vue'
@@ -276,6 +277,7 @@ onMounted(refreshAll)
         </template>
         <template v-else-if="column.key === 'op'">
           <a-button size="small" class="op-btn-blue" @click="openDetail(record as auditApi.AuditLogItem)">
+            <EyeOutlined />
             详情
           </a-button>
         </template>

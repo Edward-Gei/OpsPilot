@@ -3,7 +3,7 @@
 // + 连通性测试 / 启用禁用 / 删除（job_host:read / job_host:write）
 import { onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
-import { PlusOutlined, SearchOutlined } from '@ant-design/icons-vue'
+import { ApiOutlined, DeleteOutlined, EditOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons-vue'
 import * as jobHostApi from '@/api/jobHost'
 import * as jobApi from '@/api/job'
 import { makeResizable, onResizeColumn } from '@/utils/table'
@@ -288,10 +288,10 @@ onMounted(loadList)
               class="op-btn-cyan"
               :loading="testingId === record.id"
               @click="onTest(record as jobHostApi.JobHost)"
-            >测试</a-button>
-            <a-button size="small" class="op-btn-blue" @click="openEdit(record as jobHostApi.JobHost)">编辑</a-button>
+            ><ApiOutlined />测试</a-button>
+            <a-button size="small" class="op-btn-blue" @click="openEdit(record as jobHostApi.JobHost)"><EditOutlined />编辑</a-button>
             <a-popconfirm title="确认删除该作业主机？" @confirm="onDelete(record as jobHostApi.JobHost)">
-              <a-button size="small" danger>删除</a-button>
+              <a-button size="small" danger><DeleteOutlined />删除</a-button>
             </a-popconfirm>
           </a-space>
           <template v-else>—</template>

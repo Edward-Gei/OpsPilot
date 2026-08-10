@@ -3,8 +3,12 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Modal, message } from 'ant-design-vue'
 import {
+  CheckOutlined,
   DownOutlined,
+  EditOutlined,
+  KeyOutlined,
   PlusOutlined,
+  SafetyCertificateOutlined,
   SearchOutlined,
   StopOutlined,
   TeamOutlined,
@@ -385,13 +389,14 @@ onMounted(() => {
         <template v-else-if="column.key === 'action'">
           <a-space>
             <template v-if="canWrite">
-              <a-button size="small" class="op-btn-blue" @click="openEdit(record as sysApi.UserItem)">编辑</a-button>
+              <a-button size="small" class="op-btn-blue" @click="openEdit(record as sysApi.UserItem)"><EditOutlined />编辑</a-button>
               <a-button
                 v-if="record.source === 'local'"
                 size="small"
                 class="op-btn-purple"
                 @click="openReset(record as sysApi.UserItem)"
               >
+                <KeyOutlined />
                 重置密码
               </a-button>
               <a-popconfirm
@@ -403,12 +408,13 @@ onMounted(() => {
                   :danger="record.status === 'active'"
                   :class="record.status === 'active' ? '' : 'op-btn-green'"
                 >
+                  <StopOutlined v-if="record.status === 'active'" /><CheckOutlined v-else />
                   {{ record.status === 'active' ? '禁用' : '启用' }}
                 </a-button>
               </a-popconfirm>
             </template>
             <a-dropdown v-if="canMfa">
-              <a-button size="small" class="op-btn-orange">MFA<DownOutlined /></a-button>
+              <a-button size="small" class="op-btn-orange"><SafetyCertificateOutlined />MFA<DownOutlined /></a-button>
               <template #overlay>
                 <a-menu @click="(info: MenuClickInfo) => onMfaAction(record as sysApi.UserItem, info.key)">
                   <a-menu-item key="enable" :disabled="record.mfa_enabled || !record.mfa_bound">
