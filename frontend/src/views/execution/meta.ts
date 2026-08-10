@@ -10,6 +10,7 @@ export const execStatusMeta: Record<ExecutionStatus, { text: string; color: stri
   failed: { text: '失败', color: 'error' },
   terminated: { text: '已中止', color: 'warning' },
   interrupted: { text: '已中断', color: 'warning' },
+  rejected: { text: '已驳回', color: 'error' },
 }
 
 export const execStatusOptions = Object.entries(execStatusMeta).map(([value, v]) => ({

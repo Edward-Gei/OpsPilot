@@ -7,7 +7,7 @@ import type { ExecStrategy } from './ticket'
 /** 执行实例状态（03 §5.2） */
 export type ExecutionStatus =
   | 'queued' | 'running' | 'paused'
-  | 'success' | 'failed' | 'terminated' | 'interrupted'
+  | 'success' | 'failed' | 'terminated' | 'interrupted' | 'rejected'
 
 /** 执行记录列表行 */
 export interface ExecutionBrief {

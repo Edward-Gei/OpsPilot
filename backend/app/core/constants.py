@@ -89,7 +89,8 @@ class InterruptReason(str, Enum):
 
 class ExecutionStatus(str, Enum):
     """执行实例状态：terminated=人为中止（映射工单 interrupted+user_abort）；
-    interrupted=系统崩溃/失联（映射工单 interrupted+system_crash/worker_lost）。"""
+    interrupted=系统崩溃/失联（映射工单 interrupted+system_crash/worker_lost）；
+    rejected=审批驳回后关闭执行实例。"""
     QUEUED = "queued"
     RUNNING = "running"
     PAUSED = "paused"
@@ -97,6 +98,7 @@ class ExecutionStatus(str, Enum):
     FAILED = "failed"
     TERMINATED = "terminated"
     INTERRUPTED = "interrupted"
+    REJECTED = "rejected"
 
 
 class HostExecStatus(str, Enum):

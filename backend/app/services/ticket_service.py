@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import redis as redis_mod
-from app.core.constants import TicketStatus
+from app.core.constants import ExecutionStatus, HostExecStatus, NotifyEvent, TicketStatus
 from app.core.response import BizError, Errors
 from app.engine import control as exec_ctrl
 from app.models.auth import Role, User, UserRole
@@ -14,7 +14,7 @@ from app.models.cmdb import JobHost
 from app.models.execution import Execution, ExecutionStep
 from app.models.job import TicketTemplate
 from app.models.ticket import Ticket, TicketApproval, TicketStep
-from app.services import parameter_prepare_service, template_service
+from app.services import notify_service, parameter_prepare_service, template_service
 
 
 async def get_ticket_or_404(session: AsyncSession, ticket_id: int) -> Ticket:
@@ -109,6 +109,95 @@ async def _first_approval_step(session: AsyncSession, ticket: Ticket) -> int | N
     return None
 
 
+async def _resolve_receivers(session: AsyncSession, ticket: Ticket, expressions: list[str]) -> list[str]:
+    """解析通知规则收件人，保证角色成员和创建人都使用用户名发送。"""
+    receivers: list[str] = []
+    for expression in expressions:
+        if expression == "creator":
+            creator = await session.get(User, ticket.creator_id)
+            if creator:
+                receivers.append(creator.username)
+        elif expression == "approver_role":
+            step = (await session.execute(
+                select(TicketStep).where(
+                    TicketStep.ticket_id == ticket.id,
+                    TicketStep.step_order == ticket.current_step,
+                )
+            )).scalar_one_or_none()
+            if step and step.approval_role_id_snap:
+                receivers.extend(await _role_members(session, step.approval_role_id_snap))
+        elif expression.startswith("role:"):
+            try:
+                receivers.extend(await _role_members(session, int(expression.split(":", 1)[1])))
+            except ValueError:
+                continue
+    return list(dict.fromkeys(receivers))
+
+
+async def _emit_ticket_event(
+    session: AsyncSession,
+    ticket: Ticket,
+    event: NotifyEvent,
+    *,
+    title: str,
+    content: str,
+    default_receivers: list[str],
+    variables: dict | None = None,
+) -> None:
+    """按工单模板规则发射事件，并补齐渠道模板需要的工单变量。"""
+    template = await session.get(TicketTemplate, ticket.template_id)
+    rule = next(
+        (item for item in ((template.notify_rules if template else None) or [])
+         if item.get("event") == event.value),
+        None,
+    )
+    receivers = (
+        await _resolve_receivers(session, ticket, rule.get("receivers", []))
+        if rule and rule.get("receivers")
+        else default_receivers
+    )
+    creator = await session.get(User, ticket.creator_id)
+    await notify_service.emit(
+        session,
+        event,
+        receiver=",".join(receivers) or None,
+        title=title,
+        content=content,
+        ref_type="ticket",
+        ref_id=ticket.id,
+        variables={
+            "ticket_no": ticket.ticket_no,
+            "ticket_title": ticket.title,
+            "job_host_name": (ticket.job_host_snap or {}).get("name", ""),
+            "creator": creator.username if creator else str(ticket.creator_id),
+            **(variables or {}),
+        },
+    )
+
+
+async def _notify_pending_approval(session: AsyncSession, ticket: Ticket) -> None:
+    """工单进入审批步骤时通知该步骤角色的全部成员。"""
+    step = (await session.execute(
+        select(TicketStep).where(
+            TicketStep.ticket_id == ticket.id,
+            TicketStep.step_order == ticket.current_step,
+        )
+    )).scalar_one_or_none()
+    if step is None or not step.approval_role_id_snap:
+        return
+    role = await session.get(Role, step.approval_role_id_snap)
+    role_name = role.name if role else str(step.approval_role_id_snap)
+    await _emit_ticket_event(
+        session,
+        ticket,
+        NotifyEvent.TICKET_PENDING_APPROVAL,
+        title=f"工单 {ticket.ticket_no} 等待第 {ticket.current_step} 步骤审批",
+        content=f"{ticket.title}（作业主机：{(ticket.job_host_snap or {}).get('name', '')}）待 {role_name} 审批",
+        default_receivers=await _role_members(session, step.approval_role_id_snap),
+        variables={"node": ticket.current_step, "role": role_name},
+    )
+
+
 async def create_ticket(session: AsyncSession, *, creator: User, template_id: int, params: dict, prepare_id: str | None = None) -> Ticket:
     tpl = await _ensure_template_usable(session, template_id, user_id=creator.id)
     process = await template_service.get_process_or_404(session, tpl.process_template_id)
@@ -145,6 +234,7 @@ async def create_ticket(session: AsyncSession, *, creator: User, template_id: in
         await _start_execution(session, ticket, triggered_by="no_approval")
     else:
         ticket.current_step = first
+        await _notify_pending_approval(session, ticket)
     await session.flush()
     return ticket
 
@@ -208,10 +298,41 @@ async def approve_ticket(session: AsyncSession, ticket_id: int, *, actor: User, 
     if existing:
         raise Errors.conflict("当前步骤已审批")
     session.add(TicketApproval(ticket_id=ticket.id, step_order=ticket.current_step, role_id=step.approval_role_id_snap, approver_id=actor.id, action=action, comment=comment))
+    creator = await session.get(User, ticket.creator_id)
+    creator_name = creator.username if creator else str(ticket.creator_id)
     if action == "reject":
         ticket.status = TicketStatus.REJECTED.value
-        ticket.current_step = 0
         ticket.finished_at = datetime.now()
+        execution = (await session.execute(
+            select(Execution).where(Execution.ticket_id == ticket.id)
+            .order_by(Execution.id.desc()).limit(1)
+        )).scalar_one_or_none()
+        # 审批接口只接受 approving 工单，因此暂停中的执行不会进入此分支。
+        if execution and execution.status in {
+            ExecutionStatus.QUEUED.value,
+            ExecutionStatus.RUNNING.value,
+        }:
+            execution.status = ExecutionStatus.REJECTED.value
+            execution.finished_at = datetime.now()
+            pending_steps = (await session.execute(
+                select(ExecutionStep).where(
+                    ExecutionStep.execution_id == execution.id,
+                    ExecutionStep.status == HostExecStatus.PENDING.value,
+                )
+            )).scalars()
+            for execution_step in pending_steps:
+                execution_step.status = HostExecStatus.SKIPPED.value
+                execution_step.finished_at = datetime.now()
+        await _emit_ticket_event(
+            session,
+            ticket,
+            NotifyEvent.TICKET_REJECTED,
+            title=f"工单 {ticket.ticket_no} 已被驳回",
+            content=f"{ticket.title}：{actor.username} 驳回，意见：{comment or ''}",
+            default_receivers=[creator_name],
+            variables={"approver": actor.username, "comment": comment or ""},
+        )
+        ticket.current_step = 0
     else:
         next_step = (await session.execute(select(TicketStep.step_order).where(TicketStep.ticket_id == ticket.id, TicketStep.step_order > ticket.current_step, TicketStep.approval_role_id_snap.is_not(None)).order_by(TicketStep.step_order).limit(1))).scalar_one_or_none()
         ticket.current_step = next_step or 0
@@ -225,6 +346,16 @@ async def approve_ticket(session: AsyncSession, ticket_id: int, *, actor: User, 
                 await redis_mod.redis_client.xadd(redis_mod.EXEC_QUEUE, {"execution_id": str(execution.id)})
             except Exception:
                 pass
+        if not next_step:
+            await _emit_ticket_event(
+                session,
+                ticket,
+                NotifyEvent.TICKET_APPROVED,
+                title=f"工单 {ticket.ticket_no} 审批通过",
+                content=f"{ticket.title}：审批通过，已自动进入执行队列",
+                default_receivers=[creator_name],
+                variables={"approver": actor.username, "comment": comment or ""},
+            )
     await session.flush()
     return ticket
 
@@ -275,8 +406,3 @@ async def get_ticket_bundle(session: AsyncSession, ticket_id: int) -> dict:
     execution = (await session.execute(select(Execution).where(Execution.ticket_id == ticket.id).order_by(Execution.id.desc()).limit(1))).scalar_one_or_none()
     return {"ticket": ticket, "creator": creator, "steps": steps, "approvals": approvals, "execution": execution,
             "job_host": ticket.job_host_snap}
-
-
-async def _emit_ticket_event(*args, **kwargs):
-    """兼容执行引擎回调；通知记录由现有通知服务负责。"""
-    return None

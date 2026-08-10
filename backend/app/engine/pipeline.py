@@ -227,6 +227,9 @@ class PipelineRunner:
                     self.ticket.status = TicketStatus.APPROVING.value
                     self.ticket.current_step = step.step_order
                     self.execution.status = ExecutionStatus.QUEUED.value
+                    # 执行到带审批角色的步骤时才通知，避免提前通知尚未到达的审批步骤。
+                    from app.services.ticket_service import _notify_pending_approval
+                    await _notify_pending_approval(s, self.ticket)
                     await s.commit()
                     return None
             step_failed = await self._run_one_step(step, tstep)

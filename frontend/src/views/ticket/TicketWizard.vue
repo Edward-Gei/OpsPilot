@@ -60,11 +60,18 @@ async function next() {
   }
   formLoading.value = true
   try {
-    form.value = await ticketApi.getTemplateFormDesc(selectedId.value)
+    const templateForm = await ticketApi.getTemplateFormDesc(selectedId.value)
+    const prepared = await ticketApi.prepareTicket(selectedId.value, {})
+    form.value = templateForm
     Object.keys(paramValues).forEach((k) => delete paramValues[k])
     Object.keys(paramOptions).forEach((k) => delete paramOptions[k])
-    prepareId.value = undefined
-    for (const p of form.value.params) paramValues[p.name] = p.default ?? ''
+    Object.assign(paramOptions, prepared.options)
+    prepareId.value = prepared.prepare_id
+    for (const p of form.value.params) {
+      paramValues[p.name] = p.source === 'generated'
+        ? prepared.values[p.name] ?? prepared.options[p.name]?.[0] ?? ''
+        : p.default ?? ''
+    }
     step.value = 1
   } catch {
     /* 禁用 40901 / 范围外 40302 等提示由拦截器统一弹出 */
@@ -102,14 +109,10 @@ async function onSubmit() {
     for (const [k, v] of Object.entries(paramValues)) {
       if (v.trim()) params[k] = v
     }
-    const prepared = await ticketApi.prepareTicket(form.value.template.id, params)
-    Object.assign(paramOptions, prepared.options)
-    const optionNames = Object.keys(prepared.options)
-    if (optionNames.some((name) => !params[name])) {
-      message.info('动态参数已生成，请选择候选值后再次提交')
+    if (!prepareId.value) {
+      message.warning('动态参数尚未生成，请返回上一步重试')
       return
     }
-    prepareId.value = prepared.prepare_id
     const res = await ticketApi.createTicket(form.value.template.id, params, prepareId.value)
     if (res.status === 'queued') message.success(`工单 ${res.ticket_no} 已提交，免审进入执行队列`)
     else message.success(`工单 ${res.ticket_no} 已提交，等待第 ${res.current_node} 节点审批`)
@@ -199,7 +202,14 @@ const jobHostText = computed(() => {
             <span class="w-param-name">{{ p.name }}</span>
             <span v-if="p.description" class="w-param-desc">{{ p.description }}</span>
           </template>
-          <a-select v-if="paramOptions[p.name]?.length || p.input_type === 'enum'" v-model:value="paramValues[p.name]" :options="(paramOptions[p.name] || p.options || []).map((v) => ({ label: v, value: v }))" />
+          <a-select
+            v-if="paramOptions[p.name]?.length || p.input_type === 'enum'"
+            v-model:value="paramValues[p.name]"
+            show-search
+            option-filter-prop="label"
+            :options="(paramOptions[p.name] || p.options || []).map((v) => ({ label: v, value: v }))"
+          />
+          <a-input v-else-if="p.source === 'generated'" v-model:value="paramValues[p.name]" disabled />
           <a-input v-else v-model:value="paramValues[p.name]" :placeholder="p.default ? `默认：${p.default}` : ''" />
         </a-form-item>
       </a-form>

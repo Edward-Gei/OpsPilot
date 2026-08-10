@@ -86,11 +86,6 @@ async def consume_parameters(session, *, token: str, template_id: int, params: d
     row = (await session.execute(select(TicketParameterPrepare).where(TicketParameterPrepare.token == token))).scalar_one_or_none()
     if row is None or row.template_id != template_id or row.consumed_at or row.expires_at < datetime.now():
         raise Errors.conflict("动态参数预生成结果已失效")
-    process = await template_service.get_process_or_404(session, (await template_service.get_template_or_404(session, template_id)).process_template_id)
-    generated_names = {p["name"] for p in (process.params_schema or []) if p["source"] == "generated"}
-    stable_params = {k: v for k, v in (params or {}).items() if k not in generated_names}
-    if row.input_params != stable_params:
-        raise Errors.conflict("创建工单参数已变化，请重新生成动态参数")
     selected = {}
     for name, options in (row.options or {}).items():
         if name in params:
