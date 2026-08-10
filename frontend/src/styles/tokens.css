@@ -231,13 +231,23 @@ body {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
-.op-desc-table .ant-descriptions-item-content > .ant-tag {
+.op-desc-table .ant-descriptions-item-content .ant-tag {
+  display: inline-flex;
+  align-items: flex-start;
+  min-width: 0;
   max-width: 100%;
+  height: auto;
+  min-height: 24px;
   white-space: normal;
   overflow-wrap: anywhere;
+  word-break: break-all;
   line-height: 1.55;
   margin-inline-end: 6px;
   margin-bottom: 4px;
+}
+.op-desc-table .d-params {
+  width: 100%;
+  margin-bottom: 0;
 }
 @media (max-width: 575px) {
   .op-desc-table .ant-descriptions-item-label {

@@ -145,14 +145,18 @@ function openExecution() {
           <a-descriptions-item label="提交人">{{ detail.creator_name }}</a-descriptions-item>
           <a-descriptions-item label="提交时间">{{ fmtTime(detail.submitted_at) }}</a-descriptions-item>
           <a-descriptions-item label="完成时间">{{ fmtTime(detail.finished_at) }}</a-descriptions-item>
-          <a-descriptions-item label="执行策略">{{ strategyText }}</a-descriptions-item>
+          <a-descriptions-item label="执行策略" :span="2">{{ strategyText }}</a-descriptions-item>
           <a-descriptions-item v-if="Object.keys(detail.params).length" label="提交参数" :span="2">
-            <a-tag v-for="(v, k) in detail.params" :key="k" color="geekblue">{{ k }} = {{ v }}</a-tag>
+            <div class="d-params">
+              <a-tag v-for="(v, k) in detail.params" :key="k" color="geekblue">{{ k }} = {{ v }}</a-tag>
+            </div>
           </a-descriptions-item>
           <a-descriptions-item v-if="detail.credential_refs?.length" label="引用凭据" :span="2">
-            <a-tag v-for="r in detail.credential_refs" :key="r.alias" color="purple">
-              {{ r.alias }} → {{ r.credential_name }}
-            </a-tag>
+            <div class="d-params">
+              <a-tag v-for="r in detail.credential_refs" :key="r.alias" color="purple">
+                {{ r.alias }} → {{ r.credential_name }}
+              </a-tag>
+            </div>
           </a-descriptions-item>
         </a-descriptions>
 
