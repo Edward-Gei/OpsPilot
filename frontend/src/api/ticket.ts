@@ -122,6 +122,7 @@ export interface UsableTemplate {
   type: string
   description: string | null
   job_host_id: number
+  job_host_name?: string | null
   process_template_id: number
   process_name?: string
   approval_enabled?: boolean

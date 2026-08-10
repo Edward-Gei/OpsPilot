@@ -154,7 +154,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/tickets/templates` | `ticket:write` | 可用模板列表（enabled + visible_role_ids 过滤） |
+| GET | `/tickets/templates` | `ticket:write` | 可用模板列表（enabled + visible_role_ids 过滤），返回 `job_host_id` 及 `job_host_name` |
 | GET | `/tickets/templates/{id}/form` | `ticket:write` | 提交表单描述：汇总参数（各步骤 params_schema 同名合并，排除 fixed）+ 作业主机/步骤/审批节点/策略只读预览 |
 | POST | `/tickets` | `ticket:write` | 提交工单：`{template_id, params}`；服务端固化六重快照（作业主机/步骤内容/审批节点/策略/版本/引用凭据）；免审直接入执行队列，否则进入 approving 并发待审批通知 |
 | GET | `/tickets` | `ticket:read` | 分页；status/creator/keyword（标题/工单号模糊）/时间范围 |

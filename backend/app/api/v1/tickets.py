@@ -14,6 +14,7 @@ from app.core.deps import DbSession, get_client_ip, require_perm
 from app.core.response import ok
 from app.engine import control as exec_ctrl
 from app.models.auth import User
+from app.models.cmdb import JobHost
 from app.schemas.ticket import ApproveRequest, TicketCreateRequest, TicketPrepareRequest
 from app.services import parameter_prepare_service, ticket_service
 
@@ -63,6 +64,13 @@ async def list_usable_templates(
 ) -> dict:
     """可提交模板：enabled + visible_role_ids 过滤（空=所有 ticket:write 角色可用）。"""
     tpls = await ticket_service.list_visible_templates(session, user_id=actor.id)
+    host_names: dict[int, str] = {}
+    host_ids = {t.job_host_id for t in tpls}
+    if host_ids:
+        host_rows = await session.execute(
+            select(JobHost.id, JobHost.name).where(JobHost.id.in_(host_ids))
+        )
+        host_names = {host_id: name for host_id, name in host_rows}
     items = []
     for t in tpls:
         process = await ticket_service.template_service.get_process_or_404(session, t.process_template_id)
@@ -70,7 +78,7 @@ async def list_usable_templates(
             continue
         items.append({"id": t.id, "name": t.name, "type": t.type, "description": t.description,
                      "job_host_id": t.job_host_id, "process_template_id": t.process_template_id,
-                     "process_name": process.name})
+                     "job_host_name": host_names.get(t.job_host_id), "process_name": process.name})
     return ok({"items": items})
 
 

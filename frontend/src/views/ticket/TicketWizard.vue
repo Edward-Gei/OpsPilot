@@ -173,7 +173,7 @@ const jobHostText = computed(() => {
             <div class="tpl-card-desc">{{ t.description || '暂无说明' }}</div>
             <div class="tpl-card-foot">
               <a-tag color="cyan">{{ t.process_name || '流程模板' }}</a-tag>
-              <a-tag :color="t.approval_enabled ? 'gold' : 'default'">{{ t.approval_enabled ? '需审批' : '免审' }}</a-tag>
+              <a-tag color="green">{{ t.job_host_name || `作业主机 #${t.job_host_id}` }}</a-tag>
             </div>
           </div>
         </div>
