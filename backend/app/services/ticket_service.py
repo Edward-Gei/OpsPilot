@@ -222,6 +222,11 @@ async def create_ticket(session: AsyncSession, *, creator: User, template_id: in
         prepared_values = await parameter_prepare_service.consume_parameters(
             session, token=prepare_id, template_id=template_id, params=params or {}
         )
+    definitions = {item["name"]: item for item in process.params_schema or []}
+    prepared_values = {
+        name: value for name, value in prepared_values.items()
+        if definitions.get(name, {}).get("source") != "fixed"
+    }
     values = _validate_params({**(params or {}), **prepared_values}, process.params_schema or [])
     submitted_values = {
         name: value for name, value in values.items()
