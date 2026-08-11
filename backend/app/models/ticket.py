@@ -42,14 +42,6 @@ class Ticket(Base):
     created_at: Mapped[datetime] = created_at_column()
     updated_at: Mapped[datetime] = updated_at_column()
 
-    def __init__(self, **kwargs):
-        """兼容开发期旧测试构造参数，避免历史调用传入已移除字段。"""
-        kwargs.pop("credential_refs", None)
-        if "current_node" in kwargs and "current_step" not in kwargs:
-            kwargs["current_step"] = kwargs.pop("current_node")
-        super().__init__(**kwargs)
-
-
 class TicketStep(Base):
     """工单步骤快照；每条记录包含执行所需的脚本、参数和审批角色。"""
 
@@ -85,13 +77,6 @@ class TicketApproval(Base):
     action: Mapped[str] = mapped_column(String(16), nullable=False)
     comment: Mapped[str | None] = mapped_column(String(512))
     created_at: Mapped[datetime] = created_at_column()
-
-    def __init__(self, **kwargs):
-        """兼容旧审批流水构造名，持久化字段仍统一使用 step_order。"""
-        if "node_order" in kwargs and "step_order" not in kwargs:
-            kwargs["step_order"] = kwargs.pop("node_order")
-        super().__init__(**kwargs)
-
 
 class TicketParameterPrepare(Base):
     """动态参数预生成临时结果；短期保存且不写入审计或执行日志。"""

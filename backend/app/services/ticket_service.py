@@ -35,6 +35,14 @@ async def _role_members(session: AsyncSession, role_id: int) -> list[str]:
     )).scalars())
 
 
+async def _role_name_map(session: AsyncSession, role_ids: set[int]) -> dict[int, str]:
+    """批量解析审批角色名称，让步骤预览和历史快照使用同一展示口径。"""
+    if not role_ids:
+        return {}
+    rows = await session.execute(select(Role.id, Role.name).where(Role.id.in_(role_ids)))
+    return {role_id: name for role_id, name in rows}
+
+
 async def list_visible_templates(session: AsyncSession, *, user_id: int) -> list[TicketTemplate]:
     roles = await _my_role_ids(session, user_id)
     rows = (await session.execute(select(TicketTemplate).where(TicketTemplate.status == "enabled").order_by(TicketTemplate.id.desc()))).scalars()
@@ -62,6 +70,8 @@ def _validate_params(values: dict, schema: list[dict]) -> dict:
     result = {}
     for name, definition in definitions.items():
         if definition["source"] == "fixed":
+            if name in values:
+                raise Errors.param(f"固定参数 {name} 不允许由提交人覆盖")
             result[name] = definition.get("default")
             continue
         value = values.get(name, definition.get("default"))
@@ -81,6 +91,7 @@ async def get_template_form(session: AsyncSession, template_id: int, *, user_id:
     process = await template_service.get_process_or_404(session, tpl.process_template_id)
     steps = await template_service.get_process_steps(session, process.id)
     host = await session.get(JobHost, tpl.job_host_id)
+    role_names = await _role_name_map(session, {s.approval_role_id for s in steps if s.approval_role_id})
     return {
         "template": {"id": tpl.id, "name": tpl.name, "type": tpl.type, "description": tpl.description,
                      "process_template_id": process.id, "process_name": process.name,
@@ -89,7 +100,9 @@ async def get_template_form(session: AsyncSession, template_id: int, *, user_id:
         "job_host": {"id": host.id, "name": host.name, "ip": host.ip, "ssh_port": host.ssh_port,
                      "workdir": host.workdir} if host else None,
         "steps": [{"step_order": s.step_order, "name": s.name, "script_type": s.script_type,
-                   "timeout": s.timeout, "approval_role_id": s.approval_role_id} for s in steps],
+                   "timeout": s.timeout, "approval_role_id": s.approval_role_id,
+                   "approval_role_name": role_names.get(s.approval_role_id) if s.approval_role_id else None}
+                  for s in steps],
         "exec_strategy": process.exec_strategy or {},
         "generator": {"enabled": bool(process.generator_script), "timeout": process.generator_timeout},
     }
@@ -210,11 +223,15 @@ async def create_ticket(session: AsyncSession, *, creator: User, template_id: in
             session, token=prepare_id, template_id=template_id, params=params or {}
         )
     values = _validate_params({**(params or {}), **prepared_values}, process.params_schema or [])
+    submitted_values = {
+        name: value for name, value in values.items()
+        if next((item for item in (process.params_schema or []) if item["name"] == name), {}).get("source") != "fixed"
+    }
     host = await session.get(JobHost, tpl.job_host_id)
     flow = await template_service.process_snapshot(session, process.id)
     ticket = Ticket(
         ticket_no=await _next_ticket_no(session), template_id=tpl.id, title=tpl.name, type=tpl.type,
-        params=values, job_host_id=tpl.job_host_id,
+        params=submitted_values, job_host_id=tpl.job_host_id,
         job_host_snap={"id": host.id, "name": host.name, "ip": host.ip, "ssh_port": host.ssh_port, "workdir": host.workdir} if host else {},
         process_template_id_snap=process.id, process_name_snap=process.name,
         status=TicketStatus.APPROVING.value, exec_strategy_snap=process.exec_strategy or {},
@@ -291,6 +308,8 @@ async def approve_ticket(session: AsyncSession, ticket_id: int, *, actor: User, 
     ticket = await get_ticket_or_404(session, ticket_id)
     if ticket.status != TicketStatus.APPROVING.value or not ticket.current_step:
         raise Errors.conflict("工单当前不在待审批状态")
+    if action == "reject" and not (comment or "").strip():
+        raise Errors.param("驳回时必须填写审批意见")
     step = (await session.execute(select(TicketStep).where(TicketStep.ticket_id == ticket.id, TicketStep.step_order == ticket.current_step))).scalar_one_or_none()
     if step is None or not step.approval_role_id_snap or not await _role_allowed(session, actor.id, step.approval_role_id_snap):
         raise BizError(Errors.OBJECT_DENIED, "你不属于当前步骤审批角色", 403)
@@ -336,17 +355,20 @@ async def approve_ticket(session: AsyncSession, ticket_id: int, *, actor: User, 
     else:
         next_step = (await session.execute(select(TicketStep.step_order).where(TicketStep.ticket_id == ticket.id, TicketStep.step_order > ticket.current_step, TicketStep.approval_role_id_snap.is_not(None)).order_by(TicketStep.step_order).limit(1))).scalar_one_or_none()
         ticket.current_step = next_step or 0
-        execution = (await session.execute(select(Execution).where(Execution.ticket_id == ticket.id).order_by(Execution.id.desc()).limit(1))).scalar_one_or_none()
-        if execution is None:
-            await _start_execution(session, ticket)
+        if next_step:
+            ticket.status = TicketStatus.APPROVING.value
+            await _notify_pending_approval(session, ticket)
         else:
-            execution.status = "queued"
-            ticket.status = TicketStatus.QUEUED.value
-            try:
-                await redis_mod.redis_client.xadd(redis_mod.EXEC_QUEUE, {"execution_id": str(execution.id)})
-            except Exception:
-                pass
-        if not next_step:
+            execution = (await session.execute(select(Execution).where(Execution.ticket_id == ticket.id).order_by(Execution.id.desc()).limit(1))).scalar_one_or_none()
+            if execution is None:
+                await _start_execution(session, ticket)
+            else:
+                execution.status = "queued"
+                ticket.status = TicketStatus.QUEUED.value
+                try:
+                    await redis_mod.redis_client.xadd(redis_mod.EXEC_QUEUE, {"execution_id": str(execution.id)})
+                except Exception:
+                    pass
             await _emit_ticket_event(
                 session,
                 ticket,
@@ -364,6 +386,8 @@ async def cancel_ticket(session: AsyncSession, ticket_id: int, *, actor: User) -
     ticket = await get_ticket_or_404(session, ticket_id)
     if ticket.creator_id != actor.id:
         raise BizError(Errors.OBJECT_DENIED, "仅创建人可终止工单", 403)
+    if not ticket.allow_withdraw_snap:
+        raise Errors.rejected("模板禁止撤回")
     if ticket.status not in ("approving", "queued"):
         raise Errors.conflict("当前状态不能终止")
     ticket.status = TicketStatus.CANCELLED.value
@@ -420,5 +444,6 @@ async def get_ticket_bundle(session: AsyncSession, ticket_id: int) -> dict:
     steps = list((await session.execute(select(TicketStep).where(TicketStep.ticket_id == ticket.id).order_by(TicketStep.step_order))).scalars())
     approvals = list((await session.execute(select(TicketApproval, User.display_name, User.username).join(User, User.id == TicketApproval.approver_id, isouter=True).where(TicketApproval.ticket_id == ticket.id).order_by(TicketApproval.id))).all())
     execution = (await session.execute(select(Execution).where(Execution.ticket_id == ticket.id).order_by(Execution.id.desc()).limit(1))).scalar_one_or_none()
+    role_names = await _role_name_map(session, {s.approval_role_id_snap for s in steps if s.approval_role_id_snap})
     return {"ticket": ticket, "creator": creator, "steps": steps, "approvals": approvals, "execution": execution,
-            "job_host": ticket.job_host_snap}
+            "job_host": ticket.job_host_snap, "approval_role_names": role_names}

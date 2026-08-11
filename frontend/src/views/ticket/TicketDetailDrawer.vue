@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 工单详情抽屉（V2）：基本信息 + 提交参数 + 审批时间线（节点制）+ 作业主机/步骤快照 + 执行概要
+// 工单详情抽屉（V2）：基本信息 + 提交参数 + 步骤前审批时间线 + 作业主机/步骤快照 + 执行概要
 // showApprove=true（待办审批页）时在审批中状态下展示 通过/驳回 操作区
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -44,7 +44,7 @@ watch(
 
 const awaiting = computed(() => detail.value?.status === 'approving')
 
-// 审批时间线：flow_snap 逐节点合并审批记录——已审绿/红、当前节点蓝、未到节点灰
+// 审批时间线：按步骤快照关联审批记录，避免依赖已废弃的节点模型。
 interface TimelineRow {
   color: string
   title: string
@@ -54,21 +54,24 @@ interface TimelineRow {
 const timeline = computed<TimelineRow[]>(() => {
   const d = detail.value
   if (!d) return []
-  return d.flow_snap.map((n) => {
-    const rec = d.approvals.find((a) => a.node_order === n.node)
-    if (rec) {
-      return {
-        color: rec.action === 'approve' ? 'green' : 'red',
-        title: `节点 ${n.node}（${n.role_name}）${rec.action === 'approve' ? '通过' : '驳回'} · ${rec.approver_name}`,
-        comment: rec.comment || undefined,
-        time: fmtTime(rec.created_at),
+  return d.steps
+    .filter((step) => step.approval_role_id)
+    .map((step) => {
+      const rec = d.approvals.find((a) => a.step_order === step.step_order)
+      const roleName = step.approval_role_name || `角色 #${step.approval_role_id}`
+      if (rec) {
+        return {
+          color: rec.action === 'approve' ? 'green' : 'red',
+          title: `第 ${step.step_order} 步 · ${step.step_name}：${rec.action === 'approve' ? '通过' : '驳回'} · ${rec.approver_name}`,
+          comment: rec.comment || undefined,
+          time: fmtTime(rec.created_at),
+        }
       }
-    }
-    if (awaiting.value && n.node === d.current_node) {
-      return { color: 'blue', title: `节点 ${n.node} 等待「${n.role_name}」审批` }
-    }
-    return { color: 'gray', title: `节点 ${n.node} ${n.role_name}` }
-  })
+      if (awaiting.value && step.step_order === d.current_step) {
+        return { color: 'blue', title: `第 ${step.step_order} 步 · ${step.step_name}：等待「${roleName}」审批` }
+      }
+      return { color: 'gray', title: `第 ${step.step_order} 步 · ${step.step_name}：等待「${roleName}」审批` }
+    })
 })
 
 /** 执行策略一行摘要（模板规则快照） */
@@ -104,7 +107,7 @@ async function onApprove(action: 'approve' | 'reject') {
   try {
     const res = await ticketApi.approveTicket(detail.value.id, action, comment.value || undefined)
     if (action === 'reject') message.success('已驳回，工单关闭')
-    else message.success(res.status === 'queued' ? '已通过，工单进入执行队列' : '已通过，流转至下一审批节点')
+    else message.success(res.status === 'queued' ? '已通过，工单进入执行队列' : '已通过，流转至下一审批步骤')
     comment.value = ''
     emit('changed')
     await load()
@@ -137,7 +140,6 @@ function openExecution() {
           <a-tag :color="statusMeta[detail.status]?.color">
             {{ statusMeta[detail.status]?.text || detail.status }}
           </a-tag>
-          <a-tag v-if="awaiting" color="blue">节点 {{ detail.current_node }}/{{ detail.total_nodes }}</a-tag>
         </div>
 
         <a-descriptions bordered size="small" :column="{ xs: 1, sm: 2 }" class="d-desc op-desc-table">
@@ -160,9 +162,9 @@ function openExecution() {
           </a-descriptions-item>
         </a-descriptions>
 
-        <!-- 审批时间线（免审工单无此块） -->
-        <template v-if="detail.flow_snap.length">
-          <div class="d-section">审批流（模板规则快照）</div>
+        <!-- 审批时间线（无步骤前审批的工单不展示） -->
+        <template v-if="timeline.length">
+          <div class="d-section">审批步骤</div>
           <a-timeline class="d-timeline">
             <a-timeline-item v-for="(row, i) in timeline" :key="i" :color="row.color">
               <div>{{ row.title }}</div>

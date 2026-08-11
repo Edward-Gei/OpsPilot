@@ -55,7 +55,7 @@ async def _engine_env(client) -> dict:
 
 
 def _step(name: str = "重启服务", **override) -> dict:
-    """标准模板步骤（shell + svc 参数）。"""
+    """标准流程步骤（shell + svc 参数）。"""
     return {
         "name": name,
         "script_type": "shell",
@@ -69,15 +69,28 @@ def _step(name: str = "重启服务", **override) -> dict:
 
 
 async def _create_template(client, env, **override) -> int:
-    """创建免审模板（作业主机随 env），返回模板 id。"""
+    """创建免审流程及工单模板入口，返回模板 id。"""
+    template_name = override.pop("name", "引擎测试模板")
+    steps = override.pop("steps", [_step()])
+    process = await client.post("/api/v1/process-templates", json={
+        "name": f"{template_name} 流程",
+        "description": "引擎调度测试流程",
+        "params_schema": [{"name": "svc", "label": "服务名", "source": "user",
+                           "input_type": "text", "default": "nginx", "required": True}],
+        "exec_strategy": {"timeout": 600, "fail_fast": True, "kill_on_stop": False},
+        "steps": [{"name": step["name"], "script_type": step["script_type"],
+                   "content": step["content"], "timeout": step["timeout"],
+                   "approval_role_id": None} for step in steps],
+    }, headers=env["ops_h"])
+    process_body = process.json()
+    assert process_body["code"] == 0, process_body
     payload = {
-        "name": "引擎测试模板",
-        "type": "daily_ops",
-        "description": "引擎调度测试",
+        "name": template_name,
+        "type": override.pop("type", "daily_ops"),
+        "description": override.pop("description", "引擎调度测试"),
         "job_host_id": env["job_host_id"],
-        "steps": [_step()],
-        "exec_strategy": {"timeout": 600, "fail_fast": True},
-        "approval_enabled": False,
+        "process_template_id": process_body["data"]["id"],
+        "notify_rules": [], "visible_role_ids": [],
         **override,
     }
     resp = await client.post("/api/v1/templates", json=payload, headers=env["ops_h"])

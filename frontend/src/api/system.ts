@@ -92,7 +92,7 @@ export function listRoles() {
   return request<{ items: RoleItem[] }>({ url: '/roles', method: 'get' })
 }
 
-/** 轻量角色选项（template:read 即可）：模板编辑器审批节点/可见范围/收件人下拉用 */
+/** 轻量角色选项（template:read 即可）：流程步骤审批/可见范围/收件人下拉用 */
 export function listRoleOptions() {
   return request<{ items: { id: number; name: string }[] }>({ url: '/roles/options', method: 'get' })
 }

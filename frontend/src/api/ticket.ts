@@ -20,12 +20,20 @@ export type TicketStatus =
   | 'approving' | 'queued' | 'running' | 'paused' | 'success' | 'failed'
   | 'rejected' | 'cancelled' | 'interrupted'
 
-/** flow_snap 审批节点快照格式（免审为 []） */
-export interface FlowNodeSnap {
-  node: number
-  role_id: number
-  role_name: string
-  approve_mode: string
+/** 提交时固化的流程快照；审批角色绑定在具体步骤上。 */
+export interface ProcessSnapshot {
+  process_name?: string
+  params_schema?: FormParam[]
+  generator?: { script?: string | null; timeout?: number | null }
+  exec_strategy?: Partial<ExecStrategy>
+  steps: {
+    step_order: number
+    name: string
+    script_type: string
+    content: string
+    timeout: number
+    approval_role_id?: number | null
+  }[]
 }
 
 /** 工单列表/待办行 */
@@ -42,8 +50,6 @@ export interface TicketBrief {
   status: TicketStatus
   current_step: number
   total_steps: number
-  current_node?: number
-  total_nodes?: number
   creator_id: number
   creator_name: string
   submitted_at: string | null
@@ -68,12 +74,13 @@ export interface TicketStepSnap {
   content_snap: string
   params: Record<string, string>
   timeout: number
+  approval_role_id?: number | null
+  approval_role_name?: string | null
 }
 
 /** 审批时间线行 */
 export interface ApprovalRecord {
   step_order: number
-  node_order?: number
   action: 'approve' | 'reject'
   comment: string | null
   approver_id: number
@@ -93,7 +100,7 @@ export interface ExecutionBrief {
 export interface TicketDetail extends TicketBrief {
   params: Record<string, string>
   exec_strategy: Partial<ExecStrategy>
-  flow_snap: FlowNodeSnap[]
+  flow_snap: ProcessSnapshot
   allow_withdraw: boolean
   job_host: JobHostSnap | null
   steps: TicketStepSnap[]
@@ -125,8 +132,6 @@ export interface UsableTemplate {
   job_host_name?: string | null
   process_template_id: number
   process_name?: string
-  approval_enabled?: boolean
-  current_version?: number
 }
 
 /** 提交表单参数行（汇总后，不含 fixed） */
@@ -141,7 +146,7 @@ export interface FormParam {
   source?: 'user' | 'generated' | 'fixed'
 }
 
-/** 提交表单描述：汇总参数 + 作业主机/步骤/审批节点/策略只读预览 */
+/** 提交表单描述：汇总参数 + 作业主机/步骤前审批/策略只读预览 */
 export interface TemplateFormDesc {
   template: {
     id: number
@@ -150,8 +155,6 @@ export interface TemplateFormDesc {
     description: string | null
     process_template_id: number
     process_name: string
-    current_version?: number
-    approval_enabled?: boolean
     allow_withdraw: boolean
   }
   params: FormParam[]
@@ -161,9 +164,10 @@ export interface TemplateFormDesc {
     name: string
     script_type: string
     timeout: number
+    approval_role_id?: number | null
+    approval_role_name?: string | null
   }[]
   generator?: { enabled: boolean; timeout?: number | null }
-  flow: FlowNodeSnap[]
   exec_strategy: Partial<ExecStrategy>
 }
 
@@ -200,7 +204,7 @@ export function prepareTicket(templateId: number, params: Record<string, string>
 }
 
 export function createTicket(templateId: number, params: Record<string, string>, prepareId?: string) {
-  return request<{ id: number; ticket_no: string; status: TicketStatus; current_step: number; current_node?: number }>({
+  return request<{ id: number; ticket_no: string; status: TicketStatus; current_step: number }>({
     url: '/tickets',
     method: 'post',
     data: { template_id: templateId, params, prepare_id: prepareId },

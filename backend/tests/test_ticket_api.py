@@ -8,7 +8,7 @@
 - 节点审批推进 / 越级 40302 / 驳回意见必填 / 驳回关闭 / 撤回（含模板禁止撤回）；
 - 末节点通过 → queued + Execution(queued) + 预建执行子表 + XADD ops:exec:queue（M5）；
 - 免审模板：提交直接 queued；
-- 待办列表 = 当前节点角色 ∩ 我的角色；通知按模板 notify_rules 落 record（M6 打桩）。
+- 待办列表 = 当前步骤审批角色 ∩ 我的角色；通知按模板 notify_rules 落 record（M6 打桩）。
 """
 from sqlalchemy import select
 
@@ -48,7 +48,7 @@ async def _base_env(client) -> dict:
 
 
 def _step(env: dict, **override) -> dict:
-    """标准模板步骤（shell + svc 参数）。"""
+    """标准流程步骤（shell + svc 参数）。"""
     return {
         "name": "重启服务",
         "script_type": "shell",
@@ -61,17 +61,53 @@ def _step(env: dict, **override) -> dict:
     }
 
 
-async def _create_template(client, env, *, nodes: list[dict] | None = None, **override) -> int:
-    """创建模板：nodes 传审批节点列表（None=免审），返回模板 id。"""
+def _merge_params(steps: list[dict]) -> list[dict]:
+    """把测试步骤中的参数定义迁移为流程模板级参数。"""
+    merged: dict[str, dict] = {}
+    for step in steps:
+        for param in step.get("params_schema", []):
+            current = merged.setdefault(param["name"], {
+                "name": param["name"], "label": param.get("label"),
+                "source": "fixed" if param.get("fixed") else "user",
+                "input_type": "text", "options": [],
+                "default": param.get("default"), "required": param.get("required", False),
+                "description": param.get("description"),
+            })
+            current["required"] = current.get("required", False) or param.get("required", False)
+    return list(merged.values())
+
+
+async def _create_template(client, env, *, approval_roles: list[int] | None = None, **override) -> int:
+    """创建流程模板和工单模板入口，approval_roles 按步骤顺序配置审批角色。"""
+    template_name = override.pop("name", "重启 Nginx")
+    raw_steps = override.pop("steps", [_step(env)])
+    approval_roles = approval_roles or []
+    while len(raw_steps) < len(approval_roles):
+        raw_steps.append(_step(env, name=f"步骤 {len(raw_steps) + 1}"))
+    process_payload = {
+        "name": override.pop("process_name", f"{template_name} 流程"),
+        "description": "滚动重启流程",
+        "params_schema": _merge_params(raw_steps),
+        "exec_strategy": {"timeout": 600, "fail_fast": True, "kill_on_stop": False},
+        "steps": [
+            {"name": step["name"], "script_type": step["script_type"],
+             "content": step["content"], "timeout": step["timeout"],
+             "approval_role_id": approval_roles[index] if index < len(approval_roles) else None}
+            for index, step in enumerate(raw_steps)
+        ],
+    }
+    process_resp = await client.post("/api/v1/process-templates", json=process_payload, headers=env["ops_h"])
+    process_body = process_resp.json()
+    assert process_body["code"] == 0, process_body
     payload = {
-        "name": "重启 Nginx",
-        "type": "daily_ops",
-        "description": "滚动重启",
+        "name": template_name,
+        "type": override.pop("type", "daily_ops"),
+        "description": override.pop("description", "滚动重启"),
         "job_host_id": env["job_host_id"],
-        "steps": [_step(env)],
-        "exec_strategy": {"timeout": 600, "fail_fast": True},
-        "approval_enabled": bool(nodes),
-        "approval_nodes": nodes or [],
+        "process_template_id": process_body["data"]["id"],
+        "notify_rules": override.pop("notify_rules", []),
+        "visible_role_ids": override.pop("visible_role_ids", []),
+        "allow_withdraw": override.pop("allow_withdraw", True),
         **override,
     }
     resp = await client.post("/api/v1/templates", json=payload, headers=env["ops_h"])
@@ -81,7 +117,7 @@ async def _create_template(client, env, *, nodes: list[dict] | None = None, **ov
 
 
 async def _submit(client, headers, tpl_id: int, params: dict | None = None) -> dict:
-    """提交工单并断言成功，返回 {id, ticket_no, status, current_node}。"""
+    """提交工单并断言成功，返回 {id, ticket_no, status, current_step}。"""
     resp = await client.post("/api/v1/tickets",
                              json={"template_id": tpl_id, "params": params or {}}, headers=headers)
     body = resp.json()
@@ -142,7 +178,7 @@ class TestUsableTemplatesAndForm:
                       ])
         tpl_id = await _create_template(
             client, env, steps=[_step(env), step2],
-            nodes=[{"node_order": 1, "role_id": seed["roles"]["approver"]}],
+            approval_roles=[seed["roles"]["approver"]],
         )
 
         form = (await client.get(f"/api/v1/tickets/templates/{tpl_id}/form",
@@ -153,8 +189,8 @@ class TestUsableTemplatesAndForm:
         assert form["template"]["name"] == "重启 Nginx"
         assert form["job_host"]["ip"] == "10.9.0.1"
         assert [s["step_order"] for s in form["steps"]] == [1, 2]
-        assert form["flow"] == [{"node": 1, "role_id": seed["roles"]["approver"],
-                                 "role_name": "审批人", "approve_mode": "any"}]
+        assert form["steps"][0]["approval_role_id"] == seed["roles"]["approver"]
+        assert form["steps"][0]["approval_role_name"] == "审批人"
         assert form["exec_strategy"]["timeout"] == 600
 
     async def test_form_guard(self, client, seed):
@@ -176,24 +212,26 @@ class TestSubmit:
     """提交：五重快照 / 参数校验 / 免审直跑 / 提交守卫。"""
 
     async def test_submit_snapshot_and_single_node_approve(self, client, db_factory, seed, fake_redis):
-        """单节点全链路：提交固化快照 → 待办可见 → 通过 → queued + 入队 + 通知落库。"""
+        """单步骤审批全链路：提交固化快照 → 待办可见 → 通过 → queued + 入队 + 通知落库。"""
         env = await _base_env(client)
         appr_h = await _approver_headers(client, db_factory, seed)
         tpl_id = await _create_template(
-            client, env, nodes=[{"node_order": 1, "role_id": seed["roles"]["approver"]}],
+            client, env, approval_roles=[seed["roles"]["approver"]],
             notify_rules=[{"event": "ticket.approved", "receivers": ["creator"], "channels": []}],
         )
 
         data = await _submit(client, env["ops_h"], tpl_id)
-        assert data["status"] == "approving" and data["current_node"] == 1
+        assert data["status"] == "approving" and data["current_step"] == 1
 
         # 提交后改模板步骤内容（升版）+ 改作业主机 IP → 工单快照不受影响（多重快照固化）
-        resp = await client.put(f"/api/v1/templates/{tpl_id}", headers=env["ops_h"], json={
-            "name": "重启 Nginx", "type": "daily_ops", "description": "滚动重启",
-            "job_host_id": env["job_host_id"], "steps": [_step(env, content="echo changed")],
-            "exec_strategy": {"timeout": 600, "fail_fast": True},
-            "approval_enabled": True,
-            "approval_nodes": [{"node_order": 1, "role_id": seed["roles"]["approver"]}],
+        template_detail = (await client.get(f"/api/v1/templates/{tpl_id}", headers=env["ops_h"])).json()["data"]
+        process_id = template_detail["process_template_id"]
+        resp = await client.put(f"/api/v1/process-templates/{process_id}", headers=env["ops_h"], json={
+            "name": "重启 Nginx 流程", "description": "滚动重启流程",
+            "params_schema": _merge_params([_step(env, content="echo changed")]),
+            "exec_strategy": {"timeout": 600, "fail_fast": True, "kill_on_stop": False},
+            "steps": [{"name": "重启服务", "script_type": "shell", "content": "echo changed",
+                       "timeout": 300, "approval_role_id": seed["roles"]["approver"]}],
         })
         assert resp.json()["code"] == 0
         resp = await client.put(f"/api/v1/job-hosts/{env['job_host_id']}", headers=env["admin_h"],
@@ -206,8 +244,8 @@ class TestSubmit:
         assert detail["params"] == {"svc": "nginx"}  # 缺省补默认值
         assert detail["steps"][0]["content_snap"].startswith("#!/bin/bash")
         assert detail["job_host"]["ip"] == "10.9.0.1"  # 作业主机快照不受后续改动影响
-        assert detail["flow_snap"] == [{"node": 1, "role_id": seed["roles"]["approver"],
-                                        "role_name": "审批人", "approve_mode": "any"}]
+        assert detail["flow_snap"]["steps"][0]["approval_role_id"] == seed["roles"]["approver"]
+        assert detail["steps"][0]["approval_role_id"] == seed["roles"]["approver"]
 
         # 待办：approver 可见；admin 无 approver 角色不可见；ops 无 ticket:approve 40301
         assert (await client.get("/api/v1/tickets/todo", headers=appr_h)).json()["data"]["total"] == 1
@@ -217,7 +255,7 @@ class TestSubmit:
         # 末节点通过 → queued + Execution(queued, auto_approve) + XADD 队列（M5：worker 认领后才置 running）
         resp = await client.post(f"/api/v1/tickets/{data['id']}/approve",
                                  json={"action": "approve", "comment": "同意"}, headers=appr_h)
-        assert resp.json()["data"] == {"status": "queued", "current_node": 0}
+        assert resp.json()["data"] == {"status": "queued", "current_step": 0}
         async with db_factory() as session:
             execution = (await session.execute(select(Execution))).scalar_one()
             assert execution.status == "queued"
@@ -257,19 +295,19 @@ class TestSubmit:
         detail = (await client.get(f"/api/v1/tickets/{data['id']}",
                                    headers=env["ops_h"])).json()["data"]
         assert detail["params"] == {"svc": "mysql"}
-        assert detail["steps"][0]["params"] == {"svc": "mysql"}
-        assert detail["steps"][1]["params"] == {"port": "8080"}
+        assert detail["steps"][0]["params"] == {"svc": "mysql", "port": "8080"}
+        assert detail["steps"][1]["params"] == {"svc": "mysql", "port": "8080"}
 
     async def test_no_approval_direct_run(self, client, db_factory, fake_redis):
-        """免审模板：提交直接 queued 入队，flow_snap=[]，无通知事件。"""
+        """免审模板：提交直接 queued 入队，流程快照无审批角色，无通知事件。"""
         env = await _base_env(client)
-        tpl_id = await _create_template(client, env)  # nodes=None → 免审
+        tpl_id = await _create_template(client, env)  # approval_roles=None → 免审
 
         data = await _submit(client, env["ops_h"], tpl_id)
-        assert data["status"] == "queued" and data["current_node"] == 0
+        assert data["status"] == "queued" and data["current_step"] == 0
         detail = (await client.get(f"/api/v1/tickets/{data['id']}",
                                    headers=env["ops_h"])).json()["data"]
-        assert detail["flow_snap"] == [] and detail["total_nodes"] == 0
+        assert not detail["flow_snap"]["steps"][0]["approval_role_id"] and detail["total_steps"] == 1
         assert await fake_redis.xlen(EXEC_QUEUE) == 1
         assert await _notify_rows(db_factory) == []
 
@@ -294,13 +332,12 @@ class TestApproveAndCancel:
     """节点审批推进 / 驳回 / 撤回。"""
 
     async def test_multi_node_flow(self, client, db_factory, seed):
-        """两节点：逐节点推进；非当前节点角色审批 40302；时间线完整。"""
+        """两步骤审批：逐步骤推进；非当前步骤角色审批 40302；时间线完整。"""
         env = await _base_env(client)
         appr_h = await _approver_headers(client, db_factory, seed)
-        tpl_id = await _create_template(client, env, nodes=[
-            {"node_order": 1, "role_id": seed["roles"]["approver"]},
-            {"node_order": 2, "role_id": seed["roles"]["admin"]},
-        ])
+        tpl_id = await _create_template(client, env, approval_roles=[
+            seed["roles"]["approver"], seed["roles"]["admin"],
+        ], steps=[_step(env), _step(env, name="部署服务")])
         data = await _submit(client, env["ops_h"], tpl_id)
 
         # 第 1 节点需 approver：admin 越级审批 -> 40302
@@ -308,10 +345,10 @@ class TestApproveAndCancel:
                                  json={"action": "approve"}, headers=env["admin_h"])
         assert resp.json()["code"] == 40302
 
-        # 第 1 节点通过 → approving / current_node=2
+        # 第 1 步通过 → approving / current_step=2
         resp = await client.post(f"/api/v1/tickets/{data['id']}/approve",
                                  json={"action": "approve"}, headers=appr_h)
-        assert resp.json()["data"] == {"status": "approving", "current_node": 2}
+        assert resp.json()["data"] == {"status": "approving", "current_step": 2}
 
         # 第 2 节点需 admin：approver 再批 -> 40302；admin 通过 → queued
         resp = await client.post(f"/api/v1/tickets/{data['id']}/approve",
@@ -324,7 +361,7 @@ class TestApproveAndCancel:
         # 审批时间线两条记录且带审批人名
         detail = (await client.get(f"/api/v1/tickets/{data['id']}",
                                    headers=env["ops_h"])).json()["data"]
-        assert [(a["node_order"], a["action"], a["approver_name"]) for a in detail["approvals"]] == [
+        assert [(a["step_order"], a["action"], a["approver_name"]) for a in detail["approvals"]] == [
             (1, "approve", "appr1"), (2, "approve", "admin"),
         ]
 
@@ -333,7 +370,7 @@ class TestApproveAndCancel:
         env = await _base_env(client)
         appr_h = await _approver_headers(client, db_factory, seed)
         tpl_id = await _create_template(
-            client, env, nodes=[{"node_order": 1, "role_id": seed["roles"]["approver"]}])
+            client, env, approval_roles=[seed["roles"]["approver"]])
         data = await _submit(client, env["ops_h"], tpl_id)
 
         resp = await client.post(f"/api/v1/tickets/{data['id']}/approve",
@@ -342,7 +379,7 @@ class TestApproveAndCancel:
 
         resp = await client.post(f"/api/v1/tickets/{data['id']}/approve",
                                  json={"action": "reject", "comment": "窗口期不合适"}, headers=appr_h)
-        assert resp.json()["data"] == {"status": "rejected", "current_node": 0}
+        assert resp.json()["data"] == {"status": "rejected", "current_step": 0}
         detail = (await client.get(f"/api/v1/tickets/{data['id']}",
                                    headers=env["ops_h"])).json()["data"]
         assert detail["finished_at"] is not None
@@ -358,7 +395,7 @@ class TestApproveAndCancel:
         """撤回：非创建人 40302；创建人审批中可撤回；模板禁止撤回 42201。"""
         env = await _base_env(client)
         tpl_id = await _create_template(
-            client, env, nodes=[{"node_order": 1, "role_id": seed["roles"]["approver"]}])
+            client, env, approval_roles=[seed["roles"]["approver"]])
         data = await _submit(client, env["ops_h"], tpl_id)
 
         resp = await client.post(f"/api/v1/tickets/{data['id']}/cancel", headers=env["admin_h"])
@@ -372,7 +409,7 @@ class TestApproveAndCancel:
         # allow_withdraw=False 模板：撤回被拒 42201
         locked = await _create_template(
             client, env, name="禁止撤回模板", allow_withdraw=False,
-            nodes=[{"node_order": 1, "role_id": seed["roles"]["approver"]}])
+            approval_roles=[seed["roles"]["approver"]])
         data = await _submit(client, env["ops_h"], locked)
         resp = await client.post(f"/api/v1/tickets/{data['id']}/cancel", headers=env["ops_h"])
         assert resp.json()["code"] == 42201
@@ -381,7 +418,7 @@ class TestApproveAndCancel:
         """列表筛选：status/keyword 命中；标题=模板名。"""
         env = await _base_env(client)
         tpl_a = await _create_template(
-            client, env, nodes=[{"node_order": 1, "role_id": seed["roles"]["approver"]}])
+            client, env, approval_roles=[seed["roles"]["approver"]])
         tpl_b = await _create_template(client, env, name="免审模板")
         data_a = await _submit(client, env["ops_h"], tpl_a)
         await _submit(client, env["ops_h"], tpl_b)

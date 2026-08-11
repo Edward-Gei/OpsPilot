@@ -4,7 +4,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import * as ticketApi from '@/api/ticket'
-import { approveModeText, typeText } from '../job/meta'
+import { typeText } from '../job/meta'
 import type { TemplateType } from '@/api/job'
 
 const props = defineProps<{ open: boolean }>()
@@ -90,6 +90,9 @@ const strategyText = computed(() => {
   ].join(' · ')
 })
 
+/** 只展示绑定审批角色的步骤，和后端当前步骤审批契约保持一致。 */
+const approvalSteps = computed(() => form.value?.steps.filter((item) => item.approval_role_id) || [])
+
 // ---------- 提交（只传 template_id + params，TICKET-01） ----------
 const submitting = ref(false)
 
@@ -115,7 +118,7 @@ async function onSubmit() {
     }
     const res = await ticketApi.createTicket(form.value.template.id, params, prepareId.value)
     if (res.status === 'queued') message.success(`工单 ${res.ticket_no} 已提交，免审进入执行队列`)
-    else message.success(`工单 ${res.ticket_no} 已提交，等待第 ${res.current_node} 节点审批`)
+    else message.success(`工单 ${res.ticket_no} 已提交，等待第 ${res.current_step} 步骤审批`)
     emit('update:open', false)
     emit('saved')
   } catch {
@@ -189,7 +192,7 @@ const jobHostText = computed(() => {
       <div class="w-tpl-head">
         <b>{{ form.template.name }}</b>
         <a-tag color="cyan">{{ form.template.process_name }}</a-tag>
-        <span class="w-tpl-tip">标题将使用模板名，提交后作业主机/脚本/审批流固化为快照</span>
+        <span class="w-tpl-tip">标题将使用模板名，提交后作业主机/脚本/步骤审批固化为快照</span>
       </div>
 
       <!-- 汇总参数（同名合并，fixed 参数不外显） -->
@@ -223,10 +226,10 @@ const jobHostText = computed(() => {
             {{ s.step_order }}. {{ s.name }}
           </a-tag>
         </a-descriptions-item>
-        <a-descriptions-item label="审批流" :span="2">
-          <template v-if="form.flow?.length">
-            <a-tag v-for="n in form.flow" :key="n.node" color="gold">
-              节点{{ n.node }}：{{ n.role_name }}（{{ approveModeText[n.approve_mode as keyof typeof approveModeText] || n.approve_mode }}）
+        <a-descriptions-item label="步骤前审批" :span="2">
+          <template v-if="approvalSteps.length">
+            <a-tag v-for="s in approvalSteps" :key="s.step_order" color="gold">
+              第 {{ s.step_order }} 步：{{ s.name }} · {{ s.approval_role_name || `角色 #${s.approval_role_id}` }}
             </a-tag>
           </template>
           <a-tag v-else color="orange">免审批，提交后直接执行</a-tag>

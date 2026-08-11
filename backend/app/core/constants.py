@@ -52,13 +52,6 @@ class TemplateStatus(str, Enum):
     DISABLED = "disabled"
 
 
-class ApproveMode(str, Enum):
-    """节点内审批方式：V1 仅 any（或签）生效，其余仅存配置。"""
-    ANY = "any"
-    ALL = "all"
-    SEQ = "seq"
-
-
 class CredentialAuthType(str, Enum):
     PASSWORD = "password"
     PRIVATE_KEY = "private_key"

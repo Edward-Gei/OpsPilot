@@ -2,7 +2,7 @@
 
 工单中心只能使用模板：选模板 → 填参数 → 提交（标题=模板名，无草稿，提交即生效）。
 不提供模板/审批流/表单字段/通知/策略的任何配置能力。
-对象级规则：撤回仅创建人（40302）；审批校验当前节点角色归属。
+对象级规则：撤回仅创建人（40302）；审批校验当前步骤角色归属。
 
 注意路由顺序：/templates 静态路径必须先于 /{ticket_id} 动态路径注册。
 """
@@ -88,7 +88,7 @@ async def get_template_form(
     session: DbSession,
     actor: User = Depends(require_perm("ticket:write")),
 ) -> dict:
-    """汇总参数（各步骤 params_schema 同名合并，排除 fixed）+ 主机/步骤/审批节点/策略只读预览。"""
+    """汇总参数并返回作业主机、步骤前审批和执行策略只读预览。"""
     form = await ticket_service.get_template_form(session, template_id, user_id=actor.id)
     return ok(form)
 
@@ -118,7 +118,7 @@ async def create_ticket(
               actor_name=actor.username, source_ip=get_client_ip(request),
               target_type="ticket", target_id=str(ticket.id), target_name=ticket.ticket_no,
               detail={"template_id": req.template_id, "status": ticket.status,
-                      "nodes": len(ticket.flow_snap or [])})
+                      "steps": len((ticket.flow_snap or {}).get("steps", []))})
     return ok({"id": ticket.id, "ticket_no": ticket.ticket_no,
                "status": ticket.status, "current_step": ticket.current_step})
 
@@ -152,7 +152,7 @@ async def todo_tickets(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> dict:
-    """待办列表：当前节点角色 ∩ 我的角色；total 兼作菜单角标计数（FLOW-06）。"""
+    """待办列表：当前步骤审批角色 ∩ 我的角色；total 兼作菜单角标计数（FLOW-06）。"""
     tickets, total = await ticket_service.todo_tickets(
         session, user_id=actor.id, page=page, page_size=page_size
     )
@@ -169,7 +169,7 @@ async def get_ticket(
     session: DbSession,
     _: User = Depends(require_perm("ticket:read")),
 ) -> dict:
-    """详情（只读）：基本信息 + 参数 + 作业主机快照 + 步骤快照 + 审批时间线 + execution 概要。"""
+    """详情（只读）：基本信息、参数、步骤前审批记录和 execution 概要。"""
     bundle = await ticket_service.get_ticket_bundle(session, ticket_id)
     t = bundle["ticket"]
     creator = bundle["creator"]
@@ -190,6 +190,9 @@ async def get_ticket(
                 "content_snap": s.content_snap,
                 "params": s.params or {},
                 "timeout": s.timeout,
+                "approval_role_id": s.approval_role_id_snap,
+                "approval_role_name": bundle["approval_role_names"].get(s.approval_role_id_snap)
+                if s.approval_role_id_snap else None,
             }
             for s in bundle["steps"]
         ],
@@ -223,7 +226,7 @@ async def approve_ticket(
     session: DbSession,
     actor: User = Depends(require_perm("ticket:approve")),
 ) -> dict:
-    """审批通过/驳回：校验当前节点角色归属；末节点通过自动进入执行队列。"""
+    """审批通过/驳回：校验当前步骤角色归属；最后一个审批步骤通过后进入执行队列。"""
     ticket = await ticket_service.approve_ticket(
         session, ticket_id, actor=actor, action=req.action, comment=req.comment
     )

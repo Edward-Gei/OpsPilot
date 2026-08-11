@@ -35,7 +35,7 @@ async def list_role_options(
     session: DbSession,
     _: User = Depends(require_perm("template:read")),
 ) -> dict:
-    """仅 id/name 的轻量角色选项：模板编辑器审批节点/可见范围/收件人下拉用，
+    """仅 id/name 的轻量角色选项：流程步骤审批/可见范围/收件人下拉用，
     不含权限矩阵与成员数（无需 role:read）。"""
     roles = (await session.execute(select(Role).order_by(Role.id))).scalars().all()
     return ok({"items": [{"id": r.id, "name": r.name} for r in roles]})
