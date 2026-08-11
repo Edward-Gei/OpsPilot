@@ -257,6 +257,10 @@ function openExecution() {
 }
 .d-timeline {
   padding: 6px 4px 0;
+  margin-bottom: 0;
+}
+.d-timeline + .d-section {
+  margin-top: 6px;
 }
 .d-tl-comment {
   font-size: 12px;

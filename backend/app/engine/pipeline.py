@@ -19,8 +19,6 @@ from datetime import datetime
 from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import select
 
-from app import audit
-
 from app.core.constants import (
     ExecutionStatus,
     InterruptReason,
@@ -169,13 +167,6 @@ class PipelineRunner:
         """认领即开跑：execution/工单 → running（XACK 已由 worker 在认领时完成）。"""
         self.execution.started_at = datetime.now()
         await self._set_status(ExecutionStatus.RUNNING.value, TicketStatus.RUNNING.value)
-        # 审计：执行开始（系统动作无操作人，与 recovery 口径一致；M7-1 埋点补全）
-        audit.log(
-            module="execution", action="execution.start",
-            target_type="execution", target_id=str(self.eid),
-            target_name=self.ticket.ticket_no,
-            detail={"ticket_id": self.ticket.id, "ticket_title": self.ticket.title},
-        )
 
     async def _checkpoint(self) -> bool:
         """检查点通用逻辑：处理暂停等待；返回 False 表示应中止调度。"""
@@ -322,14 +313,6 @@ class PipelineRunner:
             TicketStatus.INTERRUPTED.value: (NotifyEvent.EXECUTION_INTERRUPTED, "执行已中止"),
         }
         event, label = event_map[ticket_status]
-        # 审计：执行终态（成功记 success，失败/中断记 failed，中断起因进 detail）
-        audit.log(
-            module="execution", action="execution.finish",
-            result="success" if ticket_status == TicketStatus.SUCCESS.value else "failed",
-            target_type="execution", target_id=str(self.eid),
-            target_name=self.ticket.ticket_no,
-            detail={"ticket_status": ticket_status, "reason": reason},
-        )
         # 复用工单通知规则装配（模板 notify_rules 优先，缺省通知创建人）
         from app.services.ticket_service import _emit_ticket_event
         await _emit_ticket_event(

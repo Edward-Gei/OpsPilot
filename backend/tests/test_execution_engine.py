@@ -17,6 +17,7 @@ import os
 import pytest
 from sqlalchemy import select
 
+from app import audit
 from app.core.config import settings
 from app.engine import control as ctrl, events, pipeline
 from app.models.execution import Execution, ExecutionStep
@@ -180,10 +181,16 @@ class TestPipelineScheduler:
             client, env, db_factory,
             steps=[_step(), _step("第二步")],
         )
+        audit_entries = []
+        monkeypatch.setattr(audit, "log", lambda **kwargs: audit_entries.append(kwargs))
         monkeypatch.setattr(pipeline.ssh_runner, "run_shell_on_job_host",
                             _fake_job_host_runner())
 
         await pipeline.run_execution(eid)
+
+        assert {entry["action"] for entry in audit_entries}.isdisjoint(
+            {"execution.start", "execution.finish"}
+        )
 
         async with db_factory() as s:
             execution = await s.get(Execution, eid)
