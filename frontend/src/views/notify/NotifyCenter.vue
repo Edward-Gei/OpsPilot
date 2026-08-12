@@ -598,13 +598,14 @@ onMounted(async () => {
 
 <style scoped>
 .blocks {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
-  max-width: 960px;
+  width: 100%;
 }
 .block {
   border-radius: 14px;
+  min-width: 0;
 }
 .block-head {
   display: flex;
@@ -708,5 +709,10 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--text-3);
   margin-left: 4px;
+}
+@media (max-width: 960px) {
+  .blocks {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

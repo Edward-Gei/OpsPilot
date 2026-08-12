@@ -363,13 +363,15 @@ onMounted(loadConfigs)
 
 <style scoped>
 .settings {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
-  max-width: 960px;
+  width: 100%;
+  align-items: start;
 }
 .block {
   border-radius: 14px;
+  min-width: 0;
 }
 .block-head {
   display: flex;
@@ -432,5 +434,10 @@ onMounted(loadConfigs)
   font-size: 13px;
   color: var(--text-3);
   padding: 6px 0;
+}
+@media (max-width: 960px) {
+  .settings {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
