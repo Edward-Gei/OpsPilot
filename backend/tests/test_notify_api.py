@@ -31,7 +31,7 @@ from tests.conftest import auth_header, login_for_tokens
 
 
 async def _admin_headers(client):
-    """登录 admin 返回鉴权头（六接口均需 notify:config，仅 admin 角色持有）。"""
+    """登录 admin 返回鉴权头（通知读写测试权限均由 admin 持有）。"""
     return auth_header(await login_for_tokens(client, "admin"))
 
 
@@ -108,7 +108,7 @@ class TestChannelApi:
         assert data["success"] is False and "SMTP" in data["message"]
 
     async def test_rbac_denied(self, client):
-        """ops 角色无 notify:config → 40301。"""
+        """ops 角色无 notify:read → 40301。"""
         headers = auth_header(await login_for_tokens(client, "ops1"))
         resp = await client.get("/api/v1/notify/channels", headers=headers)
         assert resp.json()["code"] == 40301

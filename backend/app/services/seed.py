@@ -15,7 +15,7 @@ import logging
 import secrets
 
 from passlib.hash import bcrypt
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -64,7 +64,19 @@ async def run_seed(session: AsyncSession) -> None:
 
 
 async def _sync_permissions(session: AsyncSession) -> None:
-    """权限点幂等同步：新增补齐、名称/模块变更覆盖；不删除（防止误删自定义引用）。"""
+    """权限点幂等同步，并清理已废弃的通知配置权限。"""
+    legacy_ids = list(
+        (await session.execute(select(Permission.id).where(Permission.code == "notify:config"))).scalars()
+    )
+    if legacy_ids:
+        await session.execute(delete(RolePermission).where(RolePermission.permission_id.in_(legacy_ids)))
+        await session.execute(delete(Permission).where(Permission.id.in_(legacy_ids)))
+        try:
+            keys = await redis_client.keys(KEY_USER_PERMS.format(user_id="*"))
+            if keys:
+                await redis_client.delete(*keys)
+        except Exception:  # noqa: BLE001
+            logger.warning("旧权限缓存清理失败（不影响启动，缓存将随 TTL 自然过期）")
     existing = {p.code: p for p in (await session.execute(select(Permission))).scalars()}
     for code, name, module in PERMISSIONS:
         if code in existing:

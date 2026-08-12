@@ -20,6 +20,8 @@ import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 const canWrite = userStore.hasPerm('cmdb:write')
+const canDelete = userStore.hasPerm('cmdb:delete')
+const canImport = userStore.hasPerm('cmdb:import')
 
 // 环境/状态彩色标签（与 M1 列表标签风格一致；环境按产品约定保留英文原值）
 const envText: Record<string, { text: string; color: string }> = {
@@ -71,7 +73,7 @@ const columns = ref(makeResizable([
   { title: '状态', key: 'status', width: 90 },
   { title: 'SSH 端口', dataIndex: 'ssh_port', key: 'ssh_port', width: 90 },
   { title: '创建时间', key: 'created', width: 155 },
-  { title: '操作', key: 'action', width: canWrite ? 190 : 90, fixed: 'right' as const },
+  { title: '操作', key: 'action', width: canWrite || canDelete ? 190 : 90, fixed: 'right' as const },
 ]))
 
 /** 拉取主机列表（携带全部筛选条件） */
@@ -413,7 +415,7 @@ onMounted(() => {
       <!-- 右侧操作组：批量删除 → 导出 → 导入 → 新建 -->
       <div class="toolbar-actions">
         <a-popconfirm
-          v-if="canWrite"
+          v-if="canDelete"
           :title="`确认删除选中的 ${selectedKeys.length} 台主机？`"
           :disabled="!selectedKeys.length"
           @confirm="onBatchDelete"
@@ -423,9 +425,9 @@ onMounted(() => {
           </a-button>
         </a-popconfirm>
         <a-button @click="onExport"><DownloadOutlined />导出</a-button>
-        <template v-if="canWrite">
-          <a-button @click="openImport"><UploadOutlined />导入</a-button>
-          <a-button type="primary" @click="openCreate"><PlusOutlined />新建主机</a-button>
+        <template v-if="canImport || canWrite">
+          <a-button v-if="canImport" @click="openImport"><UploadOutlined />导入</a-button>
+          <a-button v-if="canWrite" type="primary" @click="openCreate"><PlusOutlined />新建主机</a-button>
         </template>
       </div>
     </div>
@@ -471,9 +473,9 @@ onMounted(() => {
         <template v-else-if="column.key === 'action'">
           <a-space>
             <a-button size="small" class="op-btn-cyan" @click="openDetail(record as cmdbApi.HostItem)"><EyeOutlined />详情</a-button>
-            <template v-if="canWrite">
+            <template v-if="canWrite || canDelete">
               <a-button size="small" class="op-btn-blue" @click="openEdit(record as cmdbApi.HostItem)"><EditOutlined />编辑</a-button>
-              <a-popconfirm title="确认删除该主机？" @confirm="onDelete(record as cmdbApi.HostItem)">
+              <a-popconfirm v-if="canDelete" title="确认删除该主机？" @confirm="onDelete(record as cmdbApi.HostItem)">
                 <a-button size="small" danger><DeleteOutlined />删除</a-button>
               </a-popconfirm>
             </template>

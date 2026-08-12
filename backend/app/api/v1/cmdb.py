@@ -94,7 +94,7 @@ async def suggest_hosts(
 
 @router.get("/hosts/import-template", summary="下载导入模板")
 async def download_import_template(
-    _: User = Depends(require_perm("cmdb:write")),
+    _: User = Depends(require_perm("cmdb:import")),
 ) -> Response:
     """xlsx 模板：含表头样式与环境/状态下拉校验。"""
     return _xlsx_response(host_excel.build_import_template(), "主机导入模板.xlsx")
@@ -105,7 +105,7 @@ async def import_hosts(
     file: UploadFile,
     request: Request,
     session: DbSession,
-    actor: User = Depends(require_perm("cmdb:write")),
+    actor: User = Depends(require_perm("cmdb:import")),
     upsert: bool = Query(False, description="存在（按 IP）即更新"),
 ) -> dict:
     """逐行校验 + 入库，返回成功数与失败行明细（HOST-06）。"""
@@ -215,7 +215,7 @@ async def delete_host(
     host_id: int,
     request: Request,
     session: DbSession,
-    actor: User = Depends(require_perm("cmdb:write")),
+    actor: User = Depends(require_perm("cmdb:delete")),
 ) -> dict:
     """删除保护：被应用/进行中工单引用时 42201（HOST-10）。"""
     host = await cmdb_service.delete_host(session, host_id)
@@ -305,7 +305,7 @@ async def delete_app(
     app_id: int,
     request: Request,
     session: DbSession,
-    actor: User = Depends(require_perm("cmdb:write")),
+    actor: User = Depends(require_perm("cmdb:delete")),
 ) -> dict:
     """删除保护：被进行中工单引用时 42201。"""
     app = await cmdb_service.delete_app(session, app_id)

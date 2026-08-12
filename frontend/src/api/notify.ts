@@ -1,4 +1,4 @@
-// 通知中心 API（04-API设计 §10，权限 notify:config）
+// 通知中心 API（04-API设计 §10，权限 notify:read / notify:write / notify:test）
 import { request } from './http'
 import type { PageResult } from './system'
 

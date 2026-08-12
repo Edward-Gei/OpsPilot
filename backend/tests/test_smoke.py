@@ -45,6 +45,33 @@ def test_admin_role_has_all_permissions():
     assert set(BUILTIN_ROLES["admin"]["permissions"]) == {p[0] for p in PERMISSIONS}
 
 
+def test_split_high_risk_permissions_are_defined_and_not_legacy():
+    """高风险操作使用独立权限，旧通知配置权限不再进入新矩阵。"""
+    codes = {p[0] for p in PERMISSIONS}
+    assert {
+        "cmdb:delete", "cmdb:import", "credential:delete", "job_host:delete",
+        "template:delete", "execution:force_control",
+        "notify:read", "notify:write", "notify:test",
+    } <= codes
+    assert "notify:config" not in codes
+    assert "ticket:withdraw" not in codes
+
+
+def test_force_control_and_notify_test_default_to_admin_only():
+    """强制中止和通知测试默认只授予 admin。"""
+    for code, meta in BUILTIN_ROLES.items():
+        if code == "admin":
+            assert {"execution:force_control", "notify:test"} <= set(meta["permissions"])
+        else:
+            assert "execution:force_control" not in meta["permissions"]
+            assert "notify:test" not in meta["permissions"]
+
+
+def test_ops_keeps_cmdb_import():
+    """运维角色保留资产批量导入能力。"""
+    assert "cmdb:import" in BUILTIN_ROLES["ops"]["permissions"]
+
+
 def test_system_config_defaults_wrapped():
     """system_config 默认值统一使用 {value: ...} 包裹，便于前端/服务层统一读取。"""
     for key, val in SYSTEM_CONFIG_DEFAULTS.items():

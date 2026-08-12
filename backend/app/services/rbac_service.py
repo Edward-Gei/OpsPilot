@@ -261,13 +261,13 @@ async def update_role(
 ) -> Role:
     """更新角色；内置角色不允许改权限矩阵（可改描述）。"""
     role = await _get_role_or_404(session, role_id)
+    if role.code == "admin":
+        raise Errors.rejected("admin 角色不允许编辑")
     if name is not None:
         role.name = name
     if description is not None:
         role.description = description
     if permissions is not None:
-        if role.is_builtin:
-            raise Errors.rejected("内置角色不允许修改权限")
         await _set_role_permissions(session, role_id, permissions)
         await invalidate_role_perms(session, role_id)
     await session.flush()

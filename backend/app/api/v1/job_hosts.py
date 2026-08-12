@@ -101,7 +101,7 @@ async def delete_job_host(
     job_host_id: int,
     request: Request,
     session: DbSession,
-    actor: User = Depends(require_perm("job_host:write")),
+    actor: User = Depends(require_perm("job_host:delete")),
 ) -> dict:
     """删除作业主机；被工单模板引用时 42201。"""
     jh = await job_host_service.delete_job_host(session, job_host_id)

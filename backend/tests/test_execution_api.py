@@ -64,23 +64,23 @@ class TestExecutionControl:
         tid = data["id"]
         h = env["ops_h"]
 
-        # queued：pause/resume/force-abort 均 40901
-        for op in ("pause", "resume", "force-abort"):
+        # queued：普通控制的状态机拒绝；force-abort 先由独立权限拒绝
+        for op in ("pause", "resume"):
             resp = await client.post(f"/api/v1/tickets/{tid}/{op}", headers=h)
             assert resp.json()["code"] == 40901, op
+        assert (await client.post(f"/api/v1/tickets/{tid}/force-abort", headers=h)).json()["code"] == 40301
         # queued：abort 放行（覆盖排队中撤销场景），工单状态保持 queued
         body = (await client.post(f"/api/v1/tickets/{tid}/abort", headers=h)).json()
         assert body["code"] == 0
         assert body["data"] == {"status": "queued", "execution_id": eid, "signal": "abort"}
         assert await fake_redis.get(f"ops:ctrl:{eid}") == "abort"
 
-        # running：pause / force-abort 放行；resume 40901
+        # running：pause 放行；force-abort 由 ops 独立权限拒绝；resume 40901
         await _set_ticket_status(db_factory, tid, "running")
         assert (await client.post(f"/api/v1/tickets/{tid}/pause", headers=h)).json()["code"] == 0
         assert await fake_redis.get(f"ops:ctrl:{eid}") == "pause"
         assert (await client.post(f"/api/v1/tickets/{tid}/resume", headers=h)).json()["code"] == 40901
-        assert (await client.post(f"/api/v1/tickets/{tid}/force-abort", headers=h)).json()["code"] == 0
-        assert await fake_redis.get(f"ops:ctrl:{eid}") == "force_abort"
+        assert (await client.post(f"/api/v1/tickets/{tid}/force-abort", headers=h)).json()["code"] == 40301
 
         # paused：resume 放行；pause 40901
         await _set_ticket_status(db_factory, tid, "paused")
@@ -90,9 +90,10 @@ class TestExecutionControl:
 
         # 终态：一律 40901
         await _set_ticket_status(db_factory, tid, "success")
-        for op in ("abort", "pause", "resume", "force-abort"):
+        for op in ("abort", "pause", "resume"):
             resp = await client.post(f"/api/v1/tickets/{tid}/{op}", headers=h)
             assert resp.json()["code"] == 40901, op
+        assert (await client.post(f"/api/v1/tickets/{tid}/force-abort", headers=h)).json()["code"] == 40301
 
     async def test_control_permission(self, client, db_factory, seed):
         """approver 无 execution:control 40301；ops2 非创建人 40302；admin 放行。"""

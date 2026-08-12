@@ -111,13 +111,16 @@ async def test_role_crud_and_perm_effect(client, seed):
 
 
 async def test_builtin_role_protected(client, seed):
-    """内置角色：不允许改权限矩阵、不允许删除（42201）。"""
+    """admin 不可编辑，其他内置角色可编辑但均不可删除。"""
     tokens = await login_for_tokens(client, "admin")
     headers = auth_header(tokens)
     admin_role_id = seed["roles"]["admin"]
     resp = await client.put(f"/api/v1/roles/{admin_role_id}",
                             json={"permissions": ["cmdb:read"]}, headers=headers)
     assert resp.json()["code"] == 42201
+    resp = await client.put(f"/api/v1/roles/{seed['roles']['auditor']}",
+                            json={"name": "审计员调整", "permissions": ["audit:read"]}, headers=headers)
+    assert resp.json()["code"] == 0
     resp = await client.delete(f"/api/v1/roles/{seed['roles']['auditor']}", headers=headers)
     assert resp.json()["code"] == 42201
 

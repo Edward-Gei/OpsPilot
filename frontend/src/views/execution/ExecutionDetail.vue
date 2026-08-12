@@ -345,6 +345,7 @@ const controlAllowed: Record<execApi.ControlOp, string[]> = {
 }
 
 function showControl(op: execApi.ControlOp): boolean {
+  if (op === 'force-abort' && !userStore.hasPerm('execution:force_control')) return false
   return canControl.value && controlAllowed[op].includes(detail.value?.ticket_status ?? '')
 }
 

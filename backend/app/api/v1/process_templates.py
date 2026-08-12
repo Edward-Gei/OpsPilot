@@ -80,7 +80,7 @@ async def set_process_template_status(process_id: int, req: ProcessTemplateStatu
 
 @router.delete("/{process_id}")
 async def delete_process_template(process_id: int, request: Request, session: DbSession,
-                                  actor: User = Depends(require_perm("template:write"))):
+                                  actor: User = Depends(require_perm("template:delete"))):
     p = await template_service.delete_process_template(session, process_id)
     audit.log(module="job", action="process_template.delete", actor_id=actor.id, actor_name=actor.username,
               source_ip=get_client_ip(request), target_type="process_template", target_id=str(process_id), target_name=p.name)

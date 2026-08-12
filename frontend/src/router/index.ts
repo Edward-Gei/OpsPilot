@@ -114,7 +114,7 @@ const router = createRouter({
           path: 'notify',
           name: 'notify',
           component: () => import('@/views/notify/NotifyCenter.vue'),
-          meta: { title: '通知中心', perm: 'notify:config' },
+          meta: { title: '通知中心', perm: 'notify:read' },
         },
         {
           path: 'audit',

@@ -71,7 +71,7 @@ async def set_template_status(template_id: int, req: TicketTemplateStatusRequest
 
 @router.delete("/{template_id}")
 async def delete_template(template_id: int, request: Request, session: DbSession,
-                          actor: User = Depends(require_perm("template:write"))):
+                          actor: User = Depends(require_perm("template:delete"))):
     tpl = await template_service.delete_template(session, template_id)
     audit.log(module="job", action="template.delete", actor_id=actor.id, actor_name=actor.username,
               source_ip=get_client_ip(request), target_type="template", target_id=str(template_id), target_name=tpl.name)

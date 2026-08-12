@@ -85,7 +85,7 @@ const menuGroups = computed(() =>
                 { key: 'execution-list', label: '执行中心', icon: ThunderboltOutlined, path: '/executions', perm: 'execution:read' },
         { key: 'audit-logs', label: '安全审计', icon: SafetyCertificateOutlined, path: '/audit', perm: 'audit:read' },
                 // M6 已开放：通知中心（渠道配置 + 事件映射 + 发送记录）
-                { key: 'notify', label: '通知中心', icon: BellOutlined, path: '/notify', perm: 'notify:config' },
+                { key: 'notify', label: '通知中心', icon: BellOutlined, path: '/notify', perm: 'notify:read' },
       ] as MenuItem[],
     },
     {

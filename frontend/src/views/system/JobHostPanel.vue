@@ -11,6 +11,7 @@ import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 const canWrite = userStore.hasPerm('job_host:write')
+const canDelete = userStore.hasPerm('job_host:delete')
 
 const enabledOptions = [
   { label: '已启用', value: 'true' },
@@ -39,7 +40,7 @@ const columns = ref(makeResizable([
   { title: '工作目录', dataIndex: 'workdir', key: 'workdir', width: 190, ellipsis: true },
   { title: '启用状态', key: 'enabled', width: 95 },
   { title: '最近测试', key: 'last_check', width: 180 },
-  { title: '操作', key: 'action', width: canWrite ? 200 : 60, fixed: 'right' as const },
+  { title: '操作', key: 'action', width: canWrite || canDelete ? 200 : 60, fixed: 'right' as const },
 ]))
 
 /** 拉取作业主机列表（响应仅含 credential_name，无任何密文字段） */
@@ -282,15 +283,16 @@ onMounted(loadList)
           <template v-else>—</template>
         </template>
         <template v-else-if="column.key === 'action'">
-          <a-space v-if="canWrite">
+          <a-space v-if="canWrite || canDelete">
             <a-button
+              v-if="canWrite"
               size="small"
               class="op-btn-cyan"
               :loading="testingId === record.id"
               @click="onTest(record as jobHostApi.JobHost)"
             ><ApiOutlined />测试</a-button>
-            <a-button size="small" class="op-btn-blue" @click="openEdit(record as jobHostApi.JobHost)"><EditOutlined />编辑</a-button>
-            <a-popconfirm title="确认删除该作业主机？" @confirm="onDelete(record as jobHostApi.JobHost)">
+            <a-button v-if="canWrite" size="small" class="op-btn-blue" @click="openEdit(record as jobHostApi.JobHost)"><EditOutlined />编辑</a-button>
+            <a-popconfirm v-if="canDelete" title="确认删除该作业主机？" @confirm="onDelete(record as jobHostApi.JobHost)">
               <a-button size="small" danger><DeleteOutlined />删除</a-button>
             </a-popconfirm>
           </a-space>

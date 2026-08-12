@@ -124,13 +124,13 @@
 | GET | `/credentials` | `credential:read` | 列表（不含密文）；作业主机关联与模板引用凭据选择用 |
 | POST | `/credentials` | `credential:write` | `{name, login_user, auth_type, secret, passphrase?}` |
 | PUT | `/credentials/{id}` | `credential:write` | secret 传空 = 不变更 |
-| DELETE | `/credentials/{id}` | `credential:write` | 被作业主机（`job_host.credential_id`）或模板（`ticket_template.credential_refs`）引用时 42201 |
+| DELETE | `/credentials/{id}` | `credential:delete` | 被作业主机（`job_host.credential_id`）或模板（`ticket_template.credential_refs`）引用时 42201 |
 | GET | `/templates` | `template:read` | 分页；keyword/type/status |
 | POST | `/templates` | `template:write` | 全量配置：`{name, type, description, job_host_id, steps:[{name, script_type, content, params_schema, timeout}], exec_strategy, approval_enabled, approval_nodes:[{node_order, role_id, approve_mode}], allow_withdraw, allow_transfer, allow_countersign, notify_rules, visible_role_ids, credential_refs:[{alias, credential_id}]}` → 创建 v1；type 枚举 `release/daily_ops/other`；credential_refs 为模板级引用凭据声明（alias 字母开头、大小写不敏感去重），shell 步骤执行时注入 `CRED_<ALIAS大写>_USER/_SECRET/_PASSPHRASE` 环境变量；步骤不再携带 credential_id（登录凭据随作业主机） |
 | GET | `/templates/{id}` | `template:read` | 当前版本全量配置详情；credential_refs 回显附 credential_name |
 | PUT | `/templates/{id}` | `template:write` | 全量更新；规则任一变更自动升版（含 credential_refs 变更）；仅改名/说明不升版 |
 | PUT | `/templates/{id}/status` | `template:write` | `{status: enabled/disabled}`；禁用后不可被提交，不影响已提交工单 |
-| DELETE | `/templates/{id}` | `template:write` | 被进行中工单引用时 42201 |
+| DELETE | `/templates/{id}` | `template:delete` | 被进行中工单引用时 42201 |
 | GET | `/templates/{id}/versions` | `template:read` | 版本列表 |
 | GET | `/templates/{id}/versions/{version}` | `template:read` | 历史版本全量快照 |
 
@@ -144,7 +144,7 @@
 | POST | `/job-hosts` | `job_host:write` | `{name, ip, ssh_port?, credential_id, workdir?}`；credential_id 必填，凭据不存在 40401 |
 | GET | `/job-hosts/{id}` | `job_host:read` | 详情 |
 | PUT | `/job-hosts/{id}` | `job_host:write` | 编辑；`credential_id` 传值即切换关联凭据 |
-| DELETE | `/job-hosts/{id}` | `job_host:write` | 被模板引用时 42201 |
+| DELETE | `/job-hosts/{id}` | `job_host:delete` | 被模板引用时 42201 |
 | POST | `/job-hosts/{id}/test` | `job_host:write` | 连通性测试：以关联凭据实时取账号/密文建连 |
 | PUT | `/job-hosts/{id}/status` | `job_host:write` | 启用/禁用；禁用后不可被新模板选用 |
 
@@ -165,7 +165,7 @@
 | POST | `/tickets/{id}/abort` | `execution:control` | 中止：queued/running/paused；停止派发后续步骤（在跑步骤不打断），未派发步骤置 skipped，工单终态 interrupted(user_abort)；仅创建人或 admin |
 | POST | `/tickets/{id}/pause` | `execution:control` | 暂停：仅 running；在跑步骤跑完后停住（paused 非终态），不再派发后续步骤；仅创建人或 admin |
 | POST | `/tickets/{id}/resume` | `execution:control` | 恢复：仅 paused；从停住的步骤处继续派发；仅创建人或 admin |
-| POST | `/tickets/{id}/force-abort` | `execution:control` | 强制中止：running/paused；在中止基础上强杀在跑步骤（强制关闭 SSH 会话 `conn.abort()`，best-effort）；高风险，独立审计；仅创建人或 admin |
+| POST | `/tickets/{id}/force-abort` | `execution:force_control` | 强制中止：running/paused；在中止基础上强杀在跑步骤（强制关闭 SSH 会话 `conn.abort()`，best-effort）；高风险，独立审计；仅创建人或 admin |
 
 控制类接口（abort/pause/resume/force-abort）均写审计（操作人/IP/时间/工单ID/当时状态）并触发通知；审批人不能代替提交人撤销（只能审批通过/驳回）。状态不匹配返回 40901。
 
@@ -204,12 +204,12 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/notify/channels` | `notify:config` | 全渠道配置（敏感项掩码 `******`） |
-| PUT | `/notify/channels/{type}` | `notify:config` | `{enabled, config, secret?}` secret 不传=不变更 |
-| POST | `/notify/channels/{type}/test` | `notify:config` | 发送测试消息，同步返回结果 |
-| GET | `/notify/events` | `notify:config` | 事件-渠道映射 |
-| PUT | `/notify/events` | `notify:config` | 全量提交映射 |
-| GET | `/notify/records` | `notify:config` | 发送记录分页；event/channel/status/时间 |
+| GET | `/notify/channels` | `notify:read` | 全渠道配置（敏感项掩码 `******`） |
+| PUT | `/notify/channels/{type}` | `notify:write` | `{enabled, config, secret?}` secret 不传=不变更 |
+| POST | `/notify/channels/{type}/test` | `notify:test` | 发送测试消息，同步返回结果 |
+| GET | `/notify/events` | `notify:read` | 事件-渠道映射 |
+| PUT | `/notify/events` | `notify:write` | 全量提交映射 |
+| GET | `/notify/records` | `notify:read` | 发送记录分页；event/channel/status/时间 |
 
 > **渠道×事件消息模板**：`GET /notify/channels` 除渠道配置外返回 `template_events`、`template_defaults`、`template_variables` 元数据。`config.templates` 按事件保存自定义模板：Email 使用 `{title, content}`，Webhook 使用 `{body}`，Teams 使用 `{card}`。未配置事件使用后端提供的渠道×事件默认模板；不兼容旧的全局 `title_template/content_template`。
 >
@@ -268,21 +268,21 @@
 
 > 「功能菜单」搜索纯前端本地过滤侧边栏菜单项，不经后端。结果点击统一跳对应列表页并带 `?keyword=` 自动过滤（SEARCH-04）。
 
-## 14. 权限点全集（与 §2.2 PRD 矩阵对应，共 22 个）
+## 14. 权限点全集（与 §2.2 PRD 矩阵对应，共 30 个）
 
 ```
 user:read user:write user:mfa role:read role:write
-cmdb:read cmdb:write
-credential:read credential:write
-job_host:read job_host:write
-template:read template:write
+cmdb:read cmdb:write cmdb:delete cmdb:import
+credential:read credential:write credential:delete
+job_host:read job_host:write job_host:delete
+template:read template:write template:delete
 ticket:read ticket:write ticket:approve
-execution:read execution:control
+execution:read execution:control execution:force_control
 audit:read audit:export
-notify:config system:config
+notify:read notify:write notify:test system:config
 ```
 
-内置角色映射：admin=全部（含 job_host:read/write，仅 admin 具备）；ops=cmdb:*、credential:read、template:*、ticket:read/write、execution:read/control（控制类接口另有对象级校验：仅工单创建人或 admin）；approver=cmdb:read、ticket:read/approve、execution:read；auditor=cmdb:read、execution:read、audit:*。
+内置角色映射：admin=全部；ops=cmdb:read/write/import、credential:read、job_host:read、template:read/write、ticket:read/write、execution:read/control；approver=cmdb:read、ticket:read/approve、execution:read；auditor=cmdb:read、execution:read、audit:read/export。`execution:force_control`、`notify:test` 默认仅授予 admin；通知查看/配置分别使用 `notify:read`/`notify:write`；各高阶权限不自动包含 `read`。
 
 ## 15. 密码重置接口
 

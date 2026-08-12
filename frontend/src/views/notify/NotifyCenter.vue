@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 通知中心（M6-3）：渠道配置（测试按钮）+ 事件映射 + 发送记录列表
-// 权限 notify:config；敏感密钥读取时后端脱敏为 ******，原样提交不会覆盖真实值
+// 权限 notify:read / notify:write / notify:test；敏感密钥读取时后端脱敏为 ******，原样提交不会覆盖真实值
 import { computed, onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import {
@@ -14,6 +14,11 @@ import {
 import * as notifyApi from '@/api/notify'
 import type { NotifyRecordItem } from '@/api/notify'
 import ChannelTemplateFields from './ChannelTemplateFields.vue'
+import { useUserStore } from '@/stores/user'
+
+const userStore = useUserStore()
+const canWrite = userStore.hasPerm('notify:write')
+const canTest = userStore.hasPerm('notify:test')
 
 const loading = ref(false)
 const activeTab = ref('channels')
@@ -287,12 +292,14 @@ onMounted(async () => {
                   <b>邮件 Email</b>
                   <span>SMTP 发送；收件人取工单相关用户的邮箱（未配置邮箱的用户跳过）</span>
                 </div>
-                <a-switch v-model:checked="channelForms.email.enabled" class="head-switch" @click.stop />
+                <a-switch v-model:checked="channelForms.email.enabled" class="head-switch" :disabled="!canWrite" @click.stop />
                 <a-button
+                  v-if="canTest"
                   :loading="testingChannel === 'email'"
                   @click.stop="onTestChannel('email')"
                 >测试发送</a-button>
                 <a-button
+                  v-if="canWrite"
                   type="primary"
                   :loading="savingChannel === 'email'"
                   @click.stop="onSaveChannel('email')"
@@ -370,12 +377,14 @@ onMounted(async () => {
                   <b>Webhook</b>
                   <span>JSON POST 到全局地址；配置签名密钥后附 HMAC-SHA256 签名头（X-Ops-Signature）</span>
                 </div>
-                <a-switch v-model:checked="channelForms.webhook.enabled" class="head-switch" @click.stop />
+                <a-switch v-model:checked="channelForms.webhook.enabled" class="head-switch" :disabled="!canWrite" @click.stop />
                 <a-button
+                  v-if="canTest"
                   :loading="testingChannel === 'webhook'"
                   @click.stop="onTestChannel('webhook')"
                 >测试发送</a-button>
                 <a-button
+                  v-if="canWrite"
                   type="primary"
                   :loading="savingChannel === 'webhook'"
                   @click.stop="onSaveChannel('webhook')"
@@ -423,12 +432,14 @@ onMounted(async () => {
                   <b>Microsoft Teams</b>
                   <span>MessageCard 卡片推送到频道 Incoming Webhook</span>
                 </div>
-                <a-switch v-model:checked="channelForms.teams.enabled" class="head-switch" @click.stop />
+                <a-switch v-model:checked="channelForms.teams.enabled" class="head-switch" :disabled="!canWrite" @click.stop />
                 <a-button
+                  v-if="canTest"
                   :loading="testingChannel === 'teams'"
                   @click.stop="onTestChannel('teams')"
                 >测试发送</a-button>
                 <a-button
+                  v-if="canWrite"
                   type="primary"
                   :loading="savingChannel === 'teams'"
                   @click.stop="onSaveChannel('teams')"
@@ -493,7 +504,7 @@ onMounted(async () => {
                 <b>事件-渠道映射</b>
                 <span>勾选每类事件经哪些渠道发送；保存为全量覆盖，未勾选即不发送</span>
               </div>
-              <a-button type="primary" :loading="savingMapping" @click="onSaveMappings">保存映射</a-button>
+              <a-button v-if="canWrite" type="primary" :loading="savingMapping" @click="onSaveMappings">保存映射</a-button>
             </div>
             <div class="map-table">
               <div class="map-row map-row--head">

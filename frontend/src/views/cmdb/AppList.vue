@@ -17,6 +17,7 @@ import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 const canWrite = userStore.hasPerm('cmdb:write')
+const canDelete = userStore.hasPerm('cmdb:delete')
 
 // 部署方式彩色标签（与 M1 列表标签风格一致）
 const deployText: Record<string, { text: string; color: string }> = {
@@ -55,7 +56,7 @@ const columns = ref(makeResizable([
   { title: '主机 IP', key: 'host_ips', width: 140 },
   { title: '说明', key: 'description', width: 180, ellipsis: true },
   { title: '创建时间', key: 'created', width: 155 },
-  { title: '操作', key: 'action', width: canWrite ? 190 : 90, fixed: 'right' as const },
+  { title: '操作', key: 'action', width: canWrite || canDelete ? 190 : 90, fixed: 'right' as const },
 ]))
 
 /** 拉取应用列表（items 含关联主机数） */
@@ -79,7 +80,7 @@ async function loadList() {
 // ---------- 批量删除（多选；单个删除保护失败不影响其余） ----------
 const selectedKeys = ref<number[]>([])
 const rowSelection = computed(() =>
-  canWrite
+  canWrite || canDelete
     ? {
         fixed: true, // 选择框列固定左侧
         selectedRowKeys: selectedKeys.value,
@@ -311,8 +312,9 @@ onMounted(() => {
         @change="onSearch"
       />
       <!-- 右侧操作组：批量删除 + 新建整体钉右 -->
-      <div v-if="canWrite" class="toolbar-actions">
+      <div v-if="canWrite || canDelete" class="toolbar-actions">
         <a-popconfirm
+          v-if="canDelete"
           :title="`确认删除选中的 ${selectedKeys.length} 个应用？`"
           :disabled="!selectedKeys.length"
           @confirm="onBatchDelete"
@@ -321,7 +323,7 @@ onMounted(() => {
             <DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
           </a-button>
         </a-popconfirm>
-        <a-button type="primary" @click="openCreate"><PlusOutlined />新建应用</a-button>
+        <a-button v-if="canWrite" type="primary" @click="openCreate"><PlusOutlined />新建应用</a-button>
       </div>
     </div>
 
@@ -368,9 +370,9 @@ onMounted(() => {
         <template v-else-if="column.key === 'action'">
           <a-space>
             <a-button size="small" class="op-btn-cyan" @click="openDetail(record as cmdbApi.AppItem)"><EyeOutlined />详情</a-button>
-            <template v-if="canWrite">
+            <template v-if="canWrite || canDelete">
               <a-button size="small" class="op-btn-blue" @click="openEdit(record as cmdbApi.AppItem)"><EditOutlined />编辑</a-button>
-              <a-popconfirm title="确认删除该应用？" @confirm="onDelete(record as cmdbApi.AppItem)">
+              <a-popconfirm v-if="canDelete" title="确认删除该应用？" @confirm="onDelete(record as cmdbApi.AppItem)">
                 <a-button size="small" danger><DeleteOutlined />删除</a-button>
               </a-popconfirm>
             </template>

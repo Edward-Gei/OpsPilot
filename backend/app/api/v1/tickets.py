@@ -299,7 +299,7 @@ async def resume_ticket(
 @router.post("/{ticket_id}/force-abort", summary="强制中止执行")
 async def force_abort_ticket(
     ticket_id: int, request: Request, session: DbSession,
-    actor: User = Depends(require_perm("execution:control")),
+    actor: User = Depends(require_perm("execution:force_control")),
 ) -> dict:
     """强制中止：running/paused；在中止基础上强杀在跑 SSH 会话（高风险，独立审计）。"""
     return await _control(ticket_id, request, session, actor, exec_ctrl.SIG_FORCE_ABORT)

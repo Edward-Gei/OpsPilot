@@ -274,7 +274,7 @@ const ALL_LINKS: QuickLink[] = [
   { icon: DatabaseOutlined, color: '#4ade80', label: '主机管理', path: '/cmdb/hosts', perm: 'cmdb:read' },
   { icon: CodeOutlined, color: '#a78bfa', label: '模板管理', path: '/job/templates', perm: 'template:read' },
   { icon: RocketOutlined, color: '#38bdf8', label: '执行中心', path: '/executions', perm: 'execution:read' },
-  { icon: BellOutlined, color: '#f472b6', label: '通知中心', path: '/notify', perm: 'notify:config' },
+  { icon: BellOutlined, color: '#f472b6', label: '通知中心', path: '/notify', perm: 'notify:read' },
   { icon: SafetyCertificateOutlined, color: '#f87171', label: '安全审计', path: '/audit', perm: 'audit:read' },
   { icon: TeamOutlined, color: '#34d399', label: '用户管理', path: '/system/users', perm: 'user:read' },
 ]

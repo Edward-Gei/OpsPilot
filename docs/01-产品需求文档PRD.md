@@ -64,28 +64,45 @@ CMDB 维护主机/应用（资产台账） → 模板管理定义工单模板（
 采用 **用户（User）— 角色（Role）— 权限点（Permission）** 三级模型：
 
 - 一个用户可绑定多个角色，权限取并集；
-- 权限点按“模块:操作”粒度定义（如 `cmdb:write`、`ticket:approve`），共 22 个权限点；
-- 角色可由管理员自定义，系统内置 4 个默认角色（admin/ops/approver/auditor，不可删除、内置角色权限矩阵不可改）。
+- 权限点按“模块:操作”粒度定义（如 `cmdb:write`、`ticket:approve`），共 30 个权限点；高阶权限不自动包含低阶权限；
+- 角色可由管理员自定义，系统内置 4 个默认角色（admin/ops/approver/auditor，不可删除）；admin 不可编辑，其他内置角色允许编辑权限矩阵。
 
 ### 2.2 内置角色与权限矩阵
 
 | 权限点 | 管理员 admin | 运维 ops | 审批人 approver | 审计员 auditor |
 | --- | :-: | :-: | :-: | :-: |
-| 用户/角色/系统配置管理 | ✔ | — | — | — |
-| CMDB 查看 | ✔ | ✔ | ✔ | ✔ |
-| CMDB 新增/编辑/删除/导入 | ✔ | ✔ | — | — |
-| 凭据查看 | ✔ | ✔ | — | — |
-| 凭据新增/编辑/删除 | ✔ | — | — | — |
-| 作业主机查看/管理 | ✔ | — | — | — |
-| 作业模板查看/管理 | ✔ | ✔ | — | — |
-| 工单创建/撤销 | ✔ | ✔ | — | — |
-| 工单审批 | ✔ | — | ✔ | — |
-| 作业执行控制（中止/暂停/恢复） | ✔ | ✔（本人工单） | — | — |
-| 执行记录查看 | ✔ | ✔ | ✔ | ✔ |
-| 审计日志查看/导出 | ✔ | — | — | ✔ |
-| 通知渠道配置 | ✔ | — | — | — |
+| user:read | ✔ | — | — | — |
+| user:write | ✔ | — | — | — |
+| user:mfa | ✔ | — | — | — |
+| role:read | ✔ | — | — | — |
+| role:write | ✔ | — | — | — |
+| cmdb:read | ✔ | ✔ | ✔ | ✔ |
+| cmdb:write | ✔ | ✔ | — | — |
+| cmdb:delete | ✔ | — | — | — |
+| cmdb:import | ✔ | ✔ | — | — |
+| credential:read | ✔ | ✔ | — | — |
+| credential:write | ✔ | — | — | — |
+| credential:delete | ✔ | — | — | — |
+| template:read | ✔ | ✔ | — | — |
+| template:write | ✔ | ✔ | — | — |
+| template:delete | ✔ | — | — | — |
+| job_host:read | ✔ | ✔ | — | — |
+| job_host:write | ✔ | — | — | — |
+| job_host:delete | ✔ | — | — | — |
+| ticket:read | ✔ | ✔ | ✔ | — |
+| ticket:write | ✔ | ✔ | — | — |
+| ticket:approve | ✔ | — | ✔ | — |
+| execution:read | ✔ | ✔ | ✔ | ✔ |
+| execution:control | ✔ | ✔ | — | — |
+| execution:force_control | ✔ | — | — | — |
+| audit:read | ✔ | — | — | ✔ |
+| audit:export | ✔ | — | — | ✔ |
+| notify:read | ✔ | — | — | — |
+| notify:write | ✔ | — | — | — |
+| notify:test | ✔ | — | — | — |
+| system:config | ✔ | — | — | — |
 
-<!-- v2.3 变更: 补充“作业主机查看/管理”行（job_host:read/write，均仅 admin）；权限点总数 20→22（含 user:mfa，归入“用户/角色/系统配置管理”行） -->
+> 工单审批中的撤回沿用现有业务条件，不新增 `ticket:withdraw` 权限；通知查看、配置保存、测试发送分别使用独立权限；`execution:force_control` 默认仅授予 admin。
 
 ---
 

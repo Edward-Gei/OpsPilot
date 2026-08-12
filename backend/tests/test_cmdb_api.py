@@ -76,8 +76,9 @@ class TestHostCrud:
         assert (detail["cpu_cores"], detail["memory_gb"], detail["disk_gb"]) == (4, 8, 100)
         assert detail["apps"] == []
 
-        # 删除后 404
-        resp = await client.delete(f"/api/v1/cmdb/hosts/{host_id}", headers=headers)
+        # 删除属于独立高风险权限，由 admin 执行
+        admin_headers = auth_header(await login_for_tokens(client, "admin"))
+        resp = await client.delete(f"/api/v1/cmdb/hosts/{host_id}", headers=admin_headers)
         assert resp.json()["code"] == 0
         resp = await client.get(f"/api/v1/cmdb/hosts/{host_id}", headers=headers)
         assert resp.json()["code"] == 40401
@@ -239,16 +240,17 @@ class TestAppCrud:
         )
         app_id = resp.json()["data"]["id"]
 
+        admin_headers = auth_header(await login_for_tokens(client, "admin"))
         # 主机被应用引用 -> 42201 且 message 指明引用方
-        resp = await client.delete(f"/api/v1/cmdb/hosts/{host_id}", headers=headers)
+        resp = await client.delete(f"/api/v1/cmdb/hosts/{host_id}", headers=admin_headers)
         body = resp.json()
         assert body["code"] == 42201
         assert "支付服务" in body["message"]
 
         # 删应用后主机可删
-        resp = await client.delete(f"/api/v1/cmdb/apps/{app_id}", headers=headers)
+        resp = await client.delete(f"/api/v1/cmdb/apps/{app_id}", headers=admin_headers)
         assert resp.json()["code"] == 0
-        resp = await client.delete(f"/api/v1/cmdb/hosts/{host_id}", headers=headers)
+        resp = await client.delete(f"/api/v1/cmdb/hosts/{host_id}", headers=admin_headers)
         assert resp.json()["code"] == 0
 
 

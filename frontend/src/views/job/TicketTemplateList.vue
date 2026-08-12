@@ -6,6 +6,7 @@ import { CodeOutlined, CopyOutlined, DeleteOutlined, EditOutlined, EyeOutlined, 
 import * as api from '@/api/job'
 import { listJobHosts } from '@/api/jobHost'
 import { listRoleOptions } from '@/api/system'
+import { useUserStore } from '@/stores/user'
 import { makeResizable, onResizeColumn } from '@/utils/table'
 import { typeOptions, typeText } from './meta'
 import TicketTemplateEditor from './TicketTemplateEditor.vue'
@@ -17,7 +18,9 @@ interface Row extends api.TemplateItem {
   visible_role_ids: number[]
 }
 
-const canWrite = true
+const userStore = useUserStore()
+const canWrite = userStore.hasPerm('template:write')
+const canDelete = userStore.hasPerm('template:delete')
 const rows = ref<Row[]>([])
 const processes = ref<api.ProcessTemplateItem[]>([])
 const hosts = ref<{ id: number; name: string; enabled: boolean }[]>([])
@@ -148,9 +151,9 @@ onMounted(load)
       <a-select v-model:value="query.type" class="type-sel" allow-clear placeholder="模板类型" :options="typeOptions" @change="search" />
       <a-select v-model:value="query.status" class="status-sel" allow-clear placeholder="状态" :options="[{ label: '启用', value: 'enabled' }, { label: '停用', value: 'disabled' }]" @change="search" />
       <div class="toolbar-actions">
-        <a-button danger :disabled="!selectedKeys.length" @click="confirmBatchRemove"><DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}</a-button>
-        <a-button @click="openCopy"><CopyOutlined />复制模板</a-button>
-        <a-button type="primary" @click="startCreate"><PlusOutlined />新建模板</a-button>
+        <a-button v-if="canDelete" danger :disabled="!selectedKeys.length" @click="confirmBatchRemove"><DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}</a-button>
+        <a-button v-if="canWrite" @click="openCopy"><CopyOutlined />复制模板</a-button>
+        <a-button v-if="canWrite" type="primary" @click="startCreate"><PlusOutlined />新建模板</a-button>
       </div>
     </div>
     <a-table :columns="columns" :data-source="rows" :loading="loading" bordered row-key="id" :scroll="{ x: 1060 }" :row-selection="rowSelection" @resize-column="onResizeColumn" :pagination="{ current: query.page, pageSize: query.page_size, total, showSizeChanger: true, showQuickJumper: true, showTotal: (t: number) => `共 ${t} 个模板`, onChange: pageChange }">
@@ -166,7 +169,7 @@ onMounted(load)
         </template>
         <template v-else-if="column.key === 'status'"><a-switch :checked="record.status === 'enabled'" checked-children="启用" un-checked-children="停用" :loading="statusLoading === record.id" @change="toggle(record as Row)" /></template>
         <template v-else-if="column.key === 'updated'">{{ record.updated_at ? new Date(record.updated_at).toLocaleString() : '-' }}</template>
-        <template v-else-if="column.key === 'action'"><a-space><a-button size="small" class="op-btn-cyan" @click="openDetail(record as Row)"><EyeOutlined />详情</a-button><a-button v-if="canWrite" size="small" class="op-btn-blue" @click="startEdit(record as Row)"><EditOutlined />编辑</a-button><a-popconfirm title="确认删除该工单模板？" @confirm="remove(record as Row)"><a-button v-if="canWrite" size="small" danger><DeleteOutlined />删除</a-button></a-popconfirm></a-space></template>
+        <template v-else-if="column.key === 'action'"><a-space><a-button size="small" class="op-btn-cyan" @click="openDetail(record as Row)"><EyeOutlined />详情</a-button><a-button v-if="canWrite" size="small" class="op-btn-blue" @click="startEdit(record as Row)"><EditOutlined />编辑</a-button><a-popconfirm v-if="canDelete" title="确认删除该工单模板？" @confirm="remove(record as Row)"><a-button size="small" danger><DeleteOutlined />删除</a-button></a-popconfirm></a-space></template>
       </template>
     </a-table>
 
