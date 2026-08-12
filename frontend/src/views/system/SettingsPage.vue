@@ -165,7 +165,7 @@ onMounted(loadConfigs)
 
       <div class="settings">
       <!-- 安全策略 -->
-      <a-card class="block">
+      <a-card class="block block--wide">
         <div class="block-head">
           <div class="op-icon-grad" style="background: var(--grad-blue)"><SafetyCertificateOutlined /></div>
           <div class="block-title">
@@ -346,7 +346,7 @@ onMounted(loadConfigs)
       </a-card>
 
       <!-- 作业主机配置：脚本统一在作业主机上执行，增删改/连通性测试内嵌本页 -->
-      <a-card class="block">
+      <a-card class="block block--wide">
         <div class="block-head">
           <div class="op-icon-grad" style="background: var(--grad-green)"><CloudServerOutlined /></div>
           <div class="block-title">
@@ -372,6 +372,9 @@ onMounted(loadConfigs)
 .block {
   border-radius: 14px;
   min-width: 0;
+}
+.block--wide {
+  grid-column: 1 / -1;
 }
 .block-head {
   display: flex;
@@ -438,6 +441,9 @@ onMounted(loadConfigs)
 @media (max-width: 960px) {
   .settings {
     grid-template-columns: 1fr;
+  }
+  .block--wide {
+    grid-column: auto;
   }
 }
 </style>
