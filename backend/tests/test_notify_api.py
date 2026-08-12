@@ -12,6 +12,7 @@
 from datetime import datetime, timedelta
 
 import asyncio
+import json
 
 import pytest
 from sqlalchemy import select
@@ -23,6 +24,8 @@ from app.models.auth import User
 from app.models.notify import NotificationRecord, NotifyChannel, NotifyChannelEvent
 from app.notify import ChannelSendError, get_channel
 from app.notify import dispatcher as disp
+from app.notify.teams import TeamsChannel
+from app.notify.webhook import WebhookChannel
 from app.services import notify_service
 from tests.conftest import auth_header, login_for_tokens
 
@@ -385,7 +388,7 @@ class TestDispatcher:
         assert len(fake.calls) == 2  # 两轮都真正发起了发送（未因卡 sending 而跳过）
 
     async def test_webhook_receiver_passthrough(self, db_factory, seed, monkeypatch):
-        """非 email 渠道不解析邮箱：receivers 为空列表，发往全局 URL。"""
+        """非 email 渠道透传原始用户名数组，发往全局 URL。"""
         async with db_factory() as session:
             session.add(NotifyChannel(type="webhook", enabled=True,
                                       config={"url": "https://hook.test"}))
@@ -398,20 +401,20 @@ class TestDispatcher:
             await disp.dispatch_record(session, record)
             assert record.status == "success"
         message, config, _ = fake.calls[0]
-        assert message.receivers == [] and config["url"] == "https://hook.test"
+        assert message.receivers == ["admin"] and config["url"] == "https://hook.test"
 
 
 # ---------- 消息模板 ----------
 
 class TestTemplate:
     def test_render_template(self):
-        """占位替换；缺失/None 变量原样保留；非占位花括号不受影响。"""
+        """占位替换；未知变量原样保留，已知空变量按其类型渲染。"""
         variables = {"ticket_no": "TK1", "approver": "ops1", "comment": None}
         assert notify_service.render_template(
             "【{ticket_no}】{approver} 已处理", variables) == "【TK1】ops1 已处理"
-        # 缺失变量 {reason} 与 None 值 {comment} 都原样保留
+        # 已知字符串变量缺失或为 None 均渲染为空
         assert notify_service.render_template(
-            "{reason}|{comment}|{ticket_no}", variables) == "{reason}|{comment}|TK1"
+            "{reason}|{comment}|{ticket_no}", variables) == "||TK1"
         assert notify_service.render_template("无占位符文本", variables) == "无占位符文本"
 
     async def test_emit_renders_per_channel_template(self, db_factory, fake_redis, seed):
@@ -420,10 +423,12 @@ class TestTemplate:
             session.add_all([
                 NotifyChannelEvent(event="ticket.approved", channel_type="email"),
                 NotifyChannelEvent(event="ticket.approved", channel_type="teams"),
-                # 仅 email 配模板：标题用事件/工单号，正文包装默认文案 + 业务变量
+                # 仅 email 为审批通过事件配置模板
                 NotifyChannel(type="email", enabled=True, config={
-                    "title_template": "【{event}】{ticket_no}",
-                    "content_template": "{default_content}（审批人：{approver}）",
+                    "templates": {"ticket.approved": {
+                        "title": "【{event}】{ticket_no}",
+                        "content": "{default_content}（审批人：{approver}）",
+                    }},
                 }),
             ])
             await session.commit()
@@ -439,20 +444,24 @@ class TestTemplate:
                     (await session.execute(select(NotificationRecord))).scalars()}
         assert rows["email"].title == "【审批通过】TK1"
         assert rows["email"].content == "示例工单：审批通过（审批人：ops1）"
-        # teams 未配模板：默认文案原样落库
+        # teams 未配模板：使用渠道×事件默认 Card JSON
         assert rows["teams"].title == "工单 TK1 审批通过"
-        assert rows["teams"].content == "示例工单：审批通过"
+        assert json.loads(rows["teams"].content)["text"] == "示例工单：审批通过"
 
     async def test_update_channel_template_too_long(self, client):
-        """模板超长：标题 >200 / 正文 >2000 均 40001。"""
+        """邮件事件模板超长：标题 >200 / 正文 >2000 均 40001。"""
         headers = await _admin_headers(client)
         resp = await client.put(
             "/api/v1/notify/channels/email",
-            json={"enabled": False, "config": {"title_template": "x" * 201}}, headers=headers)
+            json={"enabled": False, "config": {"templates": {
+                "ticket.approved": {"title": "x" * 201},
+            }}}, headers=headers)
         assert resp.json()["code"] == 40001
         resp = await client.put(
             "/api/v1/notify/channels/email",
-            json={"enabled": False, "config": {"content_template": "x" * 2001}}, headers=headers)
+            json={"enabled": False, "config": {"templates": {
+                "ticket.approved": {"content": "x" * 2001},
+            }}}, headers=headers)
         assert resp.json()["code"] == 40001
 
     async def test_test_channel_renders_sample(self, client, monkeypatch):
@@ -462,9 +471,112 @@ class TestTemplate:
         headers = await _admin_headers(client)
         resp = await client.post(
             "/api/v1/notify/channels/email/test",
-            json={"config": {"title_template": "【{event}】{ticket_no} 由 {approver} 处理"},
+            json={"event": "ticket.approved", "config": {"templates": {
+                "ticket.approved": {"title": "【{event}】{ticket_no} 由 {approver} 处理"},
+            }},
                   "receiver": "you@test.local"},
             headers=headers)
         assert resp.json()["data"]["success"] is True
         message, _config, _secret = fake.calls[0]
         assert message.title == "【审批通过】TK20260001 由 ops1 处理"
+
+    async def test_channels_expose_template_metadata(self, client):
+        """渠道配置响应包含六事件默认模板与变量类型元数据。"""
+        headers = await _admin_headers(client)
+        resp = await client.get("/api/v1/notify/channels", headers=headers)
+        item = next(i for i in resp.json()["data"]["items"] if i["type"] == "teams")
+        assert len(item["template_events"]) == 6
+        assert "ticket.approved" in item["template_defaults"]
+        vars_by_key = {v["key"]: v for v in item["template_variables"]}
+        assert vars_by_key["ref_id"]["type"] == "number"
+        assert vars_by_key["receivers"]["type"] == "array"
+
+    async def test_emit_renders_json_template_with_native_values(self, db_factory, fake_redis, seed):
+        """Webhook JSON 模板按事件渲染，数字和用户名数组保持原生 JSON 类型。"""
+        async with db_factory() as session:
+            session.add_all([
+                NotifyChannelEvent(event="ticket.approved", channel_type="webhook"),
+                NotifyChannel(type="webhook", enabled=True, config={"templates": {
+                    "ticket.approved": {"body": "{\"ref_id\": {ref_id}, \"receivers\": {receivers}, \"text\": \"{ticket_title}\"}"},
+                }}),
+            ])
+            await session.commit()
+        async with db_factory() as session:
+            await notify_service.emit(
+                session, NotifyEvent.TICKET_APPROVED, title="默认标题", content="默认正文",
+                receiver="admin,ops1", ref_id=7,
+                variables={"ticket_title": "带\"引号\"的工单"},
+            )
+            await session.commit()
+            record = (await session.execute(select(NotificationRecord))).scalar_one()
+        payload = json.loads(record.content)
+        assert payload == {"ref_id": 7, "receivers": ["admin", "ops1"], "text": "带\"引号\"的工单"}
+
+    async def test_update_rejects_unknown_raw_json_variable(self, client):
+        """未知变量允许位于字符串中，但不能作为无法推断类型的原生 JSON 值。"""
+        headers = await _admin_headers(client)
+        ok_resp = await client.put(
+            "/api/v1/notify/channels/webhook",
+            json={"enabled": False, "config": {"templates": {
+                "ticket.approved": {"body": "{\"text\": \"{future_var}\"}"},
+            }}}, headers=headers)
+        assert ok_resp.json()["code"] == 0
+        bad_resp = await client.put(
+            "/api/v1/notify/channels/webhook",
+            json={"enabled": False, "config": {"templates": {
+                "ticket.approved": {"body": "{\"data\": {future_var}}"},
+            }}}, headers=headers)
+        assert bad_resp.json()["code"] == 40001
+        key_resp = await client.put(
+            "/api/v1/notify/channels/webhook",
+            json={"enabled": False, "config": {"templates": {
+                "ticket.approved": {"body": "{\"{future_var}\": 1}"},
+            }}}, headers=headers)
+        assert key_resp.json()["code"] == 40001
+
+    async def test_update_rejects_invalid_json_and_oversize_json_template(self, client):
+        """Webhook/Teams JSON 模板必须可解析且不超过 10000 字。"""
+        headers = await _admin_headers(client)
+        invalid = await client.put(
+            "/api/v1/notify/channels/teams",
+            json={"enabled": False, "config": {"templates": {
+                "ticket.approved": {"card": "{not-json"},
+            }}}, headers=headers)
+        assert invalid.json()["code"] == 40001
+        oversize = await client.put(
+            "/api/v1/notify/channels/teams",
+            json={"enabled": False, "config": {"templates": {
+                "ticket.approved": {"card": "{\"text\": \"" + "x" * 10000 + "\"}"},
+            }}}, headers=headers)
+        assert oversize.json()["code"] == 40001
+
+    async def test_webhook_and_teams_send_rendered_json(self, monkeypatch):
+        """渠道发送器透传 content 中的完整 JSON，不再自动组装固定载荷。"""
+        calls = []
+
+        class Response:
+            status_code = 200
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                return None
+
+            async def post(self, url, **kwargs):
+                calls.append((url, kwargs))
+                return Response()
+
+        monkeypatch.setattr("app.notify.webhook.httpx.AsyncClient", lambda **_: Client())
+        monkeypatch.setattr("app.notify.teams.httpx.AsyncClient", lambda **_: Client())
+        await WebhookChannel().send(
+            notify_service.NotifyMessage(event="ticket.approved", title="t", content='{"custom": 1}', receivers=["admin"]),
+            {"url": "https://hook.test"}, None,
+        )
+        await TeamsChannel().send(
+            notify_service.NotifyMessage(event="ticket.approved", title="t", content='{"@type": "MessageCard", "text": "custom"}', receivers=["admin"]),
+            {"url": "https://teams.test"}, None,
+        )
+        assert calls[0][1]["json"] == {"custom": 1}
+        assert calls[1][1]["json"] == {"@type": "MessageCard", "text": "custom"}

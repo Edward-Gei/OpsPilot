@@ -211,9 +211,11 @@
 | PUT | `/notify/events` | `notify:config` | 全量提交映射 |
 | GET | `/notify/records` | `notify:config` | 发送记录分页；event/channel/status/时间 |
 
-> **渠道级消息模板**：`config` 可含可选键 `title_template`（≤200 字）、`content_template`（≤2000 字），超长返回 `40001`。占位符格式 `{变量名}`，留空/未配置则使用系统默认文案，未知或缺失变量原样保留。模板在 `emit` 落库时按渠道即时渲染（发送记录即最终实发内容，改模板只对新通知生效）。`POST /notify/channels/{type}/test` 用示例工单数据渲染当前表单模板后发送，供保存前预览。
+> **渠道×事件消息模板**：`GET /notify/channels` 除渠道配置外返回 `template_events`、`template_defaults`、`template_variables` 元数据。`config.templates` 按事件保存自定义模板：Email 使用 `{title, content}`，Webhook 使用 `{body}`，Teams 使用 `{card}`。未配置事件使用后端提供的渠道×事件默认模板；不兼容旧的全局 `title_template/content_template`。
 >
-> 支持变量：`{event}`(事件中文名) `{default_title}` `{default_content}` `{receiver}` `{time}` `{ref_id}`（emit 基础）；`{ticket_no}` `{ticket_title}` `{job_host_name}`(作业主机名) `{creator}`（工单）；`{node}` `{role}`（待审批）；`{approver}` `{comment}`（通过/驳回）；`{reason}`（中断）；`{detail}`（崩溃恢复）。
+> Email 标题/正文上限分别为 200/2000 字；Webhook/Teams 单事件 JSON 模板上限为 10000 字。保存时校验 JSON 结构和已知变量类型；未知变量允许原样保留，但仅允许出现在 JSON 字符串值中。`{ref_id}` 以 number、`{receivers}` 以原始用户名 array 写入，字符串变量自动 JSON 转义。模板在 `emit` 落库时按渠道×事件渲染；Webhook/Teams 最终 JSON 写入 `notification_record.content`，`title` 保留事件标题。
+>
+> `POST /notify/channels/{type}/test` 增加 `event` 参数，使用当前未保存模板（未配置则使用默认模板）和示例数据渲染后发送；渲染或最终 JSON 解析失败返回 `success=false`。支持变量：`{event}`、`{default_title}`、`{default_content}`、`{receiver}`、`{receivers}`、`{time}`、`{ref_id}`、`{ticket_no}`、`{ticket_title}`、`{job_host_name}`、`{creator}`、`{node}`、`{role}`、`{approver}`、`{comment}`、`{reason}`、`{detail}`。
 
 ### 10.1 站内通知（`/notifications`，NOTIFY-06）
 

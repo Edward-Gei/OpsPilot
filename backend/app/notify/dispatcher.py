@@ -107,6 +107,8 @@ async def dispatch_record(session: AsyncSession, record: NotificationRecord) -> 
             record.status = "failed"
             record.error = "收件人均未配置邮箱"
             return
+    else:
+        receivers = [item.strip() for item in (record.receiver or "").split(",") if item.strip()]
     # 解密敏感配置（SMTP 密码 / 签名密钥）；解密失败按可重试错误处理
     try:
         secret = decrypt_text(channel_row.secret_enc) if channel_row.secret_enc else None

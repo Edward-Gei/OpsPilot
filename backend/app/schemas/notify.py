@@ -11,10 +11,11 @@ class ChannelUpdateRequest(BaseModel):
 
 
 class ChannelTestRequest(BaseModel):
-    """渠道测试：传当前表单值（保存前预测）；Email 渠道 receiver 直接给邮箱地址。"""
+    """渠道测试：传当前事件和未保存配置；Email 渠道 receiver 直接给邮箱地址。"""
 
     config: dict = Field(default_factory=dict)
     secret: str | None = None
+    event: str = "ticket.approved"
     receiver: str | None = Field(None, max_length=255)
 
 

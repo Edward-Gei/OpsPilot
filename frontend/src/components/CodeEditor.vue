@@ -7,19 +7,27 @@ import { Compartment, EditorState } from '@codemirror/state'
 import { StreamLanguage } from '@codemirror/language'
 import { shell } from '@codemirror/legacy-modes/mode/shell'
 import { yaml } from '@codemirror/lang-yaml'
+import { json as jsonParser } from '@codemirror/legacy-modes/mode/javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { useThemeStore } from '@/stores/theme'
 
 const props = withDefaults(
   defineProps<{
     modelValue: string
-    lang?: 'shell' | 'yaml'
+    lang?: 'shell' | 'yaml' | 'json'
     readonly?: boolean
     height?: string
   }>(),
   { lang: 'shell', readonly: false, height: '320px' },
 )
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
+const insertText = (text: string) => {
+  if (!view) return
+  const selection = view.state.selection.main
+  view.dispatch({ changes: { from: selection.from, to: selection.to, insert: text }, selection: { anchor: selection.from + text.length } })
+  view.focus()
+}
+defineExpose({ insertText })
 
 const themeStore = useThemeStore()
 const holder = ref<HTMLDivElement>()
@@ -31,8 +39,10 @@ const themeComp = new Compartment()
 const readonlyComp = new Compartment()
 
 /** 语言扩展：playbook 用 yaml，shell/adhoc 用 shell 流式高亮 */
-function langExt(lang: 'shell' | 'yaml') {
-  return lang === 'yaml' ? yaml() : StreamLanguage.define(shell)
+function langExt(lang: 'shell' | 'yaml' | 'json') {
+  if (lang === 'yaml') return yaml()
+  if (lang === 'json') return StreamLanguage.define(jsonParser)
+  return StreamLanguage.define(shell)
 }
 
 /** 主题扩展：暗色用 oneDark，浅色用默认亮色并统一基础样式 */

@@ -51,6 +51,7 @@ async def test_channel(
     """按当前表单值同步发送测试消息；失败不抛异常，前端按 success 展示。"""
     success, message = await notify_service.test_channel(
         session, channel_type, config=req.config, secret=req.secret, receiver=req.receiver,
+        event=req.event,
     )
     return ok({"success": success, "message": message})
 

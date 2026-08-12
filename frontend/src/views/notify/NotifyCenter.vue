@@ -55,13 +55,16 @@ const channelForms = reactive<Record<string, { enabled: boolean; config: Record<
     enabled: false,
     config: {
       host: '', port: 465, username: '', from_addr: '', use_tls: true, starttls: false,
-      title_template: '', content_template: '',
+      templates: {},
     },
     secret: '',
   },
-  webhook: { enabled: false, config: { url: '', title_template: '', content_template: '' }, secret: '' },
-  teams: { enabled: false, config: { url: '', title_template: '', content_template: '' }, secret: '' },
+  webhook: { enabled: false, config: { url: '', templates: {} }, secret: '' },
+  teams: { enabled: false, config: { url: '', templates: {} }, secret: '' },
 })
+const channelMetadata = reactive<Record<string, { events: Array<{ key: string; label: string }>; defaults: Record<string, Record<string, string>>; variables: Array<{ key: string; label: string; type: string; group: string; events: string[] }> }>>({})
+const activeTemplateEvent = reactive<Record<string, string>>({ email: '', webhook: '', teams: '' })
+const channelSaveVersion = reactive<Record<string, number>>({ email: 0, webhook: 0, teams: 0 })
 /** 预留渠道列表（不可启用，仅展示占位） */
 const reservedChannels = ref<string[]>([])
 
@@ -74,6 +77,12 @@ async function loadChannels() {
     if (!form) continue
     form.enabled = item.enabled
     Object.assign(form.config, item.config || {})
+    channelMetadata[item.type] = {
+      events: item.template_events,
+      defaults: item.template_defaults,
+      variables: item.template_variables,
+    }
+    activeTemplateEvent[item.type] = item.template_events?.[0]?.key || ''
     form.secret = item.secret ?? ''
   }
 }
@@ -101,6 +110,7 @@ async function onSaveChannel(type: string) {
       secret: form.secret,
     })
     message.success('已保存，即时生效')
+    channelSaveVersion[type] = (channelSaveVersion[type] || 0) + 1
   } catch {
     /* 错误提示由拦截器统一弹出 */
   } finally {
@@ -130,6 +140,7 @@ async function onTestChannel(type: string) {
     testResults[type] = await notifyApi.testChannel(type, {
       config: { ...form.config },
       secret: form.secret,
+      event: activeTemplateEvent[type] || channelMetadata[type]?.events?.[0]?.key,
       receiver: type === 'email' ? testReceiver.value : undefined,
     })
   } catch {
@@ -324,7 +335,15 @@ onMounted(async () => {
                     <a-input v-model:value="testReceiver" placeholder="you@corp.com（仅测试用，不保存）" />
                   </a-form-item>
                 </div>
-                <ChannelTemplateFields :config="channelForms.email.config" />
+                <ChannelTemplateFields
+                  :config="channelForms.email.config"
+                  channel-type="email"
+                  :events="channelMetadata.email?.events || []"
+                  :defaults="channelMetadata.email?.defaults || {}"
+                  :variables="channelMetadata.email?.variables || []"
+                  :save-version="channelSaveVersion.email"
+                  @event-change="activeTemplateEvent.email = $event"
+                />
                 <a-alert
                   v-if="testResults.email"
                   :type="testResults.email.success ? 'success' : 'error'"
@@ -366,7 +385,15 @@ onMounted(async () => {
                     />
                   </a-form-item>
                 </div>
-                <ChannelTemplateFields :config="channelForms.webhook.config" />
+                <ChannelTemplateFields
+                  :config="channelForms.webhook.config"
+                  channel-type="webhook"
+                  :events="channelMetadata.webhook?.events || []"
+                  :defaults="channelMetadata.webhook?.defaults || {}"
+                  :variables="channelMetadata.webhook?.variables || []"
+                  :save-version="channelSaveVersion.webhook"
+                  @event-change="activeTemplateEvent.webhook = $event"
+                />
                 <a-alert
                   v-if="testResults.webhook"
                   :type="testResults.webhook.success ? 'success' : 'error'"
@@ -405,7 +432,15 @@ onMounted(async () => {
                     />
                   </a-form-item>
                 </div>
-                <ChannelTemplateFields :config="channelForms.teams.config" />
+                <ChannelTemplateFields
+                  :config="channelForms.teams.config"
+                  channel-type="teams"
+                  :events="channelMetadata.teams?.events || []"
+                  :defaults="channelMetadata.teams?.defaults || {}"
+                  :variables="channelMetadata.teams?.variables || []"
+                  :save-version="channelSaveVersion.teams"
+                  @event-change="activeTemplateEvent.teams = $event"
+                />
                 <a-alert
                   v-if="testResults.teams"
                   :type="testResults.teams.success ? 'success' : 'error'"
