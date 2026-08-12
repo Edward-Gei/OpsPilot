@@ -6,6 +6,7 @@ import { message } from 'ant-design-vue'
 import {
   ApiOutlined,
   BellOutlined,
+  DownOutlined,
   MailOutlined,
   SendOutlined,
   WindowsOutlined,
@@ -65,6 +66,10 @@ const channelForms = reactive<Record<string, { enabled: boolean; config: Record<
 const channelMetadata = reactive<Record<string, { events: Array<{ key: string; label: string }>; defaults: Record<string, Record<string, string>>; variables: Array<{ key: string; label: string; type: string; group: string; events: string[] }> }>>({})
 const activeTemplateEvent = reactive<Record<string, string>>({ email: '', webhook: '', teams: '' })
 const channelSaveVersion = reactive<Record<string, number>>({ email: 0, webhook: 0, teams: 0 })
+const collapsedChannels = reactive<Record<string, boolean>>({ email: false, webhook: false, teams: false, more: false })
+function toggleChannel(type: string) {
+  collapsedChannels[type] = !collapsedChannels[type]
+}
 /** 预留渠道列表（不可启用，仅展示占位） */
 const reservedChannels = ref<string[]>([])
 
@@ -275,24 +280,26 @@ onMounted(async () => {
         <a-tab-pane key="channels" tab="渠道配置">
           <div class="blocks">
             <!-- Email -->
-            <a-card class="block">
-              <div class="block-head">
+            <a-card class="block collapsible-block">
+              <div class="block-head" :class="{ 'is-collapsed': collapsedChannels.email }" @click="toggleChannel('email')">
                 <div class="op-icon-grad" style="background: var(--grad-blue)"><MailOutlined /></div>
                 <div class="block-title">
                   <b>邮件 Email</b>
                   <span>SMTP 发送；收件人取工单相关用户的邮箱（未配置邮箱的用户跳过）</span>
                 </div>
-                <a-switch v-model:checked="channelForms.email.enabled" class="head-switch" />
+                <a-switch v-model:checked="channelForms.email.enabled" class="head-switch" @click.stop />
                 <a-button
                   :loading="testingChannel === 'email'"
-                  @click="onTestChannel('email')"
+                  @click.stop="onTestChannel('email')"
                 >测试发送</a-button>
                 <a-button
                   type="primary"
                   :loading="savingChannel === 'email'"
-                  @click="onSaveChannel('email')"
+                  @click.stop="onSaveChannel('email')"
                 >保存</a-button>
+                <DownOutlined class="collapse-icon" />
               </div>
+              <div v-show="!collapsedChannels.email" class="block-body">
               <template v-if="channelForms.email.enabled">
                 <div class="grid2">
                   <a-form-item label="SMTP 服务器" required>
@@ -352,27 +359,30 @@ onMounted(async () => {
                 />
               </template>
               <div v-else class="disabled-tip">已停用：邮件事件将记为发送失败（渠道未启用）</div>
+              </div>
             </a-card>
 
             <!-- Webhook -->
-            <a-card class="block">
-              <div class="block-head">
+            <a-card class="block collapsible-block">
+              <div class="block-head" :class="{ 'is-collapsed': collapsedChannels.webhook }" @click="toggleChannel('webhook')">
                 <div class="op-icon-grad" style="background: var(--grad-purple)"><ApiOutlined /></div>
                 <div class="block-title">
                   <b>Webhook</b>
                   <span>JSON POST 到全局地址；配置签名密钥后附 HMAC-SHA256 签名头（X-Ops-Signature）</span>
                 </div>
-                <a-switch v-model:checked="channelForms.webhook.enabled" class="head-switch" />
+                <a-switch v-model:checked="channelForms.webhook.enabled" class="head-switch" @click.stop />
                 <a-button
                   :loading="testingChannel === 'webhook'"
-                  @click="onTestChannel('webhook')"
+                  @click.stop="onTestChannel('webhook')"
                 >测试发送</a-button>
                 <a-button
                   type="primary"
                   :loading="savingChannel === 'webhook'"
-                  @click="onSaveChannel('webhook')"
+                  @click.stop="onSaveChannel('webhook')"
                 >保存</a-button>
+                <DownOutlined class="collapse-icon" />
               </div>
+              <div v-show="!collapsedChannels.webhook" class="block-body">
               <template v-if="channelForms.webhook.enabled">
                 <div class="grid2">
                   <a-form-item label="Webhook URL" required>
@@ -402,27 +412,30 @@ onMounted(async () => {
                 />
               </template>
               <div v-else class="disabled-tip">已停用：Webhook 事件将记为发送失败（渠道未启用）</div>
+              </div>
             </a-card>
 
             <!-- Teams -->
-            <a-card class="block">
-              <div class="block-head">
+            <a-card class="block collapsible-block">
+              <div class="block-head" :class="{ 'is-collapsed': collapsedChannels.teams }" @click="toggleChannel('teams')">
                 <div class="op-icon-grad" style="background: var(--grad-green)"><WindowsOutlined /></div>
                 <div class="block-title">
                   <b>Microsoft Teams</b>
                   <span>MessageCard 卡片推送到频道 Incoming Webhook</span>
                 </div>
-                <a-switch v-model:checked="channelForms.teams.enabled" class="head-switch" />
+                <a-switch v-model:checked="channelForms.teams.enabled" class="head-switch" @click.stop />
                 <a-button
                   :loading="testingChannel === 'teams'"
-                  @click="onTestChannel('teams')"
+                  @click.stop="onTestChannel('teams')"
                 >测试发送</a-button>
                 <a-button
                   type="primary"
                   :loading="savingChannel === 'teams'"
-                  @click="onSaveChannel('teams')"
+                  @click.stop="onSaveChannel('teams')"
                 >保存</a-button>
+                <DownOutlined class="collapse-icon" />
               </div>
+              <div v-show="!collapsedChannels.teams" class="block-body">
               <template v-if="channelForms.teams.enabled">
                 <div class="grid2">
                   <a-form-item label="Incoming Webhook URL" required>
@@ -449,20 +462,24 @@ onMounted(async () => {
                 />
               </template>
               <div v-else class="disabled-tip">已停用：Teams 事件将记为发送失败（渠道未启用）</div>
+              </div>
             </a-card>
 
             <!-- 预留渠道占位 -->
-            <a-card class="block">
-              <div class="block-head">
+            <a-card class="block collapsible-block">
+              <div class="block-head" :class="{ 'is-collapsed': collapsedChannels.more }" @click="toggleChannel('more')">
                 <div class="op-icon-grad" style="background: var(--grad-orange)"><SendOutlined /></div>
                 <div class="block-title">
                   <b>更多渠道</b>
                   <span>接口已预留，后续版本开放配置</span>
                 </div>
+                <DownOutlined class="collapse-icon" />
               </div>
+              <div v-show="!collapsedChannels.more" class="block-body">
               <a-space :size="8" wrap>
                 <a-tag v-for="c in reservedChannels" :key="c">{{ channelText[c] || c }}（预留）</a-tag>
               </a-space>
+              </div>
             </a-card>
           </div>
         </a-tab-pane>
@@ -599,7 +616,7 @@ onMounted(async () => {
 <style scoped>
 .blocks {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 16px;
   width: 100%;
 }
@@ -612,6 +629,23 @@ onMounted(async () => {
   align-items: center;
   gap: 12px;
   margin-bottom: 20px;
+}
+.collapsible-block .block-head {
+  cursor: pointer;
+  user-select: none;
+}
+.collapsible-block .block-head.is-collapsed {
+  margin-bottom: 0;
+}
+.collapse-icon {
+  color: var(--text-3);
+  transition: transform .2s ease;
+}
+.block-head.is-collapsed .collapse-icon {
+  transform: rotate(-90deg);
+}
+.block-body {
+  min-width: 0;
 }
 .block-title {
   flex: 1;
@@ -709,10 +743,5 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--text-3);
   margin-left: 4px;
-}
-@media (max-width: 960px) {
-  .blocks {
-    grid-template-columns: 1fr;
-  }
 }
 </style>

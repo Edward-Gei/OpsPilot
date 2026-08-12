@@ -8,6 +8,7 @@ import {
   ApiOutlined,
   ClockCircleOutlined,
   CloudServerOutlined,
+  DownOutlined,
   KeyOutlined,
   LockOutlined,
   SafetyCertificateOutlined,
@@ -17,6 +18,10 @@ import * as sysApi from '@/api/system'
 import JobHostPanel from './JobHostPanel.vue'
 
 const loading = ref(false)
+const collapsedSettings = reactive<Record<string, boolean>>({ security: false, ldap: false, oidc: false, hosts: false })
+function toggleSetting(type: string) {
+  collapsedSettings[type] = !collapsedSettings[type]
+}
 
 // ---------- 各配置块的编辑状态 ----------
 const mfaPolicy = ref<'off' | 'optional' | 'required'>('off')
@@ -165,18 +170,20 @@ onMounted(loadConfigs)
 
       <div class="settings">
       <!-- 安全策略 -->
-      <a-card class="block block--wide">
-        <div class="block-head">
+      <a-card class="block block--wide collapsible-block">
+        <div class="block-head" :class="{ 'is-collapsed': collapsedSettings.security }" @click="toggleSetting('security')">
           <div class="op-icon-grad" style="background: var(--grad-blue)"><SafetyCertificateOutlined /></div>
           <div class="block-title">
             <b>安全策略</b>
             <span>MFA 多因子认证、登录令牌有效期与密码策略</span>
           </div>
-          <a-button type="primary" :loading="saving === 'security'" @click="onSaveSecurity">
+          <a-button type="primary" :loading="saving === 'security'" @click.stop="onSaveSecurity">
             保存
           </a-button>
+          <DownOutlined class="collapse-icon" />
         </div>
 
+        <div v-show="!collapsedSettings.security" class="block-body">
         <div class="field">
           <div class="field-label"><LockOutlined /> MFA 策略</div>
           <a-radio-group v-model:value="mfaPolicy">
@@ -239,20 +246,23 @@ onMounted(loadConfigs)
             </span>
           </a-space>
         </div>
+        </div>
       </a-card>
 
       <!-- LDAP 认证源 -->
-      <a-card class="block">
-        <div class="block-head">
+      <a-card class="block collapsible-block">
+        <div class="block-head" :class="{ 'is-collapsed': collapsedSettings.ldap }" @click="toggleSetting('ldap')">
           <div class="op-icon-grad" style="background: var(--grad-purple)"><ApiOutlined /></div>
           <div class="block-title">
             <b>LDAP 认证</b>
             <span>企业目录账号密码登录，首次登录自动创建用户</span>
           </div>
-          <a-switch v-model:checked="ldapEnabled" class="head-switch" />
-          <a-button type="primary" :loading="saving === 'ldap'" @click="onSaveLdap">保存</a-button>
+          <a-switch v-model:checked="ldapEnabled" class="head-switch" @click.stop />
+          <a-button type="primary" :loading="saving === 'ldap'" @click.stop="onSaveLdap">保存</a-button>
+          <DownOutlined class="collapse-icon" />
         </div>
 
+        <div v-show="!collapsedSettings.ldap" class="block-body">
         <template v-if="ldapEnabled">
           <div class="grid2">
             <a-form-item label="服务器地址" required>
@@ -285,20 +295,23 @@ onMounted(loadConfigs)
           </div>
         </template>
         <div v-else class="disabled-tip">已停用：登录时不再尝试 LDAP 认证源</div>
+        </div>
       </a-card>
 
       <!-- OIDC 认证源 -->
-      <a-card class="block">
-        <div class="block-head">
+      <a-card class="block collapsible-block">
+        <div class="block-head" :class="{ 'is-collapsed': collapsedSettings.oidc }" @click="toggleSetting('oidc')">
           <div class="op-icon-grad" style="background: var(--grad-orange)"><KeyOutlined /></div>
           <div class="block-title">
             <b>OIDC / OAuth2 认证</b>
             <span>授权码模式单点登录，登录页显示 SSO 入口</span>
           </div>
-          <a-switch v-model:checked="oidcEnabled" class="head-switch" />
-          <a-button type="primary" :loading="saving === 'oidc'" @click="onSaveOidc">保存</a-button>
+          <a-switch v-model:checked="oidcEnabled" class="head-switch" @click.stop />
+          <a-button type="primary" :loading="saving === 'oidc'" @click.stop="onSaveOidc">保存</a-button>
+          <DownOutlined class="collapse-icon" />
         </div>
 
+        <div v-show="!collapsedSettings.oidc" class="block-body">
         <template v-if="oidcEnabled">
           <div class="grid2">
             <a-form-item label="授权端点 Authorize Endpoint" required>
@@ -343,18 +356,22 @@ onMounted(loadConfigs)
           </div>
         </template>
         <div v-else class="disabled-tip">已停用：登录页不显示 SSO 入口</div>
+        </div>
       </a-card>
 
       <!-- 作业主机配置：脚本统一在作业主机上执行，增删改/连通性测试内嵌本页 -->
-      <a-card class="block block--wide">
-        <div class="block-head">
+      <a-card class="block block--wide collapsible-block">
+        <div class="block-head" :class="{ 'is-collapsed': collapsedSettings.hosts }" @click="toggleSetting('hosts')">
           <div class="op-icon-grad" style="background: var(--grad-green)"><CloudServerOutlined /></div>
           <div class="block-title">
             <b>作业主机</b>
             <span>模板脚本统一在作业主机上执行（登录密文加密存储，任何接口不回显）</span>
           </div>
+          <DownOutlined class="collapse-icon" />
         </div>
+        <div v-show="!collapsedSettings.hosts" class="block-body">
         <JobHostPanel />
+        </div>
       </a-card>
       </div>
     </div>
@@ -364,7 +381,7 @@ onMounted(loadConfigs)
 <style scoped>
 .settings {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 16px;
   width: 100%;
   align-items: start;
@@ -373,8 +390,25 @@ onMounted(loadConfigs)
   border-radius: 14px;
   min-width: 0;
 }
+.collapsible-block .block-head {
+  cursor: pointer;
+  user-select: none;
+}
+.collapsible-block .block-head.is-collapsed {
+  margin-bottom: 0;
+}
+.collapse-icon {
+  color: var(--text-3);
+  transition: transform .2s ease;
+}
+.block-head.is-collapsed .collapse-icon {
+  transform: rotate(-90deg);
+}
+.block-body {
+  min-width: 0;
+}
 .block--wide {
-  grid-column: 1 / -1;
+  grid-column: auto;
 }
 .block-head {
   display: flex;
@@ -441,9 +475,6 @@ onMounted(loadConfigs)
 @media (max-width: 960px) {
   .settings {
     grid-template-columns: 1fr;
-  }
-  .block--wide {
-    grid-column: auto;
   }
 }
 </style>
