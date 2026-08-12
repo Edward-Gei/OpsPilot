@@ -213,7 +213,7 @@
 
 > **渠道×事件消息模板**：`GET /notify/channels` 除渠道配置外返回 `template_events`、`template_defaults`、`template_variables` 元数据。`config.templates` 按事件保存自定义模板：Email 使用 `{title, content}`，Webhook 使用 `{body}`，Teams 使用 `{card}`。未配置事件使用后端提供的渠道×事件默认模板；不兼容旧的全局 `title_template/content_template`。
 >
-> Email 标题/正文上限分别为 200/2000 字；Webhook/Teams 单事件 JSON 模板上限为 10000 字。保存时校验 JSON 结构和已知变量类型；未知变量允许原样保留，但仅允许出现在 JSON 字符串值中。`{ref_id}` 以 number、`{receivers}` 以原始用户名 array 写入，字符串变量自动 JSON 转义。模板在 `emit` 落库时按渠道×事件渲染；Webhook/Teams 最终 JSON 写入 `notification_record.content`，`title` 保留事件标题。
+> Email 标题/正文上限分别为 200/2000 字；Webhook/Teams 单事件 JSON 模板上限为 10000 字。保存时校验 JSON 结构和已知变量类型；已知数字、数组变量既可作为 JSON 原生值使用，也可放在字符串中（数组在字符串中按逗号拼接）；未知变量允许原样保留，但仅允许出现在 JSON 字符串值中。`{ref_id}` 作为原生值时为 number、`{receivers}` 作为原生值时为原始用户名 array，字符串变量自动 JSON 转义。模板在 `emit` 落库时按渠道×事件渲染；Webhook/Teams 最终 JSON 写入 `notification_record.content`，`title` 保留事件标题。
 >
 > `POST /notify/channels/{type}/test` 增加 `event` 参数，使用当前未保存模板（未配置则使用默认模板）和示例数据渲染后发送；渲染或最终 JSON 解析失败返回 `success=false`。支持变量：`{event}`、`{default_title}`、`{default_content}`、`{receiver}`、`{receivers}`、`{time}`、`{ref_id}`、`{ticket_no}`、`{ticket_title}`、`{job_host_name}`、`{creator}`、`{node}`、`{role}`、`{approver}`、`{comment}`、`{reason}`、`{detail}`。
 

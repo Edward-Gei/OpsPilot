@@ -512,6 +512,22 @@ class TestTemplate:
         payload = json.loads(record.content)
         assert payload == {"ref_id": 7, "receivers": ["admin", "ops1"], "text": "带\"引号\"的工单"}
 
+    def test_json_template_allows_typed_variables_in_string_values(self):
+        rendered = notify_service.render_json_template(
+            '{"node_text": "第 {node} 步", "receivers_text": "审批人：{receivers}"}',
+            {"node": 2, "receivers": ["alice", "bob"]},
+        )
+        assert json.loads(rendered) == {
+            "node_text": "第 2 步",
+            "receivers_text": "审批人：alice, bob",
+        }
+
+    def test_json_template_keeps_typed_variable_validation_in_string_values(self):
+        with pytest.raises(ValueError, match="变量 \\{node\\} 必须是 number 类型"):
+            notify_service.render_json_template('{"text": "第 {node} 步"}', {"node": "2"})
+        with pytest.raises(ValueError, match="变量 \\{receivers\\} 必须是 array 类型"):
+            notify_service.render_json_template('{"text": "审批人：{receivers}"}', {"receivers": "alice"})
+
     async def test_update_rejects_unknown_raw_json_variable(self, client):
         """未知变量允许位于字符串中，但不能作为无法推断类型的原生 JSON 值。"""
         headers = await _admin_headers(client)

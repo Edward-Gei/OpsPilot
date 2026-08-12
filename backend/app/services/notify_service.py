@@ -224,7 +224,7 @@ def _json_placeholder_value(key: str, variables: dict, *, strict: bool) -> str:
 
 
 def render_json_template(template: str, variables: dict, *, validate: bool = True) -> str:
-    """渲染 JSON 模板并解析校验，保证原生数字/数组变量不被字符串化。"""
+    """渲染 JSON 模板；类型变量可按原生 JSON 值或字符串值使用。"""
     pieces: list[str] = []
     last = 0
     for match in _VAR_PATTERN.finditer(template):
@@ -235,10 +235,21 @@ def render_json_template(template: str, variables: dict, *, validate: bool = Tru
             if _placeholder_is_object_key(template, match.end()):
                 raise ValueError(f"变量 {{{key}}} 不能作为 JSON 对象 key")
             kind = _VARIABLE_TYPES.get(key, "string")
-            if key in _VARIABLE_TYPES and kind != "string":
-                raise ValueError(f"变量 {{{key}}} 必须以 JSON 原生值使用，不能放在字符串中")
             value = variables.get(key)
-            replacement = "{" + key + "}" if key not in _VARIABLE_TYPES else str(value if value is not None else "")
+            if key not in _VARIABLE_TYPES:
+                replacement = "{" + key + "}"
+            elif value is None:
+                replacement = ""
+            elif kind == "array":
+                if not isinstance(value, list):
+                    raise ValueError(f"变量 {{{key}}} 必须是 array 类型")
+                replacement = ", ".join(str(item) for item in value)
+            elif kind == "number":
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    raise ValueError(f"变量 {{{key}}} 必须是 number 类型")
+                replacement = str(value)
+            else:
+                replacement = str(value)
             pieces.append(json.dumps(replacement, ensure_ascii=False)[1:-1] if key in _VARIABLE_TYPES else replacement)
         else:
             pieces.append(_json_placeholder_value(key, variables, strict=True))
