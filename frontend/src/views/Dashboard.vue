@@ -365,11 +365,13 @@ onUnmounted(() => {
               <b>{{ e.ticket_no }} · {{ e.title }}</b>
               <span>{{ e.job_host_name || '—' }} · {{ e.total_steps }} 步骤 · {{ e.creator_name }}</span>
             </div>
-            <span class="exec-time">{{ fmtTime(e.created_at) }}</span>
-            <span class="exec-dur">{{ execDuration(e.started_at, e.finished_at) }}</span>
-            <a-tag :color="execStatusMeta[e.status as keyof typeof execStatusMeta]?.color">
-              {{ execStatusMeta[e.status as keyof typeof execStatusMeta]?.text || e.status }}
-            </a-tag>
+            <div class="exec-meta">
+              <span class="exec-time">{{ fmtTime(e.created_at) }}</span>
+              <span class="exec-dur">{{ execDuration(e.started_at, e.finished_at) }}</span>
+              <a-tag :color="execStatusMeta[e.status as keyof typeof execStatusMeta]?.color">
+                {{ execStatusMeta[e.status as keyof typeof execStatusMeta]?.text || e.status }}
+              </a-tag>
+            </div>
           </div>
         </div>
         <div v-else class="exec-empty">
@@ -649,18 +651,30 @@ onUnmounted(() => {
   color: var(--text-3);
   margin-top: 2px;
 }
+.exec-meta {
+  display: grid;
+  grid-template-columns: minmax(132px, auto) 52px 64px;
+  align-items: center;
+  justify-items: end;
+  gap: 12px;
+  flex-shrink: 0;
+}
 .exec-time {
   font-size: 11px;
   color: var(--text-3);
-  flex-shrink: 0;
+  text-align: right;
+  white-space: nowrap;
 }
 .exec-dur {
   font-size: 11px;
   color: var(--text-2);
-  min-width: 44px;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
+  white-space: nowrap;
+}
+.exec-meta :deep(.ant-tag) {
+  margin-inline-end: 0;
+  text-align: right;
 }
 
 /* ===== 环形图 ===== */
@@ -830,6 +844,7 @@ onUnmounted(() => {
 @media (max-width: 768px) {
   .kpi-row { grid-template-columns: 1fr !important; }
   .exec-time { display: none; }
+  .exec-meta { grid-template-columns: 52px 64px; }
   .quick-grid { grid-template-columns: repeat(2, 1fr); }
 }
 </style>
