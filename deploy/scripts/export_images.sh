@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OpsPilot 镜像离线导出/导入脚本（DoD-6：纯内网环境一键部署的镜像搬运通道）。
+# OpsPilot 镜像离线导出/导入脚本（纯内网部署的镜像搬运通道）。
 # 导出（有外网的构建机）：bash deploy/scripts/export_images.sh export
 #   -> 产物 deploy/offline/opspilot_images.tar.gz（含 5 个镜像）
 # 导入（内网部署机）：bash deploy/scripts/export_images.sh import
@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."   # 定位到 deploy/
 OFFLINE_DIR="offline"
 TARBALL="${OFFLINE_DIR}/opspilot_images.tar.gz"
 
-# 五容器镜像清单：业务镜像（compose 构建产物，命名 <项目>-<服务>）+ 基础镜像（官方）
+# 五个服务镜像清单：三个业务镜像（Compose 构建产物）和两个官方基础镜像。
 IMAGES=(
   "opspilot-api:latest"
   "opspilot-worker:latest"

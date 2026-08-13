@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # OpsPilot 数据备份脚本（在部署机上执行，产物落 deploy/backup/<时间戳>/）。
-# 用法：bash deploy/scripts/backup.sh
-# 备份范围（03-数据库设计 §11 备份策略）：
+# 用法：cd deploy && bash scripts/backup.sh
+# 备份范围：
 #   1. MySQL 全库逻辑备份（mysqldump --single-transaction，不锁表）
-#   2. 执行日志卷 exec-logs（tar 归档，含历史执行的落盘日志）
+#   2. 执行日志卷 exec-logs（tar 归档，包含执行日志）
 # 恢复：
-#   MySQL：docker exec -i opspilot-mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" opspilot' < mysql_opspilot.sql
+#   MySQL：docker exec -i opspilot-mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' < mysql_opspilot.sql
 #   日志卷：docker run --rm -v opspilot_exec-logs:/data -v <备份目录>:/backup alpine \
 #           tar xzf /backup/exec_logs.tar.gz -C /data
 set -euo pipefail

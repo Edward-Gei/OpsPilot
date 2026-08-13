@@ -1,54 +1,47 @@
-## 角色与目标
+# OpsPilot 协作指南
 
-你是一个资深的软件工程师和架构师。在协助我进行编程和开发任务时，必须严格遵守以下工作流和代码规范。
+## 项目概览
 
-### 交互与沟通规范 (Interaction)
+OpsPilot 是面向企业内网的自动化运维平台。后端使用 FastAPI、异步 SQLAlchemy、MySQL 8、Redis 7 和 `asyncssh`；前端使用 Vue 3、TypeScript、Ant Design Vue、Pinia 和 Vite；生产形态是单机 Docker Compose。
 
-- **需求确认优先**：在开始编写任何代码之前，**必须**先用简练的语言复述并总结我的核心需求、技术栈和预期目标。请等待我明确确认（如回复“确认”或“开始”）后，方可进入编码阶段。
-- **主动澄清疑问**：如果在需求分析中发现任何模糊、缺失或存在多种实现路径的地方，**必须**立即向我提问澄清。**严禁**自行假设、脑补或替我做出关键的技术/业务决策。
+业务链路为：CMDB 维护主机/应用资产台账，作业主机绑定 SSH 凭据，工单模板提供提交入口和参数，流程模板提供串行步骤/策略/步骤前审批，工单提交时生成快照，Worker 在作业主机上执行并写入日志，通知和审计记录全生命周期。
 
-### 代码质量与风格规范 (Code Quality)
+## 目录边界
 
-- **高质量与可维护性**：确保代码 100% 可正常运行。遵循 DRY (Don't Repeat Yourself) 原则，消除冗余代码；追求简洁优雅，合理运用设计模式，确保代码具备高可读性、易维护性和可扩展性。
-- **中文注释规范**：**必须**在每个类、接口、关键方法、复杂逻辑块上方添加**清晰的中文注释**。注释需说明“为什么这么做（Why）”以及“核心逻辑是什么（What）”，而不仅仅是翻译代码。
+- `backend/app/main.py`：API 进程入口；`backend/app/worker_main.py`：执行 Worker 入口。
+- `backend/app/api/v1/`：REST 路由；`backend/app/models/`：数据库模型；`backend/alembic/versions/`：迁移。
+- `frontend/src/`：Vue 页面、API 封装和状态管理。
+- `deploy/`：Compose、Nginx、初始化 SQL、备份和离线镜像脚本。
+- `docs/`：当前产品、架构、数据、API、任务和模板设计。
 
-### 工程与交付规范 (Engineering & Delivery)
+## 本地验证
 
-- **测试验证闭环**：完成核心编码后，**必须**主动提供配套的单元测试代码（视当前技术栈而定，如 Jest, PyTest, JUnit 等），或提供详细的本地运行/测试验证步骤，确保逻辑闭环。
-- **文档同步更新**：如果任务涉及新增功能、修改 API 或架构调整，**必须**同步生成或更新相关的文档（如 README.md、API 接口文档、注释说明等），保持代码与文档的绝对一致。
+后端在 `backend/` 执行：
 
-### 🔄 标准工作流
-
-每次收到新任务时，请严格按照以下顺序执行：
-[分析并复述需求] ➔ [等待确认/提出疑问] ➔ [编写高质量带注释代码] ➔ [提供测试方案/用例] ➔ [更新相关文档，更新前询问] ➔ [启动服务供我验收] 。
-
-### 构建、测试与开发命令
-
-后端命令在 `backend/` 下执行：
 ```bash
-python -m pytest -q                          # 运行全部后端测试
-python -m pytest tests/test_ticket_api.py -q # 运行工单专项测试
+python -m pytest -q
+python -m pytest tests/test_ticket_api.py -q
 ```
 
-前端命令在 `frontend/` 下执行：
+前端在 `frontend/` 执行：
+
 ```bash
-npm install        # 安装锁定的依赖
-npm run dev        # 启动 Vite 开发服务器
-npm run type-check # 执行 vue-tsc 类型检查
-npm run build      # 构建生产包
+npm install
+npm run dev
+npm run type-check
+npm run build
 ```
 
-集成环境：复制 `deploy/.env.example` 为 `deploy/.env`，设置密钥后，在 `deploy/` 执行 `docker compose up -d --build`。api 容器在 `RUN_MIGRATIONS=1` 时先执行 `alembic upgrade head`，再幂等种子（权限点/内置角色/admin 首登强制改密）；worker 依赖 api 健康后启动。
+Windows PowerShell 若 `npm.ps1` 被执行策略拦截，使用 `npm.cmd` 替代 `npm`。集成部署从 `deploy/` 执行 `docker compose up -d --build`；API 启动时执行迁移和幂等种子，Worker 等待 API 健康后启动。
 
-### 提交与合并请求规范
+## 修改规范
 
-- 使用 Conventional Commits，例如 `fix(notify): 修复重复通知` 或 `feat(ui): 增加执行日志筛选`；提交应保持范围明确。
-- 合并请求需说明行为变化，列出验证命令及结果，注明迁移或配置变更；涉及界面时附截图，并关联对应任务或问题。
-- 凭据、审计、权限、认证相关改动视为安全敏感变更，MR 中显式标注并对照"安全与配置提示"自查。
+- 编码前先复述需求；有歧义时列出解释并询问，不自行决定业务边界。
+- 只修改任务直接涉及的文件，保留无关工作区改动；不要提交 `.env`、凭据、JWT/MFA 密钥或私钥。
+- 认证、凭据、权限、审计和公开 API 属于安全敏感改动，必须补充针对性测试或明确验证步骤。
+- 新增或修改类、接口和关键方法时，用简洁中文注释说明原因与核心逻辑；不为显而易见的代码添加噪声注释。
+- 提交使用 Conventional Commits，例如 `fix(notify): 修复通知重试`、`feat(ui): 增加执行筛选`、`docs: 更新部署说明`。
 
-### 安全与配置提示
+## 文档同步
 
-- 禁止提交 `.env`、账号凭据、JWT 密钥、MFA Secret 或 SSH 私钥。
-- 以 `deploy/.env.example` 为配置模板，生产环境关闭 `DEBUG`。
-- 凭据、审计和权限相关改动应视为安全敏感变更；修改数据模型或公开 API 时同步更新迁移和文档。
-- 加密方案以架构 §3.3 为准：密码 bcrypt（cost 12）；凭据/MFA secret 用 AES-256-GCM（`SECRET_ENCRYPT_KEY`）；JWT HS256 双密钥轮换。
+修改 API、数据模型、配置变量、权限或部署行为时，同步更新 `docs/`、根 `README.md` 或 `deploy/DEPLOYMENT.md`。文档只描述当前实现的功能、接口和数据模型。
