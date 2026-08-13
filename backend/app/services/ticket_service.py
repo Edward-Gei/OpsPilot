@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+from jinja2 import Environment, meta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -80,10 +81,20 @@ def _validate_params(values: dict, schema: list[dict]) -> dict:
             value = values.get(name, value)
         if definition.get("required") and (value is None or value == ""):
             raise Errors.param(f"必填参数 {name} 未填写")
-        if definition.get("input_type") == "enum" and value not in definition.get("options", []):
+        if definition.get("input_type") == "enum" and definition.get("source") != "generated" and value not in definition.get("options", []):
             raise Errors.param(f"参数 {name} 不是有效枚举值")
         result[name] = "" if value is None else value
     return result
+
+
+def _script_variables(steps) -> set[str]:
+    """提取步骤脚本中的 Jinja 变量，提交前阻止未定义参数进入快照。"""
+    env = Environment()
+    variables: set[str] = set()
+    for step in steps:
+        ast = env.parse(step.content)
+        variables.update(meta.find_undeclared_variables(ast))
+    return variables
 
 
 async def get_template_form(session: AsyncSession, template_id: int, *, user_id: int) -> dict:
@@ -96,7 +107,7 @@ async def get_template_form(session: AsyncSession, template_id: int, *, user_id:
         "template": {"id": tpl.id, "name": tpl.name, "type": tpl.type, "description": tpl.description,
                      "process_template_id": process.id, "process_name": process.name,
                      "allow_withdraw": tpl.allow_withdraw},
-        "params": [p for p in (process.params_schema or []) if p.get("source") != "fixed"],
+        "params": [p for p in (tpl.params_schema or []) if p.get("source") != "fixed"],
         "job_host": {"id": host.id, "name": host.name, "ip": host.ip, "ssh_port": host.ssh_port,
                      "workdir": host.workdir} if host else None,
         "steps": [{"step_order": s.step_order, "name": s.name, "script_type": s.script_type,
@@ -104,7 +115,7 @@ async def get_template_form(session: AsyncSession, template_id: int, *, user_id:
                    "approval_role_name": role_names.get(s.approval_role_id) if s.approval_role_id else None}
                   for s in steps],
         "exec_strategy": process.exec_strategy or {},
-        "generator": {"enabled": bool(process.generator_script), "timeout": process.generator_timeout},
+        "generator": {"enabled": bool(tpl.generator_script), "timeout": tpl.generator_timeout},
     }
 
 
@@ -217,23 +228,30 @@ async def create_ticket(session: AsyncSession, *, creator: User, template_id: in
     steps = await template_service.get_process_steps(session, process.id)
     if not steps:
         raise Errors.conflict("流程模板没有步骤，不能提交")
+    schema = tpl.params_schema or []
+    definitions = {item["name"]: item for item in schema}
+    missing = _script_variables(steps) - set(definitions)
+    if missing:
+        raise Errors.param(f"流程步骤引用了未定义参数: {sorted(missing)}")
     prepared_values = {}
     if prepare_id:
         prepared_values = await parameter_prepare_service.consume_parameters(
             session, token=prepare_id, template_id=template_id, params=params or {}
         )
-    definitions = {item["name"]: item for item in process.params_schema or []}
     prepared_values = {
         name: value for name, value in prepared_values.items()
         if definitions.get(name, {}).get("source") != "fixed"
     }
-    values = _validate_params({**(params or {}), **prepared_values}, process.params_schema or [])
+    values = _validate_params({**(params or {}), **prepared_values}, schema)
     submitted_values = {
         name: value for name, value in values.items()
-        if next((item for item in (process.params_schema or []) if item["name"] == name), {}).get("source") != "fixed"
+        if next((item for item in schema if item["name"] == name), {}).get("source") != "fixed"
     }
     host = await session.get(JobHost, tpl.job_host_id)
     flow = await template_service.process_snapshot(session, process.id)
+    flow["params_schema"] = schema
+    flow["generator"] = {"script": tpl.generator_script, "timeout": tpl.generator_timeout}
+    flow["params"] = values
     ticket = Ticket(
         ticket_no=await _next_ticket_no(session), template_id=tpl.id, title=tpl.name, type=tpl.type,
         params=submitted_values, job_host_id=tpl.job_host_id,

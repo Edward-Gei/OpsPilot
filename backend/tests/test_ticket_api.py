@@ -87,7 +87,6 @@ async def _create_template(client, env, *, approval_roles: list[int] | None = No
     process_payload = {
         "name": override.pop("process_name", f"{template_name} 流程"),
         "description": "滚动重启流程",
-        "params_schema": _merge_params(raw_steps),
         "exec_strategy": {"timeout": 600, "fail_fast": True, "kill_on_stop": False},
         "steps": [
             {"name": step["name"], "script_type": step["script_type"],
@@ -105,6 +104,7 @@ async def _create_template(client, env, *, approval_roles: list[int] | None = No
         "description": override.pop("description", "滚动重启"),
         "job_host_id": env["job_host_id"],
         "process_template_id": process_body["data"]["id"],
+        "params_schema": _merge_params(raw_steps),
         "notify_rules": override.pop("notify_rules", []),
         "visible_role_ids": override.pop("visible_role_ids", []),
         "allow_withdraw": override.pop("allow_withdraw", True),
@@ -228,7 +228,6 @@ class TestSubmit:
         process_id = template_detail["process_template_id"]
         resp = await client.put(f"/api/v1/process-templates/{process_id}", headers=env["ops_h"], json={
             "name": "重启 Nginx 流程", "description": "滚动重启流程",
-            "params_schema": _merge_params([_step(env, content="echo changed")]),
             "exec_strategy": {"timeout": 600, "fail_fast": True, "kill_on_stop": False},
             "steps": [{"name": "重启服务", "script_type": "shell", "content": "echo changed",
                        "timeout": 300, "approval_role_id": seed["roles"]["approver"]}],

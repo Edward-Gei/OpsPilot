@@ -76,8 +76,6 @@ async def _create_template(client, env, **override) -> int:
     process = await client.post("/api/v1/process-templates", json={
         "name": f"{template_name} 流程",
         "description": "引擎调度测试流程",
-        "params_schema": [{"name": "svc", "label": "服务名", "source": "user",
-                           "input_type": "text", "default": "nginx", "required": True}],
         "exec_strategy": {"timeout": 600, "fail_fast": True, "kill_on_stop": False},
         "steps": [{"name": step["name"], "script_type": step["script_type"],
                    "content": step["content"], "timeout": step["timeout"],
@@ -91,6 +89,8 @@ async def _create_template(client, env, **override) -> int:
         "description": override.pop("description", "引擎调度测试"),
         "job_host_id": env["job_host_id"],
         "process_template_id": process_body["data"]["id"],
+        "params_schema": [{"name": "svc", "label": "服务名", "source": "user",
+                           "input_type": "text", "default": "nginx", "required": True}],
         "notify_rules": [], "visible_role_ids": [],
         **override,
     }

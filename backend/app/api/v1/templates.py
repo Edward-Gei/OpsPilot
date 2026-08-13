@@ -1,4 +1,4 @@
-"""工单模板 API；页面仅维护业务入口和一个流程引用。"""
+"""工单模板 API；页面维护业务入口、参数契约和一个流程引用。"""
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -16,6 +16,8 @@ def _brief(t) -> dict:
     return {
         "id": t.id, "name": t.name, "type": t.type, "description": t.description,
         "job_host_id": t.job_host_id, "process_template_id": t.process_template_id,
+        "params_schema": t.params_schema or [], "generator_script": t.generator_script,
+        "generator_timeout": t.generator_timeout,
         "status": t.status, "allow_withdraw": t.allow_withdraw,
         "notify_rules": t.notify_rules or [], "visible_role_ids": t.visible_role_ids or [],
         "created_at": t.created_at.isoformat() if t.created_at else None,

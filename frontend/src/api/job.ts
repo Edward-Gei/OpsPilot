@@ -52,14 +52,14 @@ export function deleteCredential(id: number) {
 export type TemplateType = 'release' | 'daily_ops' | 'other'
 export type TemplateStatus = 'enabled' | 'disabled'
 export type ScriptType = 'shell' | 'playbook'
-export type ProcessParamSource = 'fixed' | 'user' | 'generated'
-export type ProcessInputType = 'text' | 'enum'
+export type TicketParamSource = 'fixed' | 'user' | 'generated'
+export type TicketInputType = 'text' | 'enum'
 
-export interface ProcessParam {
+export interface TicketParam {
   name: string
   label?: string | null
-  source: ProcessParamSource
-  input_type: ProcessInputType
+  source: TicketParamSource
+  input_type: TicketInputType
   options: string[]
   default?: string | null
   required: boolean
@@ -80,9 +80,6 @@ export interface ProcessTemplateItem {
   name: string
   description: string | null
   status: TemplateStatus
-  params_schema: ProcessParam[]
-  generator_script?: string | null
-  generator_timeout?: number | null
   exec_strategy: Partial<ExecStrategy>
   steps_count?: number | null
   ticket_template_refs?: number | null
@@ -93,9 +90,6 @@ export interface ProcessTemplateItem {
 export interface ProcessTemplateForm {
   name: string
   description?: string
-  params_schema: ProcessParam[]
-  generator_script?: string | null
-  generator_timeout?: number | null
   exec_strategy: ExecStrategy
   steps: ProcessStep[]
 }
@@ -106,6 +100,9 @@ export interface TicketTemplateForm {
   description?: string
   job_host_id: number
   process_template_id: number
+  params_schema: TicketParam[]
+  generator_script?: string | null
+  generator_timeout?: number | null
   allow_withdraw: boolean
   notify_rules: NotifyRule[]
   visible_role_ids: number[]
@@ -147,7 +144,7 @@ export interface NotifyRule {
   channels: string[]
 }
 
-/** 工单模板列表行：仅包含业务入口和流程引用。 */
+/** 工单模板列表行：包含业务入口和参数契约。 */
 export interface TemplateItem {
   id: number
   name: string
@@ -155,6 +152,9 @@ export interface TemplateItem {
   description: string | null
   job_host_id: number
   process_template_id: number
+  params_schema: TicketParam[]
+  generator_script?: string | null
+  generator_timeout?: number | null
   allow_withdraw: boolean
   notify_rules: NotifyRule[]
   visible_role_ids: number[]

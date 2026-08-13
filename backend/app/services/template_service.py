@@ -55,8 +55,6 @@ async def _validate_process_refs(session: AsyncSession, data: dict) -> None:
 def _process_snapshot(process: ProcessTemplate, steps: list[ProcessStep]) -> dict:
     return {
         "process_name": process.name,
-        "params_schema": process.params_schema or [],
-        "generator": {"script": process.generator_script, "timeout": process.generator_timeout},
         "exec_strategy": process.exec_strategy or {},
         "steps": [
             {
@@ -89,8 +87,7 @@ async def create_process_template(session: AsyncSession, *, created_by: int, dat
     await _validate_process_refs(session, data)
     process = ProcessTemplate(
         name=data["name"], description=data.get("description"), status="enabled",
-        params_schema=data.get("params_schema") or [], generator_script=data.get("generator_script"),
-        generator_timeout=data.get("generator_timeout"), exec_strategy=data.get("exec_strategy") or {},
+        exec_strategy=data.get("exec_strategy") or {},
         created_by=created_by,
     )
     session.add(process)
@@ -110,9 +107,6 @@ async def update_process_template(session: AsyncSession, process_id: int, *, dat
         await session.delete(row)
     process.name = data["name"]
     process.description = data.get("description")
-    process.params_schema = data.get("params_schema") or []
-    process.generator_script = data.get("generator_script")
-    process.generator_timeout = data.get("generator_timeout")
     process.exec_strategy = data.get("exec_strategy") or {}
     await session.flush()
     for index, item in enumerate(data["steps"], 1):

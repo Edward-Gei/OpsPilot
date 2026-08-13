@@ -1,6 +1,7 @@
 # 通用
 .DS_Store
 Thumbs.db
+docs/superpowers/
 
 # Python
 __pycache__/

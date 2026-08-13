@@ -155,7 +155,7 @@
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/tickets/templates` | `ticket:write` | 可用模板列表（enabled + visible_role_ids 过滤），返回 `job_host_id` 及 `job_host_name` |
-| GET | `/tickets/templates/{id}/form` | `ticket:write` | 提交表单描述：汇总参数（各步骤 params_schema 同名合并，排除 fixed）+ 作业主机/步骤/审批节点/策略只读预览 |
+| GET | `/tickets/templates/{id}/form` | `ticket:write` | 提交表单描述：返回工单模板参数（排除 fixed）+ 作业主机/流程步骤/审批/策略只读预览 |
 | POST | `/tickets` | `ticket:write` | 提交工单：`{template_id, params}`；服务端固化六重快照（作业主机/步骤内容/审批节点/策略/版本/引用凭据）；免审直接入执行队列，否则进入 approving 并发待审批通知 |
 | GET | `/tickets` | `ticket:read` | 分页；status/creator/keyword（标题/工单号模糊）/时间范围 |
 | GET | `/tickets/todo` | `ticket:approve` | 待我审批（当前节点角色 ∩ 我的角色）+ 角标计数 |
@@ -169,7 +169,7 @@
 
 控制类接口（abort/pause/resume/force-abort）均写审计（操作人/IP/时间/工单ID/当时状态）并触发通知；审批人不能代替提交人撤销（只能审批通过/驳回）。状态不匹配返回 40901。
 
-**提交时服务端校验**：模板 enabled 且在我的可见范围；模板已配置步骤；参数满足汇总 params_schema（required/fixed）；开启审批时审批节点配置有效。提交时固化作业主机快照（`job_host_snap`）并冻结模板 credential_refs 为 `[{alias, credential_id, credential_name}]` 快照，执行时按 credential_id 实时取密文。
+**提交时服务端校验**：模板 enabled 且在我的可见范围；引用流程已启用且已配置步骤；参数满足工单模板 params_schema（required/fixed）；流程步骤引用的变量必须由工单模板定义；动态参数按工单模板脚本生成。提交时固化作业主机、流程、参数和执行策略快照。
 
 > 已删除：`PUT/DELETE /tickets/{id}`（无草稿可编辑）、`POST /tickets/{id}/submit`（并入创建）、`POST /tickets/{id}/copy`。
 

@@ -54,7 +54,7 @@ async def prepare_parameters(session, *, template_id: int, params: dict) -> dict
     process = await template_service.get_process_or_404(session, tpl.process_template_id)
     if process.status != "enabled":
         raise Errors.conflict("流程模板已停用，不能生成参数")
-    schema = process.params_schema or []
+    schema = tpl.params_schema or []
     definitions = {p["name"]: p for p in schema}
     unknown = set(params) - set(definitions)
     if unknown:
@@ -68,7 +68,7 @@ async def prepare_parameters(session, *, template_id: int, params: dict) -> dict
         credential = await session.get(Credential, host.credential_id) if host else None
         if not host or not credential:
             raise Errors.conflict("作业主机未配置可用凭据")
-        output = await _run_generator(host, credential, process.generator_script or "", process.generator_timeout or 60, values)
+        output = await _run_generator(host, credential, tpl.generator_script or "", tpl.generator_timeout or 60, values)
         generated_values, generated_options = _parse_output(output, generated)
         values.update(generated_values)
         options.update(generated_options)

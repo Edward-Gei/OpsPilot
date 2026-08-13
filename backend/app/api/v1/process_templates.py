@@ -1,4 +1,4 @@
-"""可复用流程模板 API：步骤、参数、动态脚本和步骤前审批统一维护。"""
+"""可复用流程模板 API：步骤、执行策略和步骤前审批统一维护。"""
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
@@ -17,8 +17,7 @@ router = APIRouter(prefix="/process-templates", tags=["流程模板"])
 def _brief(p, steps_count: int | None = None, refs: int | None = None) -> dict:
     return {
         "id": p.id, "name": p.name, "description": p.description, "status": p.status,
-        "params_schema": p.params_schema or [], "generator_script": p.generator_script,
-        "generator_timeout": p.generator_timeout, "exec_strategy": p.exec_strategy or {},
+        "exec_strategy": p.exec_strategy or {},
         "steps_count": steps_count, "ticket_template_refs": refs,
         "created_at": p.created_at.isoformat() if p.created_at else None,
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,

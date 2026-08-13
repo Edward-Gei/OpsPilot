@@ -18,10 +18,8 @@ async def _env(client):
 
 def _process_payload(role_id: int | None = None):
     return {
-        "name": "可复用发布流程", "description": "测试流程", "params_schema": [
-            {"name": "env", "label": "环境", "source": "user", "input_type": "enum",
-             "options": ["test", "prod"], "default": "test", "required": True},
-        ], "exec_strategy": {"timeout": 600, "fail_fast": True, "kill_on_stop": False},
+        "name": "可复用发布流程", "description": "测试流程",
+        "exec_strategy": {"timeout": 600, "fail_fast": True, "kill_on_stop": False},
         "steps": [{"name": "发布", "script_type": "shell", "content": "echo {{ env }}",
                    "timeout": 60, "approval_role_id": role_id}],
     }
@@ -39,6 +37,8 @@ async def test_process_template_lifecycle_and_reference_guard(client, seed):
     tpl = await client.post("/api/v1/templates", headers=admin, json={
         "name": "发布入口", "type": "release", "job_host_id": host_id,
         "process_template_id": process_id, "allow_withdraw": True,
+        "params_schema": [{"name": "env", "label": "环境", "source": "user", "input_type": "enum",
+                            "options": ["test", "prod"], "default": "test", "required": True}],
         "notify_rules": [], "visible_role_ids": [],
     })
     assert tpl.json()["code"] == 0, tpl.json()
@@ -60,7 +60,7 @@ async def test_ticket_template_has_no_credential_or_embedded_rules(client, seed)
     process_id = process.json()["data"]["id"]
     tpl = await client.post("/api/v1/templates", headers=admin, json={
         "name": "无凭据引用入口", "type": "daily_ops", "job_host_id": host_id,
-        "process_template_id": process_id, "notify_rules": [], "visible_role_ids": [],
+        "process_template_id": process_id, "params_schema": [], "notify_rules": [], "visible_role_ids": [],
     })
     assert tpl.json()["code"] == 0
     detail = (await client.get(f"/api/v1/templates/{tpl.json()['data']['id']}", headers=admin)).json()["data"]
@@ -81,3 +81,26 @@ def test_generated_parameter_output_supports_value_and_options():
     values, options = _parse_output('{"release": ["blue", "green"], "version": "2026.08"}', ["release", "version"])
     assert values == {"version": "2026.08"}
     assert options == {"release": ["blue", "green"]}
+
+
+async def test_process_template_is_parameter_agnostic_and_ticket_templates_are_independent(client):
+    admin, _, host_id = await _env(client)
+    process = await client.post("/api/v1/process-templates", headers=admin, json={
+        "name": "共享参数无关流程", "description": "测试流程", "exec_strategy": {},
+        "steps": [{"name": "执行", "script_type": "shell", "content": "echo {{ value }}", "timeout": 60}],
+    })
+    assert process.json()["code"] == 0
+    process_id = process.json()["data"]["id"]
+    first = await client.post("/api/v1/templates", headers=admin, json={
+        "name": "入口一", "type": "daily_ops", "job_host_id": host_id, "process_template_id": process_id,
+        "params_schema": [{"name": "value", "source": "fixed", "default": "one"}],
+    })
+    second = await client.post("/api/v1/templates", headers=admin, json={
+        "name": "入口二", "type": "daily_ops", "job_host_id": host_id, "process_template_id": process_id,
+        "params_schema": [{"name": "value", "source": "fixed", "default": "two"}],
+    })
+    assert first.json()["code"] == second.json()["code"] == 0
+    first_detail = (await client.get(f"/api/v1/templates/{first.json()['data']['id']}", headers=admin)).json()["data"]
+    second_detail = (await client.get(f"/api/v1/templates/{second.json()['data']['id']}", headers=admin)).json()["data"]
+    assert first_detail["params_schema"][0]["default"] == "one"
+    assert second_detail["params_schema"][0]["default"] == "two"

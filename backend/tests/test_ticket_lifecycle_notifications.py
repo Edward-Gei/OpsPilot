@@ -34,7 +34,6 @@ async def _template(session, *, creator_id: int, role_id: int | None = None) -> 
     await session.flush()
     process = ProcessTemplate(
         name="notify-test-process", description="notify", status="enabled",
-        params_schema=[], generator_script=None, generator_timeout=None,
         exec_strategy={"fail_fast": True}, created_by=creator_id,
     )
     session.add(process)
@@ -47,6 +46,7 @@ async def _template(session, *, creator_id: int, role_id: int | None = None) -> 
     template = TicketTemplate(
         name="notify-test-template", type="daily_ops", description="notify",
         job_host_id=host.id, process_template_id=process.id, allow_withdraw=True,
+        params_schema=[], generator_script=None, generator_timeout=None,
         notify_rules=[], visible_role_ids=[], status="enabled", created_by=creator_id,
     )
     session.add(template)
@@ -142,8 +142,7 @@ async def test_prepared_parameters_allow_user_values_added_after_generation(db_f
     async with db_factory() as session:
         creator = await session.get(User, seed["users"]["ops1"])
         template = await _template(session, creator_id=creator.id)
-        process = await session.get(ProcessTemplate, template.process_template_id)
-        process.params_schema = [
+        template.params_schema = [
             {"name": "region", "source": "user", "input_type": "text", "required": True},
             {"name": "release", "source": "generated", "input_type": "enum", "required": True},
         ]
