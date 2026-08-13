@@ -281,6 +281,12 @@ onMounted(loadAll)
 }
 .role-card {
   border-radius: 14px;
+  height: 100%;
+}
+.role-card :deep(.ant-card-body) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 .role-head {
   display: flex;
@@ -326,7 +332,7 @@ onMounted(loadAll)
   font-size: 12px;
 }
 .role-actions {
-  margin-top: 10px;
+  margin-top: auto;
   padding-top: 10px;
   border-top: 1px solid var(--border);
   display: flex;
