@@ -5,6 +5,7 @@ import json
 import secrets
 from datetime import datetime, timedelta
 
+from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import select
 
 from app.core.response import Errors
@@ -20,7 +21,11 @@ async def _run_generator(host: JobHost, credential, script: str, timeout: int, p
     connection = await open_connection(host.ip, host.ssh_port, credential)
     try:
         command = f"export PARAMS_JSON={json.dumps(json.dumps(params), ensure_ascii=False)!r}; bash -s"
-        result = await asyncio.wait_for(connection.run(command, input=script), timeout=timeout)
+        # 先渲染模板，让固定值和用户参数可直接用于脚本；完整参数仍通过 PARAMS_JSON 提供。
+        rendered_script = SandboxedEnvironment(
+            autoescape=False, keep_trailing_newline=True,
+        ).from_string(script).render(**(params or {}))
+        result = await asyncio.wait_for(connection.run(command, input=rendered_script), timeout=timeout)
         if result.exit_status != 0:
             raise Errors.param("动态参数脚本执行失败")
         return str(result.stdout).strip()

@@ -18,6 +18,37 @@ from app.models.ticket import Ticket, TicketParameterPrepare, TicketStep
 from app.services import parameter_prepare_service, seed as seed_service, ticket_service
 
 
+@pytest.mark.asyncio
+async def test_generator_renders_fixed_values_before_remote_execution(monkeypatch):
+    """动态脚本执行前应渲染已准备好的固定值，避免占位符原样进入 Bash。"""
+    class _Result:
+        exit_status = 0
+        stdout = "{}"
+
+    class _Connection:
+        def __init__(self):
+            self.script = None
+
+        async def run(self, command, input):
+            self.script = input
+            return _Result()
+
+        def close(self):
+            pass
+
+    connection = _Connection()
+
+    async def fake_open_connection(*args):
+        return connection
+
+    monkeypatch.setattr(parameter_prepare_service, "open_connection", fake_open_connection)
+    await parameter_prepare_service._run_generator(
+        object(), object(), "SERVICE={{ SERVICE_NAME }}", 60, {"SERVICE_NAME": "mt-web"},
+    )
+
+    assert connection.script == "SERVICE=mt-web"
+
+
 async def _template(session, *, creator_id: int, role_id: int | None = None) -> TicketTemplate:
     """创建最小可执行模板，避免回归测试依赖 HTTP 层模板接口。"""
     credential = Credential(
