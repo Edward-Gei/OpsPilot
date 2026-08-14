@@ -134,6 +134,8 @@ def _migrate_default_job_host(bind) -> None:
 
 def _shrink_exec_strategy(bind) -> None:
     """exec_strategy 瘦身：逐行解析 JSON，只保留 timeout + fail_fast 两键。"""
+    if not _column_exists(bind, "ticket_template", "exec_strategy"):
+        return
     rows = bind.execute(
         text("SELECT id, exec_strategy FROM ticket_template WHERE exec_strategy IS NOT NULL")
     ).all()
@@ -229,10 +231,11 @@ def upgrade() -> None:
     op.execute("DELETE FROM system_config WHERE cfg_key = 'ansible.job_host'")
 
     # 10. 模板版本快照中的 type 同步归并（快照行不可变，此处为一次性口径修正）
-    op.execute(
-        "UPDATE template_version SET snapshot = JSON_SET(snapshot, '$.type', 'daily_ops') "
-        "WHERE JSON_UNQUOTE(JSON_EXTRACT(snapshot, '$.type')) IN ('change', 'ops')"
-    )
+    if _table_exists(bind, "template_version"):
+        op.execute(
+            "UPDATE template_version SET snapshot = JSON_SET(snapshot, '$.type', 'daily_ops') "
+            "WHERE JSON_UNQUOTE(JSON_EXTRACT(snapshot, '$.type')) IN ('change', 'ops')"
+        )
 
 
 def downgrade() -> None:
