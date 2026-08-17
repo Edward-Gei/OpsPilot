@@ -354,6 +354,7 @@ onMounted(() => {
     <a-table
       :columns="columns"
       :data-source="items"
+      :show-sorter-tooltip="false"
       :loading="loading"
       row-key="id"
       bordered
