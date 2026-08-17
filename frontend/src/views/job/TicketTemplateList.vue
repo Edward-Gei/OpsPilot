@@ -32,12 +32,20 @@ const statusLoading = ref<number | null>(null)
 const editing = ref<Row | null>(null)
 const open = ref(false)
 const copyFromId = ref<number | null>(null)
-const detail = ref<(api.TemplateItem & { process_template?: { id: number; name: string; status: api.TemplateStatus } }) | null>(null)
+const detail = ref<api.TemplateDetail | null>(null)
 const detailOpen = ref(false)
 const query = reactive({ page: 1, page_size: 20, keyword: '', type: undefined as string | undefined, status: undefined as string | undefined })
 const hostMap = computed(() => Object.fromEntries(hosts.value.map((h) => [h.id, h.name])))
 const processMap = computed(() => Object.fromEntries(processes.value.map((p) => [p.id, p.name])))
 const roleMap = computed(() => Object.fromEntries(roles.value.map((role) => [role.id, role.name])))
+const paramSourceText: Record<api.TicketParamSource, string> = { fixed: '固定值', user: '用户输入', generated: '动态生成' }
+const paramInputText: Record<api.TicketInputType, string> = { text: '文本', enum: '枚举' }
+const eventText: Record<string, string> = {
+  'ticket.pending_approval': '待审批',
+  'ticket.approved': '审批通过',
+  'ticket.rejected': '审批驳回',
+}
+const channelText: Record<string, string> = { inapp: '站内信', email: '邮件' }
 const stats = reactive({ all: 0, enabled: 0, disabled: 0 })
 const columns = ref(makeResizable([
   { title: '模板名称', dataIndex: 'name', key: 'name', width: 190, ellipsis: true },
@@ -134,7 +142,16 @@ async function toggle(row: Row) {
   statusLoading.value = row.id
   try { await api.setTemplateStatus(row.id, row.status === 'enabled' ? 'disabled' : 'enabled'); await load() } finally { statusLoading.value = null }
 }
-async function openDetail(row: Row) { detailOpen.value = true; detail.value = await api.getTemplate(row.id) }
+function formatReceiver(value: string): string {
+  if (value === 'creator') return '创建人'
+  if (value === 'approver_role') return '审批角色'
+  if (value.startsWith('role:')) return roleMap.value[Number(value.slice(5))] || value
+  return value
+}
+function formatValues(values: string[] | undefined, map: Record<string, string>): string {
+  return values?.length ? values.map((value) => map[value] || value).join('、') : '-'
+}
+async function openDetail(row: Row) { detail.value = null; detailOpen.value = true; detail.value = await api.getTemplate(row.id) }
 const rowSelection = computed(() => ({ selectedRowKeys: selectedKeys.value, onChange: (keys: (string | number)[]) => (selectedKeys.value = keys as number[]) }))
 onMounted(load)
 </script>
@@ -178,7 +195,37 @@ onMounted(load)
       <div class="copy-tip">选择源模板后进入编辑器，确认保存后才会创建新模板。</div>
       <a-select v-model:value="copySourceId" class="copy-select" show-search :filter-option="false" :options="copyOptions" :loading="copySearching" placeholder="搜索并选择源模板" @search="onCopySearch" />
     </a-modal>
-    <a-drawer v-model:open="detailOpen" :title="detail?.name || '工单模板详情'" :width="640"><a-spin :spinning="!detail"><template v-if="detail"><div class="head-line"><a-tag :color="typeText[detail.type]?.color">{{ typeText[detail.type]?.text || detail.type }}</a-tag><a-tag :color="detail.status === 'enabled' ? 'green' : 'default'">{{ detail.status === 'enabled' ? '启用' : '停用' }}</a-tag></div><a-descriptions bordered size="small" :column="1" class="op-desc-table"><a-descriptions-item label="说明">{{ detail.description || '-' }}</a-descriptions-item><a-descriptions-item label="作业主机">{{ hostMap[detail.job_host_id] || detail.job_host_id }}</a-descriptions-item><a-descriptions-item label="流程模板">{{ detail.process_template?.name || processMap[(detail as Row).process_template_id] || '-' }}</a-descriptions-item><a-descriptions-item label="允许终止">{{ (detail as Row).allow_withdraw ? '是' : '否' }}</a-descriptions-item></a-descriptions></template></a-spin></a-drawer>
+    <a-drawer v-model:open="detailOpen" :title="detail?.name || '工单模板详情'" :width="640">
+      <a-spin :spinning="!detail">
+        <template v-if="detail">
+          <div class="head-line"><a-tag :color="typeText[detail.type]?.color">{{ typeText[detail.type]?.text || detail.type }}</a-tag><a-tag :color="detail.status === 'enabled' ? 'green' : 'default'">{{ detail.status === 'enabled' ? '启用' : '停用' }}</a-tag></div>
+          <a-descriptions bordered size="small" :column="1" class="op-desc-table">
+            <a-descriptions-item label="模板 ID">{{ detail.id }}</a-descriptions-item>
+            <a-descriptions-item label="模板名称">{{ detail.name }}</a-descriptions-item>
+            <a-descriptions-item label="说明">{{ detail.description || '-' }}</a-descriptions-item>
+            <a-descriptions-item label="作业主机">{{ hostMap[detail.job_host_id] || detail.job_host_id }}</a-descriptions-item>
+            <a-descriptions-item label="流程模板">{{ detail.process_template?.name || processMap[detail.process_template_id] || '-' }}<span v-if="detail.process_template" class="inline-muted">（{{ detail.process_template.status === 'enabled' ? '启用' : '停用' }}）</span></a-descriptions-item>
+            <a-descriptions-item label="可见角色"><template v-if="detail.visible_role_ids?.length"><a-space wrap><a-tag v-for="roleId in detail.visible_role_ids" :key="roleId" color="blue">{{ roleMap[roleId] || roleId }}</a-tag></a-space></template><span v-else>全部角色</span></a-descriptions-item>
+            <a-descriptions-item label="允许终止">{{ detail.allow_withdraw ? '是' : '否' }}</a-descriptions-item>
+            <a-descriptions-item label="创建时间">{{ detail.created_at ? new Date(detail.created_at).toLocaleString() : '-' }}</a-descriptions-item>
+            <a-descriptions-item label="更新时间">{{ detail.updated_at ? new Date(detail.updated_at).toLocaleString() : '-' }}</a-descriptions-item>
+          </a-descriptions>
+          <a-collapse class="detail-collapse" :bordered="false">
+            <a-collapse-panel key="params" :header="`参数契约（${detail.params_schema?.length || 0}）`">
+              <a-empty v-if="!detail.params_schema?.length" description="未配置参数" />
+              <div v-else class="detail-list"><div v-for="param in detail.params_schema" :key="param.name" class="detail-item"><div class="detail-item-title"><span>{{ param.label || param.name }}</span><a-tag color="blue">{{ paramSourceText[param.source] || param.source }}</a-tag><a-tag>{{ paramInputText[param.input_type] || param.input_type }}</a-tag></div><a-descriptions bordered size="small" :column="1" class="op-desc-table"><a-descriptions-item label="参数名">{{ param.name }}</a-descriptions-item><a-descriptions-item label="是否必填">{{ param.required ? '是' : '否' }}</a-descriptions-item><a-descriptions-item label="默认值">{{ param.default ?? '-' }}</a-descriptions-item><a-descriptions-item label="参数说明">{{ param.description || '-' }}</a-descriptions-item><a-descriptions-item v-if="param.input_type === 'enum'" label="可选值">{{ param.options?.length ? param.options.join('、') : '-' }}</a-descriptions-item></a-descriptions></div></div>
+            </a-collapse-panel>
+            <a-collapse-panel key="generator" header="动态生成">
+              <a-descriptions bordered size="small" :column="1" class="op-desc-table"><a-descriptions-item label="生成超时">{{ detail.generator_timeout ? `${detail.generator_timeout} 秒` : '-' }}</a-descriptions-item><a-descriptions-item label="生成脚本"><pre v-if="detail.generator_script" class="detail-code">{{ detail.generator_script }}</pre><span v-else>-</span></a-descriptions-item></a-descriptions>
+            </a-collapse-panel>
+            <a-collapse-panel key="notify" :header="`通知规则（${detail.notify_rules?.length || 0}）`">
+              <a-empty v-if="!detail.notify_rules?.length" description="未配置通知规则" />
+              <div v-else class="detail-list"><div v-for="(rule, index) in detail.notify_rules" :key="`${rule.event}-${index}`" class="detail-item"><a-descriptions bordered size="small" :column="1" class="op-desc-table"><a-descriptions-item label="事件">{{ eventText[rule.event] || rule.event }}</a-descriptions-item><a-descriptions-item label="接收人">{{ rule.receivers?.length ? rule.receivers.map(formatReceiver).join('、') : '-' }}</a-descriptions-item><a-descriptions-item label="渠道">{{ formatValues(rule.channels, channelText) }}</a-descriptions-item></a-descriptions></div></div>
+            </a-collapse-panel>
+          </a-collapse>
+        </template>
+      </a-spin>
+    </a-drawer>
   </div>
 </template>
 
@@ -186,5 +233,5 @@ onMounted(load)
 .toolbar { display: flex; gap: 10px; margin-bottom: 16px; }
 .kw { width: 220px; }.type-sel { width: 130px; }.status-sel { width: 110px; }.toolbar-actions { margin-left: auto; display: flex; gap: 10px; }
 .copy-tip { font-size: 12px; color: var(--text-3); margin-bottom: 10px; }.copy-select { width: 100%; }
-.head-line { display: flex; gap: 4px; margin-bottom: 14px; }
+.head-line { display: flex; gap: 4px; margin-bottom: 14px; }.detail-collapse { margin-top: 14px; }.detail-list { display: flex; flex-direction: column; gap: 10px; }.detail-item-title { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font-weight: 600; }.detail-code { max-height: 240px; overflow: auto; margin: 0; padding: 10px; background: var(--bg-soft); white-space: pre-wrap; word-break: break-word; }.inline-muted { color: var(--text-3); margin-left: 4px; }
 </style>
