@@ -51,7 +51,7 @@ def _host_brief(h) -> dict:
 
 
 def _app_brief(a, stats: dict | None = None) -> dict:
-    """应用列表/详情统一序列化；stats 为关联主机数 + 资源汇总（纯计算值）。"""
+    """应用列表/详情统一序列化；stats 为关联主机数和 IP 清单。"""
     stats = stats or {}
     return {
         "id": a.id,
@@ -60,21 +60,15 @@ def _app_brief(a, stats: dict | None = None) -> dict:
         "language": a.language,
         "deploy_type": a.deploy_type,
         "host_count": stats.get("host_count", 0),
-        "cpu_total": stats.get("cpu_total", 0),
-        "memory_total": stats.get("memory_total", 0),
-        "disk_total": stats.get("disk_total", 0),
         "host_ips": stats.get("host_ips", []),
         "created_at": a.created_at.isoformat() if a.created_at else None,
     }
 
 
 def _hosts_stats(hosts: list) -> dict:
-    """由主机清单现算关联数、资源汇总与 IP 清单（详情接口复用）。"""
+    """由主机清单现算关联数与 IP 清单（详情接口复用）。"""
     return {
         "host_count": len(hosts),
-        "cpu_total": sum(h.cpu_cores or 0 for h in hosts),
-        "memory_total": sum(h.memory_gb or 0 for h in hosts),
-        "disk_total": sum(h.disk_gb or 0 for h in hosts),
         "host_ips": [h.ip for h in hosts],
     }
 
@@ -237,7 +231,7 @@ async def list_apps(
     language: str | None = None,
     deploy_type: str | None = None,
 ) -> dict:
-    """分页查应用；items 含关联主机数与资源汇总。"""
+    """分页查应用；items 含关联主机数与 IP 清单。"""
     apps, total, host_stats = await cmdb_service.list_apps(
         session, page=page, page_size=page_size, keyword=keyword,
         language=language, deploy_type=deploy_type,

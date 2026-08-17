@@ -162,7 +162,7 @@ async def list_apps(
     language: str | None = None,
     deploy_type: str | None = None,
 ) -> tuple[list[Application], int, dict[int, dict]]:
-    """分页查应用；返回 (列表, 总数, {app_id: 关联主机数+资源汇总})。"""
+    """分页查应用；返回 (列表, 总数, {app_id: 关联主机数+IP 清单})。"""
     query = select(Application)
     if keyword:
         query = query.where(Application.name.like(f"%{keyword}%"))
@@ -175,23 +175,20 @@ async def list_apps(
         query.order_by(Application.id.desc()).offset((page - 1) * page_size).limit(page_size)
     )
     apps = list(rows.scalars())
-    # 关联主机明细一次查出，Python 侧聚合：主机数 + 资源汇总 + IP 清单（列表展示用）
+    # 关联主机明细一次查出，Python 侧聚合主机数和 IP 清单（列表展示用）
     host_stats: dict[int, dict] = {}
     if apps:
         detail_rows = await session.execute(
-            select(AppHost.app_id, Host.ip, Host.cpu_cores, Host.memory_gb, Host.disk_gb)
+            select(AppHost.app_id, Host.ip)
             .join(Host, Host.id == AppHost.host_id)
             .where(AppHost.app_id.in_([a.id for a in apps]))
             .order_by(AppHost.app_id, Host.id)
         )
-        for app_id, ip, cpu, mem, disk in detail_rows:
+        for app_id, ip in detail_rows:
             s = host_stats.setdefault(app_id, {
-                "host_count": 0, "cpu_total": 0, "memory_total": 0, "disk_total": 0, "host_ips": [],
+                "host_count": 0, "host_ips": [],
             })
             s["host_count"] += 1
-            s["cpu_total"] += cpu or 0
-            s["memory_total"] += mem or 0
-            s["disk_total"] += disk or 0
             s["host_ips"].append(ip)
     return apps, total, host_stats
 

@@ -27,12 +27,6 @@ const deployText: Record<string, { text: string; color: string }> = {
 }
 const deployOptions = Object.entries(deployText).map(([value, v]) => ({ label: v.text, value }))
 
-/** 关联主机资源汇总展示：如「12C / 24G / 200G」，全 0（未录入规格）显示 — */
-function specSumText(row: { cpu_total: number; memory_total: number; disk_total: number }) {
-  if (!row.cpu_total && !row.memory_total && !row.disk_total) return '—'
-  return `${row.cpu_total}C / ${row.memory_total}G / ${row.disk_total}G`
-}
-
 // ---------- 列表 ----------
 const loading = ref(false)
 const items = ref<cmdbApi.AppItem[]>([])
@@ -434,7 +428,6 @@ onMounted(() => {
                 {{ deployText[detail.deploy_type]?.text || detail.deploy_type }}
               </a-tag>
             </a-descriptions-item>
-            <a-descriptions-item label="资源配置（关联主机汇总）">{{ specSumText(detail) }}</a-descriptions-item>
             <a-descriptions-item label="说明">{{ detail.description || '—' }}</a-descriptions-item>
             <a-descriptions-item label="创建时间">
               {{ detail.created_at ? new Date(detail.created_at).toLocaleString() : '—' }}

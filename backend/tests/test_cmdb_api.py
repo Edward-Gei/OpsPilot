@@ -181,16 +181,18 @@ class TestAppCrud:
         )
         assert resp.json()["code"] == 40901
 
-        # 列表含关联主机数、资源汇总（2 台 4C8G100G 求和）与 IP 清单
+        # 列表含关联主机数与 IP 清单，不返回资源汇总
         resp = await client.get("/api/v1/cmdb/apps", headers=headers)
         item = resp.json()["data"]["items"][0]
         assert item["host_count"] == 2
-        assert (item["cpu_total"], item["memory_total"], item["disk_total"]) == (8, 16, 200)
+        assert not {"cpu_total", "memory_total", "disk_total"} & item.keys()
         assert item["host_ips"] == ["10.2.0.1", "10.2.0.2"]
 
         # 详情含主机清单；主机详情反查应用
         resp = await client.get(f"/api/v1/cmdb/apps/{app_id}", headers=headers)
-        assert {h["id"] for h in resp.json()["data"]["hosts"]} == {h1, h2}
+        app_detail = resp.json()["data"]
+        assert not {"cpu_total", "memory_total", "disk_total"} & app_detail.keys()
+        assert {h["id"] for h in app_detail["hosts"]} == {h1, h2}
         resp = await client.get(f"/api/v1/cmdb/hosts/{h1}", headers=headers)
         assert resp.json()["data"]["apps"][0]["name"] == "订单服务"
 

@@ -27,10 +27,6 @@ export interface AppItem {
   language: string | null
   deploy_type: string
   host_count: number
-  // 关联主机资源汇总（后端聚合的纯计算值）
-  cpu_total: number
-  memory_total: number
-  disk_total: number
   // 关联主机 IP 清单（列表多行展示）
   host_ips: string[]
   created_at: string | null
