@@ -59,6 +59,8 @@ const query = reactive({
   region: undefined as string | undefined,
   environment: undefined as string | undefined,
   status: undefined as string | undefined,
+  sort_by: undefined as 'created_at' | undefined,
+  sort_order: undefined as 'asc' | 'desc' | undefined,
 })
 
 // 列宽尽量均匀；操作列固定右侧，其余列可拖拽调宽（响应式包装使 width 变更生效）
@@ -72,7 +74,7 @@ const columns = ref(makeResizable([
   { title: '环境', key: 'environment', width: 90 },
   { title: '状态', key: 'status', width: 90 },
   { title: 'SSH 端口', dataIndex: 'ssh_port', key: 'ssh_port', width: 90 },
-  { title: '创建时间', key: 'created', width: 155 },
+  { title: '创建时间', dataIndex: 'created_at', key: 'created', width: 155, sorter: true },
   { title: '操作', key: 'action', width: canWrite || canDelete ? 190 : 90, fixed: 'right' as const },
 ]))
 
@@ -88,6 +90,8 @@ async function loadList() {
       region: query.region || undefined,
       environment: query.environment,
       status: query.status,
+      sort_by: query.sort_by,
+      sort_order: query.sort_order,
     })
     items.value = data.items
     total.value = data.total
@@ -152,9 +156,19 @@ function onSearch() {
   loadList()
 }
 
-function onPageChange(page: number, pageSize: number) {
-  query.page = page
-  query.page_size = pageSize
+function onTableChange(
+  pagination: { current?: number; pageSize?: number },
+  _: unknown,
+  sorter: { field?: string; order?: 'ascend' | 'descend' | null } | { field?: string; order?: 'ascend' | 'descend' | null }[],
+) {
+  const current = Array.isArray(sorter) ? sorter[0] : sorter
+  const sortBy = current.order && current.field === 'created_at' ? 'created_at' : undefined
+  const sortOrder = current.order === 'ascend' ? 'asc' : current.order === 'descend' ? 'desc' : undefined
+  const sortChanged = query.sort_by !== sortBy || query.sort_order !== sortOrder
+  query.sort_by = sortBy
+  query.sort_order = sortOrder
+  query.page = sortChanged ? 1 : pagination.current || 1
+  query.page_size = pagination.pageSize || query.page_size
   loadList()
 }
 
@@ -442,6 +456,7 @@ onMounted(() => {
       :scroll="{ x: 1360 }"
       :row-selection="rowSelection"
       @resize-column="onResizeColumn"
+      @change="onTableChange"
       :pagination="{
         current: query.page,
         pageSize: query.page_size,
@@ -449,7 +464,6 @@ onMounted(() => {
         showSizeChanger: true,
         showQuickJumper: true,
         showTotal: (t: number) => `共 ${t} 台主机`,
-        onChange: onPageChange,
       }"
     >
       <template #bodyCell="{ column, record }">

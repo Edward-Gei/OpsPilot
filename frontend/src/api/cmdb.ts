@@ -50,6 +50,8 @@ export interface HostQuery {
   region?: string
   environment?: string
   status?: string
+  sort_by?: 'created_at'
+  sort_order?: 'asc' | 'desc'
 }
 
 export interface HostForm {
@@ -136,14 +138,23 @@ export function exportHosts(params: Omit<HostQuery, 'page' | 'page_size'>) {
 
 // ---------- 应用 ----------
 
-export function listApps(params: {
+export interface AppQuery {
   page?: number
   page_size?: number
   keyword?: string
   language?: string
   deploy_type?: string
-}) {
+  sort_by?: 'language' | 'created_at'
+  sort_order?: 'asc' | 'desc'
+}
+
+export function listApps(params: AppQuery) {
   return request<PageResult<AppItem>>({ url: '/cmdb/apps', method: 'get', params })
+}
+
+/** 按当前筛选导出应用 */
+export function exportApps(params: Omit<AppQuery, 'page' | 'page_size'>) {
+  return downloadXlsx('/cmdb/apps/export', '应用列表.xlsx', params)
 }
 
 export function getApp(id: number) {

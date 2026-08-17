@@ -32,15 +32,21 @@ async def list_hosts(
     region: str | None = None,
     environment: str | None = None,
     status: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
 ) -> tuple[list[Host], int]:
     """分页查主机；keyword 模糊匹配主机名/IP，其余精确筛选。"""
     query = _host_filter_query(
         keyword=keyword, platform=platform, region=region, environment=environment, status=status
     )
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
-    rows = await session.execute(
-        query.order_by(Host.id.desc()).offset((page - 1) * page_size).limit(page_size)
-    )
+    order_by = (Host.id.desc(),)
+    if sort_by == "created_at":
+        order_by = (
+            Host.created_at.asc() if sort_order == "asc" else Host.created_at.desc(),
+            Host.id.desc(),
+        )
+    rows = await session.execute(query.order_by(*order_by).offset((page - 1) * page_size).limit(page_size))
     return list(rows.scalars()), total
 
 
@@ -161,8 +167,38 @@ async def list_apps(
     keyword: str | None = None,
     language: str | None = None,
     deploy_type: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
 ) -> tuple[list[Application], int, dict[int, dict]]:
     """分页查应用；返回 (列表, 总数, {app_id: 关联主机数+IP 清单})。"""
+    query = _app_filter_query(keyword=keyword, language=language, deploy_type=deploy_type)
+    total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
+    order_by = (Application.id.desc(),)
+    if sort_by == "language":
+        order_by = (
+            Application.language.asc() if sort_order == "asc" else Application.language.desc(),
+            Application.id.desc(),
+        )
+    elif sort_by == "created_at":
+        order_by = (
+            Application.created_at.asc() if sort_order == "asc" else Application.created_at.desc(),
+            Application.id.desc(),
+        )
+    rows = await session.execute(
+        query.order_by(*order_by).offset((page - 1) * page_size).limit(page_size)
+    )
+    apps = list(rows.scalars())
+    # 关联主机明细一次查出，Python 侧聚合主机数和 IP 清单（列表展示用）
+    return apps, total, await _app_host_stats(session, apps)
+
+
+def _app_filter_query(
+    *,
+    keyword: str | None = None,
+    language: str | None = None,
+    deploy_type: str | None = None,
+):
+    """应用列表与导出共用筛选语义。"""
     query = select(Application)
     if keyword:
         query = query.where(Application.name.like(f"%{keyword}%"))
@@ -170,12 +206,18 @@ async def list_apps(
         query = query.where(Application.language == language)
     if deploy_type:
         query = query.where(Application.deploy_type == deploy_type)
-    total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
-    rows = await session.execute(
-        query.order_by(Application.id.desc()).offset((page - 1) * page_size).limit(page_size)
-    )
+    return query
+
+
+async def iter_apps_filtered(session: AsyncSession, **filters) -> tuple[list[Application], dict[int, dict]]:
+    """按筛选条件取全量应用，供导出使用。"""
+    rows = await session.execute(_app_filter_query(**filters).order_by(Application.id.asc()))
     apps = list(rows.scalars())
-    # 关联主机明细一次查出，Python 侧聚合主机数和 IP 清单（列表展示用）
+    return apps, await _app_host_stats(session, apps)
+
+
+async def _app_host_stats(session: AsyncSession, apps: list[Application]) -> dict[int, dict]:
+    """一次查询聚合应用关联主机数量与 IP 清单。"""
     host_stats: dict[int, dict] = {}
     if apps:
         detail_rows = await session.execute(
@@ -185,12 +227,10 @@ async def list_apps(
             .order_by(AppHost.app_id, Host.id)
         )
         for app_id, ip in detail_rows:
-            s = host_stats.setdefault(app_id, {
-                "host_count": 0, "host_ips": [],
-            })
-            s["host_count"] += 1
-            s["host_ips"].append(ip)
-    return apps, total, host_stats
+            stats = host_stats.setdefault(app_id, {"host_count": 0, "host_ips": []})
+            stats["host_count"] += 1
+            stats["host_ips"].append(ip)
+    return host_stats
 
 
 async def _ensure_app_name_unique(session: AsyncSession, name: str, exclude_id: int | None = None) -> None:

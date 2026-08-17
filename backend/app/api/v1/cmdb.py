@@ -3,6 +3,7 @@
 路由顺序约束：suggest / import-template / import / export 等静态路径
 必须声明在 /{host_id} 之前，否则会被路径参数吞掉。
 """
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request, UploadFile
@@ -13,7 +14,7 @@ from app.core.deps import DbSession, get_client_ip, require_perm
 from app.core.response import Errors, ok
 from app.models.auth import User
 from app.schemas.cmdb import AppUpsertRequest, HostUpsertRequest
-from app.services import cmdb_service, host_excel
+from app.services import app_excel, cmdb_service, host_excel
 
 router = APIRouter(prefix="/cmdb", tags=["CMDB"])
 
@@ -148,11 +149,14 @@ async def list_hosts(
     region: str | None = None,
     environment: str | None = None,
     status: str | None = None,
+    sort_by: Literal["created_at"] | None = None,
+    sort_order: Literal["asc", "desc"] | None = None,
 ) -> dict:
     """分页查主机（keyword 模糊匹配主机名/IP）。"""
     hosts, total = await cmdb_service.list_hosts(
         session, page=page, page_size=page_size, keyword=keyword,
         platform=platform, region=region, environment=environment, status=status,
+        sort_by=sort_by, sort_order=sort_order,
     )
     return ok({"items": [_host_brief(h) for h in hosts], "total": total,
                "page": page, "page_size": page_size})
@@ -221,6 +225,23 @@ async def delete_host(
 
 # ---------- 应用 ----------
 
+@router.get("/apps/export", summary="导出应用（按当前筛选）")
+async def export_apps(
+    request: Request,
+    session: DbSession,
+    actor: User = Depends(require_perm("cmdb:read")),
+    keyword: str | None = None,
+    language: str | None = None,
+    deploy_type: str | None = None,
+) -> Response:
+    """导出与列表相同筛选语义的全量应用。"""
+    apps, host_stats = await cmdb_service.iter_apps_filtered(
+        session, keyword=keyword, language=language, deploy_type=deploy_type,
+    )
+    audit.log(module="cmdb", action="app.export", actor_id=actor.id, actor_name=actor.username,
+              source_ip=get_client_ip(request), target_type="app", detail={"count": len(apps)})
+    return _xlsx_response(app_excel.export_apps(apps, host_stats), "应用列表.xlsx")
+
 @router.get("/apps", summary="应用列表")
 async def list_apps(
     session: DbSession,
@@ -230,11 +251,14 @@ async def list_apps(
     keyword: str | None = None,
     language: str | None = None,
     deploy_type: str | None = None,
+    sort_by: Literal["language", "created_at"] | None = None,
+    sort_order: Literal["asc", "desc"] | None = None,
 ) -> dict:
     """分页查应用；items 含关联主机数与 IP 清单。"""
     apps, total, host_stats = await cmdb_service.list_apps(
         session, page=page, page_size=page_size, keyword=keyword,
         language=language, deploy_type=deploy_type,
+        sort_by=sort_by, sort_order=sort_order,
     )
     return ok({
         "items": [_app_brief(a, host_stats.get(a.id)) for a in apps],

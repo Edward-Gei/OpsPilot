@@ -1,8 +1,11 @@
 """M2 CMDB 接口测试：主机/应用 CRUD、权限矩阵、IP 冲突、删除保护、suggest、Excel。"""
+from datetime import datetime, timedelta
 from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
+from sqlalchemy import update
 
+from app.models.cmdb import Application, Host
 from tests.conftest import auth_header, login_for_tokens
 
 
@@ -44,6 +47,33 @@ def _make_xlsx(rows: list[list]) -> bytes:
 
 
 class TestHostCrud:
+    async def test_host_list_sorts_by_created_at(self, client, db_factory):
+        """主机列表按创建时间正反序排序。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        first_id = await _create_host(client, headers, ip="10.0.1.1")
+        second_id = await _create_host(client, headers, ip="10.0.1.2")
+        created_at = datetime(2026, 1, 1, 8, 0, 0)
+        async with db_factory() as session:
+            await session.execute(
+                update(Host).where(Host.id == first_id).values(created_at=created_at)
+            )
+            await session.execute(
+                update(Host)
+                .where(Host.id == second_id)
+                .values(created_at=created_at + timedelta(days=1))
+            )
+            await session.commit()
+
+        resp = await client.get(
+            "/api/v1/cmdb/hosts", params={"sort_by": "created_at", "sort_order": "asc"}, headers=headers
+        )
+        assert [item["id"] for item in resp.json()["data"]["items"]] == [first_id, second_id]
+
+        resp = await client.get(
+            "/api/v1/cmdb/hosts", params={"sort_by": "created_at", "sort_order": "desc"}, headers=headers
+        )
+        assert [item["id"] for item in resp.json()["data"]["items"]] == [second_id, first_id]
+
     async def test_host_crud_and_ip_conflict(self, client):
         """主机增查改删全链路 + IP 冲突 40901。"""
         tokens = await login_for_tokens(client, "ops1")
@@ -156,6 +186,69 @@ class TestHostCrud:
 
 
 class TestAppCrud:
+    async def test_app_list_sorts_by_language(self, client):
+        """应用列表按语言正反序排序。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        first = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "Go 服务", "language": "Go", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+        second = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "Java 服务", "language": "Java", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+        first_id = first.json()["data"]["id"]
+        second_id = second.json()["data"]["id"]
+
+        resp = await client.get(
+            "/api/v1/cmdb/apps", params={"sort_by": "language", "sort_order": "asc"}, headers=headers
+        )
+        assert [item["id"] for item in resp.json()["data"]["items"]] == [first_id, second_id]
+
+        resp = await client.get(
+            "/api/v1/cmdb/apps", params={"sort_by": "language", "sort_order": "desc"}, headers=headers
+        )
+        assert [item["id"] for item in resp.json()["data"]["items"]] == [second_id, first_id]
+
+    async def test_app_list_sorts_by_created_at(self, client, db_factory):
+        """应用列表按创建时间正反序排序。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        first = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "先创建应用", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+        second = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "后创建应用", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+        first_id = first.json()["data"]["id"]
+        second_id = second.json()["data"]["id"]
+        created_at = datetime(2026, 1, 1, 8, 0, 0)
+        async with db_factory() as session:
+            await session.execute(
+                update(Application).where(Application.id == first_id).values(created_at=created_at)
+            )
+            await session.execute(
+                update(Application)
+                .where(Application.id == second_id)
+                .values(created_at=created_at + timedelta(days=1))
+            )
+            await session.commit()
+
+        resp = await client.get(
+            "/api/v1/cmdb/apps", params={"sort_by": "created_at", "sort_order": "asc"}, headers=headers
+        )
+        assert [item["id"] for item in resp.json()["data"]["items"]] == [first_id, second_id]
+
+        resp = await client.get(
+            "/api/v1/cmdb/apps", params={"sort_by": "created_at", "sort_order": "desc"}, headers=headers
+        )
+        assert [item["id"] for item in resp.json()["data"]["items"]] == [second_id, first_id]
+
     async def test_app_crud_with_hosts(self, client):
         """应用 CRUD + 多对多关联 + 名称唯一 + 主机详情反查。"""
         tokens = await login_for_tokens(client, "ops1")
@@ -328,3 +421,28 @@ class TestHostExcel:
         rows = list(ws.iter_rows(min_row=2, values_only=True))
         assert len(rows) == 1
         assert rows[0][1] == "10.5.0.2"
+
+
+class TestAppExcel:
+    async def test_export_with_filter(self, client):
+        """应用导出仅包含当前部署方式筛选结果。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "Docker 应用", "language": "Go", "deploy_type": "docker", "host_ids": []},
+            headers=headers,
+        )
+        await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "Shell 应用", "language": "Python", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+
+        resp = await client.get(
+            "/api/v1/cmdb/apps/export", params={"deploy_type": "docker"}, headers=headers
+        )
+        assert resp.status_code == 200
+        ws = load_workbook(BytesIO(resp.content)).active
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        assert len(rows) == 1
+        assert rows[0][0] == "Docker 应用"

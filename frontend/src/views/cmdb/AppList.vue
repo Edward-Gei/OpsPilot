@@ -6,6 +6,7 @@ import { message } from 'ant-design-vue'
 import {
   AppstoreAddOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   EditOutlined,
   EyeOutlined,
   PlusOutlined,
@@ -39,17 +40,19 @@ const query = reactive({
   page_size: 20,
   keyword: '',
   deploy_type: undefined as string | undefined,
+  sort_by: undefined as 'language' | 'created_at' | undefined,
+  sort_order: undefined as 'asc' | 'desc' | undefined,
 })
 
 // 列宽尽量均匀；操作列固定右侧，其余列可拖拽调宽（响应式包装使 width 变更生效）
 const columns = ref(makeResizable([
   { title: '应用名', dataIndex: 'name', key: 'name', width: 140, ellipsis: true },
-  { title: '语言', key: 'language', width: 100, ellipsis: true },
+  { title: '语言', dataIndex: 'language', key: 'language', width: 100, ellipsis: true, sorter: true },
   { title: '部署方式', key: 'deploy_type', width: 100 },
   { title: '关联主机', key: 'host_count', width: 95 },
   { title: '主机 IP', key: 'host_ips', width: 140 },
   { title: '说明', key: 'description', width: 180, ellipsis: true },
-  { title: '创建时间', key: 'created', width: 155 },
+  { title: '创建时间', dataIndex: 'created_at', key: 'created', width: 155, sorter: true },
   { title: '操作', key: 'action', width: canWrite || canDelete ? 190 : 90, fixed: 'right' as const },
 ]))
 
@@ -62,6 +65,8 @@ async function loadList() {
       page_size: query.page_size,
       keyword: query.keyword || undefined,
       deploy_type: query.deploy_type,
+      sort_by: query.sort_by,
+      sort_order: query.sort_order,
     })
     items.value = data.items
     total.value = data.total
@@ -126,10 +131,33 @@ function onSearch() {
   loadList()
 }
 
-function onPageChange(page: number, pageSize: number) {
-  query.page = page
-  query.page_size = pageSize
+function onTableChange(
+  pagination: { current?: number; pageSize?: number },
+  _: unknown,
+  sorter: { field?: string; order?: 'ascend' | 'descend' | null } | { field?: string; order?: 'ascend' | 'descend' | null }[],
+) {
+  const current = Array.isArray(sorter) ? sorter[0] : sorter
+  const sortBy = current.order && (current.field === 'language' || current.field === 'created_at')
+    ? current.field
+    : undefined
+  const sortOrder = current.order === 'ascend' ? 'asc' : current.order === 'descend' ? 'desc' : undefined
+  const sortChanged = query.sort_by !== sortBy || query.sort_order !== sortOrder
+  query.sort_by = sortBy
+  query.sort_order = sortOrder
+  query.page = sortChanged ? 1 : pagination.current || 1
+  query.page_size = pagination.pageSize || query.page_size
   loadList()
+}
+
+async function onExport() {
+  try {
+    await cmdbApi.exportApps({
+      keyword: query.keyword || undefined,
+      deploy_type: query.deploy_type,
+    })
+  } catch {
+    message.error('导出失败')
+  }
 }
 
 // ---------- 主机穿梭框数据源（page_size 上限 100，分页拉全量） ----------
@@ -306,7 +334,7 @@ onMounted(() => {
         @change="onSearch"
       />
       <!-- 右侧操作组：批量删除 + 新建整体钉右 -->
-      <div v-if="canWrite || canDelete" class="toolbar-actions">
+      <div class="toolbar-actions">
         <a-popconfirm
           v-if="canDelete"
           :title="`确认删除选中的 ${selectedKeys.length} 个应用？`"
@@ -317,6 +345,7 @@ onMounted(() => {
             <DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
           </a-button>
         </a-popconfirm>
+        <a-button @click="onExport"><DownloadOutlined />导出</a-button>
         <a-button v-if="canWrite" type="primary" @click="openCreate"><PlusOutlined />新建应用</a-button>
       </div>
     </div>
@@ -331,6 +360,7 @@ onMounted(() => {
       :scroll="{ x: 1160 }"
       :row-selection="rowSelection"
       @resize-column="onResizeColumn"
+      @change="onTableChange"
       :pagination="{
         current: query.page,
         pageSize: query.page_size,
@@ -338,7 +368,6 @@ onMounted(() => {
         showSizeChanger: true,
         showQuickJumper: true,
         showTotal: (t: number) => `共 ${t} 个应用`,
-        onChange: onPageChange,
       }"
     >
       <template #bodyCell="{ column, record }">
