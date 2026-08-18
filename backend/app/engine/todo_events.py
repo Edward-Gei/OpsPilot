@@ -7,6 +7,7 @@ from app.core import redis as redis_mod
 
 _EVENT_LIST_MAX = 2000
 _EVENT_TTL = 3 * 24 * 3600
+_MAX_PUBLISH_RETRIES = 3
 
 
 async def publish_for_users(user_ids: list[int]) -> dict[int, int]:
@@ -16,7 +17,7 @@ async def publish_for_users(user_ids: list[int]) -> dict[int, int]:
         r = redis_mod.redis_client
         seq_key = redis_mod.KEY_TODO_EVENT_SEQ.format(user_id=user_id)
         list_key = redis_mod.KEY_TODO_EVENT_LIST.format(user_id=user_id)
-        while True:
+        for attempt in range(_MAX_PUBLISH_RETRIES):
             pipe = r.pipeline()
             try:
                 await pipe.watch(seq_key)
@@ -35,6 +36,8 @@ async def publish_for_users(user_ids: list[int]) -> dict[int, int]:
                 sequences[user_id] = seq
                 break
             except WatchError:
+                if attempt == _MAX_PUBLISH_RETRIES - 1:
+                    raise
                 continue
             finally:
                 await pipe.reset()
