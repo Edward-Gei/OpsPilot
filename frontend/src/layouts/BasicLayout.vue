@@ -95,7 +95,6 @@ async function startTodoEventPoll() {
     }
   } finally {
     todoPolling = false
-    todoPollAbort = null
   }
 }
 
