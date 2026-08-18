@@ -5,6 +5,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { basicSetup, EditorView } from 'codemirror'
 import { Compartment, EditorState } from '@codemirror/state'
 import { StreamLanguage } from '@codemirror/language'
+import { tags } from '@lezer/highlight'
 import { shell } from '@codemirror/legacy-modes/mode/shell'
 import { yaml } from '@codemirror/lang-yaml'
 import { json as jsonParser } from '@codemirror/legacy-modes/mode/javascript'
@@ -41,7 +42,7 @@ const readonlyComp = new Compartment()
 /** 语言扩展：playbook 用 yaml，shell/adhoc 用 shell 流式高亮 */
 function langExt(lang: 'shell' | 'yaml' | 'json') {
   if (lang === 'yaml') return yaml()
-  if (lang === 'json') return StreamLanguage.define(jsonParser)
+  if (lang === 'json') return StreamLanguage.define({ ...jsonParser, tokenTable: { property: tags.propertyName } })
   return StreamLanguage.define(shell)
 }
 
