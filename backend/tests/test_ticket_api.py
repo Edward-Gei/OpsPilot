@@ -17,6 +17,7 @@ from app.engine import todo_events
 from app.models.auth import User, UserRole
 from app.models.execution import Execution
 from app.models.notify import NotificationRecord
+from app.services import ticket_service
 from tests.conftest import TEST_PASSWORD_HASH, auth_header, login_for_tokens
 
 
@@ -415,6 +416,16 @@ class TestApproveAndCancel:
         assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[1], 0)] == [1, 2]
         assert [event["seq"] for event in await todo_events.fetch_since(seed["users"]["admin"], 0)] == [1]
 
+        response = await client.post(
+            f"/api/v1/tickets/{first['id']}/approve",
+            json={"action": "approve", "comment": "终审通过"}, headers=env["admin_h"],
+        )
+        assert response.json()["data"] == {"status": "queued", "current_step": 0}
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[0], 0)] == [1, 2]
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[1], 0)] == [1, 2]
+        assert [event["seq"] for event in await todo_events.fetch_since(seed["users"]["admin"], 0)] == [1, 2]
+        assert await todo_events.fetch_since(seed["users"]["newbie"], 0) == []
+
         rejected = await _submit(client, env["ops_h"], tpl_id)
         response = await client.post(
             f"/api/v1/tickets/{rejected['id']}/approve",
@@ -429,8 +440,59 @@ class TestApproveAndCancel:
         assert response.json()["data"] == {"status": "cancelled"}
         assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[0], 0)] == [1, 2, 3, 4, 5, 6]
         assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[1], 0)] == [1, 2, 3, 4, 5, 6]
-        assert [event["seq"] for event in await todo_events.fetch_since(seed["users"]["admin"], 0)] == [1]
+        assert [event["seq"] for event in await todo_events.fetch_since(seed["users"]["admin"], 0)] == [1, 2]
         assert await todo_events.fetch_since(seed["users"]["newbie"], 0) == []
+
+    async def test_todo_publish_starts_after_approval_assignment_is_committed(
+        self, client, db_factory, seed, monkeypatch,
+    ):
+        """发布待办事件时，独立会话已能看到新审批节点。"""
+        env = await _base_env(client)
+        appr_h = await _approver_headers(client, db_factory, seed)
+        tpl_id = await _create_template(client, env, approval_roles=[
+            seed["roles"]["approver"], seed["roles"]["admin"],
+        ], steps=[_step(env), _step(env, name="终审")])
+        ticket = await _submit(client, env["ops_h"], tpl_id)
+        published: list[list[int]] = []
+
+        async def publish_after_commit(user_ids: list[int]):
+            async with db_factory() as verification_session:
+                todos, total = await ticket_service.todo_tickets(
+                    verification_session, user_id=seed["users"]["admin"], page=1, page_size=20,
+                )
+            assert total == 1
+            assert [item.id for item in todos] == [ticket["id"]]
+            published.append(user_ids)
+
+        monkeypatch.setattr(todo_events, "publish_for_users", publish_after_commit)
+        response = await client.post(
+            f"/api/v1/tickets/{ticket['id']}/approve",
+            json={"action": "approve"}, headers=appr_h,
+        )
+        assert response.json()["data"] == {"status": "approving", "current_step": 2}
+        assert seed["users"]["admin"] in published[0]
+
+    async def test_todo_publish_failure_does_not_rollback_approval_api(
+        self, client, db_factory, seed, monkeypatch,
+    ):
+        """Redis 发布失败不应改变成功审批请求及其已提交的状态。"""
+        env = await _base_env(client)
+        appr_h = await _approver_headers(client, db_factory, seed)
+        tpl_id = await _create_template(client, env, approval_roles=[seed["roles"]["approver"]])
+        ticket = await _submit(client, env["ops_h"], tpl_id)
+
+        async def publish_failure(user_ids: list[int]):
+            raise RuntimeError("redis unavailable")
+
+        monkeypatch.setattr(todo_events, "publish_for_users", publish_failure)
+        response = await client.post(
+            f"/api/v1/tickets/{ticket['id']}/approve",
+            json={"action": "approve"}, headers=appr_h,
+        )
+        assert response.json()["data"] == {"status": "queued", "current_step": 0}
+        detail = (await client.get(f"/api/v1/tickets/{ticket['id']}", headers=env["ops_h"])).json()["data"]
+        assert detail["status"] == "queued"
+        assert [(item["step_order"], item["action"]) for item in detail["approvals"]] == [(1, "approve")]
 
     async def test_reject_requires_comment_and_closes(self, client, db_factory, seed):
         """驳回意见必填 40001；驳回后 rejected 终态 + 通知创建人。"""
