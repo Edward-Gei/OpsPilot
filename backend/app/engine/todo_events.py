@@ -1,6 +1,8 @@
 """用户待办变更事件的发号与回放。"""
 import json
 
+from redis.exceptions import WatchError
+
 from app.core import redis as redis_mod
 
 _EVENT_LIST_MAX = 2000
@@ -14,15 +16,28 @@ async def publish_for_users(user_ids: list[int]) -> dict[int, int]:
         r = redis_mod.redis_client
         seq_key = redis_mod.KEY_TODO_EVENT_SEQ.format(user_id=user_id)
         list_key = redis_mod.KEY_TODO_EVENT_LIST.format(user_id=user_id)
-        seq = await r.incr(seq_key)
-        payload = json.dumps({"seq": seq, "kind": "todo.changed"})
-        pipe = r.pipeline()
-        pipe.rpush(list_key, payload)
-        pipe.ltrim(list_key, -_EVENT_LIST_MAX, -1)
-        pipe.expire(list_key, _EVENT_TTL)
-        pipe.expire(seq_key, _EVENT_TTL)
-        await pipe.execute()
-        sequences[user_id] = seq
+        while True:
+            pipe = r.pipeline()
+            try:
+                await pipe.watch(seq_key)
+                current = await pipe.get(seq_key)
+                seq = int(current or 0) + 1
+                pipe.multi()
+                pipe.incr(seq_key)
+                pipe.rpush(
+                    list_key,
+                    json.dumps({"seq": seq, "kind": "todo.changed"}),
+                )
+                pipe.ltrim(list_key, -_EVENT_LIST_MAX, -1)
+                pipe.expire(seq_key, _EVENT_TTL)
+                pipe.expire(list_key, _EVENT_TTL)
+                await pipe.execute()
+                sequences[user_id] = seq
+                break
+            except WatchError:
+                continue
+            finally:
+                await pipe.reset()
     return sequences
 
 
@@ -39,4 +54,4 @@ async def fetch_since(user_id: int, since_seq: int) -> list[dict]:
             continue
         if event.get("seq", 0) > since_seq:
             events.append(event)
-    return events
+    return sorted(events, key=lambda event: event.get("seq", 0))
