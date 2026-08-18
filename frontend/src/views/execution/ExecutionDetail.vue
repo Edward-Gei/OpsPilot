@@ -31,7 +31,26 @@ const executionId = Number(route.params.id)
 
 // ---------- 详情状态 ----------
 const detail = ref<execApi.ExecutionDetail | null>(null)
-const loading = ref(false)
+const detailLoading = ref(false)
+const showSkeleton = ref(false)
+const SKELETON_DELAY = 160
+let skeletonTimer: number | null = null
+
+function clearSkeletonTimer() {
+  if (skeletonTimer !== null) {
+    window.clearTimeout(skeletonTimer)
+    skeletonTimer = null
+  }
+}
+
+function beginDetailLoading() {
+  clearSkeletonTimer()
+  detailLoading.value = true
+  showSkeleton.value = false
+  skeletonTimer = window.setTimeout(() => {
+    if (detailLoading.value) showSkeleton.value = true
+  }, SKELETON_DELAY)
+}
 
 /** 终态判定：终态后关闭实时通道，不再重连 */
 const isFinished = computed(() =>
@@ -40,13 +59,15 @@ const isFinished = computed(() =>
 
 /** 初始加载 / 断线恢复：REST 拉全量详情（含步骤列表） */
 async function loadDetail() {
-  loading.value = true
+  beginDetailLoading()
   try {
     const d = await execApi.getExecution(executionId)
     detail.value = d
     void fetchAllSegments()
   } finally {
-    loading.value = false
+    detailLoading.value = false
+    showSkeleton.value = false
+    clearSkeletonTimer()
   }
 }
 
@@ -76,6 +97,27 @@ interface LogSegment {
 }
 const segments = ref<LogSegment[]>([])
 const logBox = ref<HTMLElement | null>(null)
+const logReady = ref(false)
+const logFetchError = ref(false)
+
+type LogPhase = 'connecting' | 'waiting' | 'streaming' | 'retrying' | 'empty' | 'complete'
+
+const hasLogLines = computed(() => segments.value.some((segment) => segment.lines.length > 0))
+const logPhase = computed<LogPhase>(() => {
+  if (logFetchError.value) return 'retrying'
+  if (!logReady.value) return 'connecting'
+  if (hasLogLines.value) return isFinished.value ? 'complete' : 'streaming'
+  return isFinished.value ? 'empty' : 'waiting'
+})
+const logPhaseText = computed(() => ({
+  connecting: '正在连接执行日志',
+  waiting: '等待执行输出',
+  streaming: '日志同步中',
+  retrying: '日志连接暂时中断，正在重试',
+  empty: '本次执行暂无日志输出',
+  complete: '日志已加载完成',
+})[logPhase.value])
+const logPhaseBusy = computed(() => logPhase.value === 'connecting' || logPhase.value === 'retrying')
 // 客户端合并流总行数上限（超出从最早段头部丢弃，防止长任务撑爆内存）
 const LOG_CAP = 20000
 // 拉取在飞标志：轮询 tick 遇上一轮未完成时跳过，避免慢网下请求堆叠
@@ -109,8 +151,8 @@ function ensureSegment(step: { step_order: number; step_name: string }): LogSegm
   return seg
 }
 
-/** 单段增量拉取直至 eof（每请求 2000 行；失败静默跳过，下轮重试） */
-async function fetchSegment(seg: LogSegment): Promise<void> {
+/** 单段增量拉取直至 eof（每请求 2000 行；失败保留已有内容，下轮重试） */
+async function fetchSegment(seg: LogSegment): Promise<boolean> {
   try {
     while (!abortFetch) {
       const data = await execApi.getExecutionLogs(executionId, {
@@ -125,9 +167,11 @@ async function fetchSegment(seg: LogSegment): Promise<void> {
       seg.eof = data.eof
       if (data.eof) break
     }
+    return true
   } catch {
     // 本轮未确认读到文件尾：重置 eof，禁止上层用陈旧 eof 置 done 而永久跳过收尾日志
     seg.eof = false
+    return false
   }
 }
 
@@ -154,6 +198,7 @@ async function fetchAllSegments(): Promise<void> {
     return
   }
   logFetching = true
+  let roundFailed = false
   try {
     for (const step of detail.value.steps) {
       if (abortFetch) return
@@ -163,10 +208,15 @@ async function fetchAllSegments(): Promise<void> {
       // 拉取前捕获终态判定：保证 done 仅在"终态之后完整读到文件尾"时置位，
       // 避免 await 期间状态被事件推进导致用旧 eof 误判截尾
       const wasFinal = STEP_FINAL.includes(step.status)
-      await fetchSegment(seg)
+      const fetched = await fetchSegment(seg)
+      if (!fetched) roundFailed = true
       if (wasFinal && seg.eof) seg.done = true
     }
   } finally {
+    if (!abortFetch) {
+      logReady.value = true
+      logFetchError.value = roundFailed
+    }
     logFetching = false
     // 在飞期间有补拉请求被拦：立即重跑一轮，保证终态收尾日志不丢
     if (refetchQueued) {
@@ -368,6 +418,7 @@ async function onControl(op: execApi.ControlOp) {
 onMounted(async () => {
   // 先注册 resize 监听：若加载期间用户离开，卸载时的 remove 才必然配对（fitLogHeight 自带空值守卫）
   window.addEventListener('resize', fitLogHeight)
+  requestAnimationFrame(fitLogHeight)
   await loadDetail()
   // 详情渲染完成后再测量日志框顶部位置计算默认高度
   requestAnimationFrame(fitLogHeight)
@@ -385,6 +436,58 @@ onBeforeUnmount(() => {
 
 <template>
   <div>
+    <!-- 首屏骨架：延迟显示避免快速请求闪屏，同时占住最终布局高度 -->
+    <div
+      v-if="!detail"
+      class="detail-loading-shell"
+      :class="{ 'is-visible': showSkeleton }"
+      aria-busy="true"
+      aria-label="正在加载执行详情"
+    >
+      <div class="op-hero op-hero--indigo detail-hero detail-skeleton-hero">
+        <div class="detail-skeleton-icon"><ThunderboltOutlined /></div>
+        <div class="hero-main detail-skeleton-main">
+          <div class="detail-skeleton-row">
+            <span class="detail-skeleton-block detail-skeleton-title" />
+            <span class="detail-skeleton-block detail-skeleton-pill" />
+          </div>
+          <span class="detail-skeleton-block detail-skeleton-sub" />
+        </div>
+        <div class="hero-actions detail-skeleton-actions">
+          <span class="detail-skeleton-block detail-skeleton-button" />
+          <span class="detail-skeleton-block detail-skeleton-button detail-skeleton-button-short" />
+        </div>
+      </div>
+
+      <div class="step-flow detail-skeleton-flow" aria-hidden="true">
+        <span class="detail-skeleton-block detail-skeleton-step" />
+        <span class="detail-skeleton-block detail-skeleton-step" />
+        <span class="detail-skeleton-block detail-skeleton-step" />
+      </div>
+
+      <div class="log-panel detail-skeleton-log">
+        <div class="log-head">
+          <span>执行日志（全部步骤）</span>
+          <span class="log-phase"><LoadingOutlined spin />正在加载执行概览</span>
+        </div>
+        <div
+          ref="logBox"
+          class="log-body detail-skeleton-log-body"
+          :style="{ height: logHeight + 'px' }"
+          aria-hidden="true"
+        >
+          <div class="detail-skeleton-lines">
+            <span class="detail-skeleton-block" />
+            <span class="detail-skeleton-block" />
+            <span class="detail-skeleton-block" />
+            <span class="detail-skeleton-block" />
+          </div>
+        </div>
+        <div class="log-resize"><span class="grip" /></div>
+      </div>
+    </div>
+
+    <template v-else>
     <!-- 头部：返回 + 概要 + 控制按钮 -->
     <div class="op-hero op-hero--indigo detail-hero">
       <div class="op-hero-icon"><ThunderboltOutlined /></div>
@@ -474,6 +577,11 @@ onBeforeUnmount(() => {
     <div class="log-panel">
       <div class="log-head">
         <span>执行日志（全部步骤）</span>
+        <span class="log-phase" :class="`is-${logPhase}`">
+          <LoadingOutlined v-if="logPhaseBusy" spin />
+          <span v-else class="log-phase-dot" />
+          {{ logPhaseText }}
+        </span>
       </div>
       <div
         ref="logBox"
@@ -481,6 +589,25 @@ onBeforeUnmount(() => {
         :style="{ height: logHeight + 'px' }"
         @scroll="onLogScroll"
       >
+        <div v-if="logPhase === 'connecting'" class="log-state">
+          <LoadingOutlined spin />
+          <span>正在连接执行日志</span>
+        </div>
+        <div v-else-if="logPhase === 'waiting'" class="log-state">
+          <span class="log-state-dot" />
+          <span>等待执行输出</span>
+        </div>
+        <div v-else-if="logPhase === 'retrying' && !hasLogLines" class="log-state log-state-error">
+          <LoadingOutlined spin />
+          <span>日志连接暂时中断，正在重试</span>
+        </div>
+        <div v-else-if="logPhase === 'empty'" class="log-state">
+          <span>本次执行暂无日志输出</span>
+        </div>
+        <template v-else>
+        <div v-if="logPhase === 'retrying'" class="log-retry-banner">
+          <LoadingOutlined spin />日志连接暂时中断，正在重试，已加载日志仍保留
+        </div>
         <template v-for="seg in segments" :key="seg.step_order">
           <div class="log-sep" :data-step="seg.step_order">
             ━━━ 步骤 {{ seg.step_order }} · {{ seg.step_name }} ━━━
@@ -488,16 +615,109 @@ onBeforeUnmount(() => {
           <div v-if="seg.truncated" class="log-trunc">…较早日志已省略…</div>
           <div v-for="(line, i) in seg.lines" :key="seg.dropped + i" class="log-line">{{ line }}</div>
         </template>
-        <div v-if="!segments.length" class="log-empty">暂无日志输出</div>
+        </template>
       </div>
       <div class="log-resize" title="拖拽调整日志区高度" @mousedown="onResizeStart">
         <span class="grip" />
       </div>
     </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
+.detail-loading-shell {
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+.detail-loading-shell.is-visible {
+  opacity: 1;
+}
+.detail-skeleton-hero {
+  min-height: 104px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+}
+.detail-skeleton-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-3);
+  background: var(--bg-hover);
+  flex: none;
+}
+.detail-skeleton-main {
+  flex: 1;
+}
+.detail-skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.detail-skeleton-block {
+  display: block;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--bg-hover), var(--bg-card), var(--bg-hover));
+  background-size: 220% 100%;
+  animation: detail-skeleton-shimmer 1.7s ease-in-out infinite;
+}
+.detail-skeleton-title {
+  width: 184px;
+  height: 23px;
+}
+.detail-skeleton-pill {
+  width: 70px;
+  height: 22px;
+  border-radius: 999px;
+}
+.detail-skeleton-sub {
+  width: min(520px, 72%);
+  height: 13px;
+  margin-top: 8px;
+}
+.detail-skeleton-actions {
+  min-width: 164px;
+}
+.detail-skeleton-button {
+  width: 76px;
+  height: 31px;
+}
+.detail-skeleton-button-short {
+  width: 62px;
+}
+.detail-skeleton-flow {
+  min-height: 92px;
+  gap: 10px;
+}
+.detail-skeleton-step {
+  height: 48px;
+  flex: 1;
+}
+.detail-skeleton-log-body {
+  height: 440px;
+  display: flex;
+  align-items: flex-start;
+}
+.detail-skeleton-lines {
+  width: min(560px, 78%);
+  display: grid;
+  gap: 12px;
+}
+.detail-skeleton-lines .detail-skeleton-block {
+  height: 10px;
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0.08), rgba(125, 211, 252, 0.2), rgba(148, 163, 184, 0.08));
+  background-size: 220% 100%;
+}
+.detail-skeleton-lines .detail-skeleton-block:nth-child(2) { width: 84%; }
+.detail-skeleton-lines .detail-skeleton-block:nth-child(3) { width: 68%; }
+.detail-skeleton-lines .detail-skeleton-block:nth-child(4) { width: 48%; }
+@keyframes detail-skeleton-shimmer {
+  0% { background-position: 150% 0; }
+  100% { background-position: -50% 0; }
+}
 .detail-hero {
   align-items: center;
 }
@@ -599,6 +819,11 @@ onBeforeUnmount(() => {
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .detail-loading-shell,
+  .detail-skeleton-block {
+    transition: none;
+    animation: none;
+  }
   .step-node.is-running .node-dot {
     animation: none;
   }
@@ -671,6 +896,35 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--border-1, #e5e7eb);
   font-size: 13px;
 }
+.log-phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.log-phase.is-streaming .log-phase-dot,
+.log-phase.is-complete .log-phase-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent);
+}
+.log-phase.is-waiting .log-phase-dot,
+.log-phase.is-empty .log-phase-dot {
+  background: var(--text-3);
+}
+.log-phase.is-retrying {
+  color: var(--error);
+}
+.log-phase-dot,
+.log-state-dot {
+  width: 7px;
+  height: 7px;
+  display: inline-block;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent);
+}
 .log-body {
   overflow: auto;
   background: #0f172a;
@@ -679,6 +933,37 @@ onBeforeUnmount(() => {
   font-size: 12px;
   padding: 10px 12px;
   position: relative;
+}
+.log-state {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #8fa2b8;
+  text-align: center;
+}
+.log-state .anticon {
+  color: #7dd3fc;
+  font-size: 18px;
+}
+.log-state-error {
+  color: #fda4af;
+}
+.log-state-error .anticon {
+  color: #fb7185;
+}
+.log-retry-banner {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: -2px 0 8px;
+  padding: 5px 8px;
+  border-left: 2px solid #fb7185;
+  color: #fda4af;
+  background: rgba(251, 113, 133, 0.08);
+  font-family: 'Segoe UI', sans-serif;
+  font-size: 11px;
 }
 .log-line {
   white-space: pre-wrap;
