@@ -12,6 +12,7 @@
 """
 from sqlalchemy import select
 
+from app.api.v1 import tickets as ticket_api
 from app.core.redis import EXEC_QUEUE
 from app.engine import todo_events
 from app.models.auth import User, UserRole
@@ -348,6 +349,48 @@ class TestSubmit:
         resp = await client.post("/api/v1/tickets", headers=env["ops_h"],
                                  json={"template_id": limited, "params": {}})
         assert resp.json()["code"] == 40302
+
+
+class TestTodoEventPolling:
+    """待办角标的用户事件回放与长轮询。"""
+
+    async def test_todo_events_replay_only_current_user_and_require_approve_perm(
+        self, client, db_factory, seed,
+    ):
+        env = await _base_env(client)
+        approver_headers = await _approver_headers(client, db_factory, seed)
+        async with db_factory() as session:
+            approver_id = (await session.execute(
+                select(User.id).where(User.username == "appr1")
+            )).scalar_one()
+
+        await todo_events.publish_for_users([approver_id, seed["users"]["newbie"]])
+
+        response = await client.get(
+            "/api/v1/tickets/todo/events", params={"since_seq": 0}, headers=approver_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["data"] == {
+            "events": [{"seq": 1, "kind": "todo.changed"}], "last_seq": 1,
+        }
+
+        response = await client.get(
+            "/api/v1/tickets/todo/events", params={"since_seq": 0}, headers=env["ops_h"],
+        )
+        assert response.json()["code"] == 40301
+
+    async def test_todo_events_timeout_returns_empty_events_and_original_sequence(
+        self, client, db_factory, seed, monkeypatch,
+    ):
+        await _base_env(client)
+        approver_headers = await _approver_headers(client, db_factory, seed)
+        monkeypatch.setattr(ticket_api, "_TODO_EVENT_POLL_TIMEOUT", 0, raising=False)
+
+        response = await client.get(
+            "/api/v1/tickets/todo/events", params={"since_seq": 7}, headers=approver_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["data"] == {"events": [], "last_seq": 7}
 
 
 class TestApproveAndCancel:

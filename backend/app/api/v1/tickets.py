@@ -6,6 +6,7 @@
 
 注意路由顺序：/templates 静态路径必须先于 /{ticket_id} 动态路径注册。
 """
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -23,6 +24,9 @@ from app.services import parameter_prepare_service, ticket_service
 
 router = APIRouter(prefix="/tickets", tags=["工单"])
 logger = logging.getLogger("opspilot.api.tickets")
+
+_TODO_EVENT_POLL_TIMEOUT = 30
+_TODO_EVENT_POLL_INTERVAL = 1.0
 
 
 async def _publish_todo_changes(user_ids: list[int]) -> None:
@@ -176,6 +180,25 @@ async def todo_tickets(
     names = await _creator_name_map(session, tickets)
     return ok({"items": [_ticket_brief(t, names) for t in tickets], "total": total,
                "page": page, "page_size": page_size})
+
+
+@router.get("/todo/events", summary="待办变更事件")
+async def poll_todo_events(
+    session: DbSession,
+    actor: User = Depends(require_perm("ticket:approve")),
+    since_seq: int = Query(0, ge=0),
+) -> dict:
+    """回放当前用户待办事件；无新事件时最长等待 30 秒。"""
+    # 长轮询只访问 Redis，先归还数据库连接，避免请求占满连接池。
+    await session.close()
+    deadline = asyncio.get_running_loop().time() + _TODO_EVENT_POLL_TIMEOUT
+    while True:
+        events = await todo_events.fetch_since(actor.id, since_seq)
+        if events:
+            return ok({"events": events, "last_seq": events[-1]["seq"]})
+        if asyncio.get_running_loop().time() >= deadline:
+            return ok({"events": [], "last_seq": since_seq})
+        await asyncio.sleep(_TODO_EVENT_POLL_INTERVAL)
 
 
 # ---------- 详情 / 审批 / 撤回 ----------
