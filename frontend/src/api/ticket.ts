@@ -198,12 +198,14 @@ export function todoTickets(params: { page?: number; page_size?: number } = {}) 
 }
 
 /** 待办角标事件长轮询（服务端最长挂起 30 秒）。 */
-export function pollTodoEvents(sinceSeq: number) {
+export function pollTodoEvents(sinceSeq: number, signal?: AbortSignal) {
   return request<{ events: TodoEvent[]; last_seq: number }>({
     url: '/tickets/todo/events',
     method: 'get',
     params: { since_seq: sinceSeq },
     timeout: 40000,
+    signal,
+    silentCancel: true,
   })
 }
 

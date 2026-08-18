@@ -53,20 +53,22 @@ interface MenuItem {
 
 // 待办审批角标：路由切换时刷新（审批/提交后进其他页能看到最新计数，FLOW-06）
 const todoCount = ref(0)
+let todoCountRequestSeq = 0
 
 /** 拉取待我审批总数（page_size=1 只取 total）；无审批权限不请求 */
 async function loadTodoCount() {
   if (!userStore.hasPerm('ticket:approve')) return
+  const requestSeq = ++todoCountRequestSeq
   try {
     const data = await todoTickets({ page: 1, page_size: 1 })
-    if (todoPollAbort) return
+    if (requestSeq !== todoCountRequestSeq || todoPollAbort?.signal.aborted) return
     todoCount.value = data.total
   } catch {
     /* 角标拉取失败静默，不影响布局 */
   }
 }
 
-let todoPollAbort = false
+let todoPollAbort: AbortController | null = null
 let todoPolling = false
 let lastTodoSeq = 0
 
@@ -74,25 +76,26 @@ let lastTodoSeq = 0
 async function startTodoEventPoll() {
   if (!userStore.hasPerm('ticket:approve') || todoPolling) return
   todoPolling = true
-  todoPollAbort = false
+  todoPollAbort = new AbortController()
   try {
-    while (!todoPollAbort) {
+    while (!todoPollAbort.signal.aborted) {
       try {
-        const data = await pollTodoEvents(lastTodoSeq)
-        if (todoPollAbort) return
+        const data = await pollTodoEvents(lastTodoSeq, todoPollAbort.signal)
+        if (todoPollAbort.signal.aborted) return
         lastTodoSeq = data.last_seq // 服务端会在游标失效时回退，必须直接覆盖。
         if (data.events.length) {
           await loadTodoCount()
-          if (todoPollAbort) return
+          if (todoPollAbort.signal.aborted) return
         }
       } catch {
-        if (todoPollAbort) return
+        if (todoPollAbort.signal.aborted) return
         await new Promise((resolve) => window.setTimeout(resolve, 3000))
-        if (todoPollAbort) return
+        if (todoPollAbort.signal.aborted) return
       }
     }
   } finally {
     todoPolling = false
+    todoPollAbort = null
   }
 }
 
@@ -180,7 +183,7 @@ function onMenuClick(item: MenuItem) {
 
 onMounted(loadTodoCount)
 onMounted(() => void startTodoEventPoll())
-onUnmounted(() => (todoPollAbort = true))
+onUnmounted(() => todoPollAbort?.abort())
 watch(() => route.path, (path) => {
   loadTodoCount()
   if (path.startsWith('/job/templates')) templateMenuOpen.value = true
