@@ -23,7 +23,7 @@ import {
   ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons-vue'
-import { todoTickets } from '@/api/ticket'
+import { pollTodoEvents, todoTickets } from '@/api/ticket'
 import {
   getUnreadCount,
   listNotifications,
@@ -62,6 +62,36 @@ async function loadTodoCount() {
     todoCount.value = data.total
   } catch {
     /* 角标拉取失败静默，不影响布局 */
+  }
+}
+
+let todoPollAbort: AbortController | null = null
+let todoPolling = false
+let lastTodoSeq = 0
+
+/** 待办角标事件主通道：串行长轮询，异常后退避重试。 */
+async function startTodoEventPoll() {
+  if (!userStore.hasPerm('ticket:approve') || todoPolling) return
+  todoPolling = true
+  todoPollAbort = new AbortController()
+  try {
+    while (!todoPollAbort.signal.aborted) {
+      try {
+        const data = await pollTodoEvents(lastTodoSeq, todoPollAbort.signal)
+        if (todoPollAbort.signal.aborted) return
+        lastTodoSeq = data.last_seq // 服务端会在游标失效时回退，必须直接覆盖。
+        if (data.events.length) {
+          await loadTodoCount()
+        }
+      } catch {
+        if (!todoPollAbort.signal.aborted) {
+          await new Promise((resolve) => window.setTimeout(resolve, 3000))
+        }
+      }
+    }
+  } finally {
+    todoPolling = false
+    todoPollAbort = null
   }
 }
 
@@ -148,6 +178,8 @@ function onMenuClick(item: MenuItem) {
 }
 
 onMounted(loadTodoCount)
+onMounted(() => void startTodoEventPoll())
+onUnmounted(() => todoPollAbort?.abort())
 watch(() => route.path, (path) => {
   loadTodoCount()
   if (path.startsWith('/job/templates')) templateMenuOpen.value = true

@@ -57,6 +57,11 @@ export interface TicketBrief {
   created_at: string | null
 }
 
+export interface TodoEvent {
+  seq: number
+  kind: 'todo.changed'
+}
+
 /** 提交时固化的作业主机快照（登录认证随关联凭据，快照不含账号信息） */
 export interface JobHostSnap {
   id: number
@@ -190,6 +195,17 @@ export function listTickets(params: TicketQuery) {
 /** 待我审批（total 兼作菜单角标计数，FLOW-06） */
 export function todoTickets(params: { page?: number; page_size?: number } = {}) {
   return request<PageResult<TicketBrief>>({ url: '/tickets/todo', method: 'get', params })
+}
+
+/** 待办角标事件长轮询（服务端最长挂起 30 秒）。 */
+export function pollTodoEvents(sinceSeq: number, signal?: AbortSignal) {
+  return request<{ events: TodoEvent[]; last_seq: number }>({
+    url: '/tickets/todo/events',
+    method: 'get',
+    params: { since_seq: sinceSeq },
+    timeout: 40000,
+    signal,
+  })
 }
 
 export function getTicket(id: number) {
