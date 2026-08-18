@@ -404,230 +404,179 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- C 提单趋势 + 状态分布/系统状态 -->
-    <div v-if="initialLoading && showMainSkeleton" class="row-main dashboard-skeleton-row">
-      <div v-if="canViewTicket" class="op-card dashboard-skeleton-card">
-        <div class="card-head">
-          <div>
+    <!-- C/D 左右两列：左侧卡片连续排列，右侧卡片独立排列 -->
+    <div class="dashboard-content-layout">
+      <div class="dashboard-left-stack">
+        <template v-if="initialLoading">
+          <div v-if="canViewTicket" class="op-card dashboard-skeleton-card">
+            <div class="card-head">
+              <div>
+                <div class="dashboard-skeleton-line dashboard-skeleton-title" />
+                <div class="dashboard-skeleton-line dashboard-skeleton-subtitle" />
+              </div>
+              <div class="dashboard-skeleton-line dashboard-skeleton-action" />
+            </div>
+            <div class="dashboard-skeleton-chart" />
+          </div>
+          <div v-if="canViewExecution" class="op-card exec-card dashboard-skeleton-card">
+            <div class="card-head">
+              <div>
+                <div class="dashboard-skeleton-line dashboard-skeleton-title" />
+                <div class="dashboard-skeleton-line dashboard-skeleton-subtitle" />
+              </div>
+              <div class="dashboard-skeleton-line dashboard-skeleton-action" />
+            </div>
+            <div class="dashboard-skeleton-list">
+              <div v-for="slot in 4" :key="'exec-loading-' + slot" class="dashboard-skeleton-item">
+                <span class="dashboard-skeleton-line dashboard-skeleton-dot" />
+                <span class="dashboard-skeleton-line dashboard-skeleton-wide" />
+                <span class="dashboard-skeleton-line dashboard-skeleton-short" />
+              </div>
+            </div>
+          </div>
+        </template>
+        <template v-else>
+          <div v-if="summary?.ticket" class="op-card">
+            <div class="card-head">
+              <div>
+                <div class="op-card-title">提单数趋势</div>
+                <div class="op-card-sub">
+                  {{ { day: '近 30 天', week: '近 12 周', month: '近 12 个月', year: '近 5 年' }[granularity] }}按提交时间统计
+                </div>
+              </div>
+              <a-segmented
+                v-model:value="granularity"
+                :options="[
+                  { label: '天', value: 'day' },
+                  { label: '周', value: 'week' },
+                  { label: '月', value: 'month' },
+                  { label: '年', value: 'year' },
+                ]"
+                @change="loadTrend"
+              />
+            </div>
+            <div class="trend-chart-shell">
+              <div ref="trendRef" class="trend-chart" />
+              <div v-if="trendLoading" class="trend-loading" role="status" aria-label="正在加载提单趋势">
+                <LoadingOutlined spin />
+              </div>
+            </div>
+          </div>
+          <div v-if="summary?.execution" class="op-card exec-card">
+            <div class="card-head">
+              <div>
+                <div class="op-card-title">执行动态</div>
+                <div class="op-card-sub">最近执行记录 · 30 秒自动刷新</div>
+              </div>
+              <a class="more-link" @click="router.push('/executions')">全部执行 →</a>
+            </div>
+            <div v-if="summary.execution.recent.length" class="exec-list">
+              <div
+                v-for="e in summary.execution.recent"
+                :key="e.id"
+                class="exec-row"
+                @click="router.push('/executions/' + e.id)"
+              >
+                <span class="dot" :class="e.status" />
+                <div class="exec-main">
+                  <b>{{ e.ticket_no }} · {{ e.title }}</b>
+                  <span>{{ e.job_host_name || '—' }} · {{ e.total_steps }} 步骤 · {{ e.creator_name }}</span>
+                </div>
+                <div class="exec-meta">
+                  <span class="exec-time">{{ fmtTime(e.created_at) }}</span>
+                  <span class="exec-dur">{{ execDuration(e.started_at, e.finished_at) }}</span>
+                  <a-tag :color="execStatusMeta[e.status as keyof typeof execStatusMeta]?.color">
+                    {{ execStatusMeta[e.status as keyof typeof execStatusMeta]?.text || e.status }}
+                  </a-tag>
+                </div>
+              </div>
+            </div>
+            <div v-else class="exec-empty">
+              <a-empty description="暂无执行记录" :image-style="{ height: '72px' }" />
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <div class="dashboard-right-stack">
+        <template v-if="initialLoading">
+          <div v-if="canViewTicket" class="op-card dashboard-skeleton-card">
             <div class="dashboard-skeleton-line dashboard-skeleton-title" />
             <div class="dashboard-skeleton-line dashboard-skeleton-subtitle" />
+            <div class="dashboard-skeleton-pie" />
+            <div class="dashboard-skeleton-legend">
+              <span v-for="slot in 4" :key="'legend-loading-' + slot" class="dashboard-skeleton-line" />
+            </div>
           </div>
-          <div class="dashboard-skeleton-line dashboard-skeleton-action" />
-        </div>
-        <div class="dashboard-skeleton-chart" />
-      </div>
-      <div v-else-if="canViewExecution" class="op-card exec-card dashboard-skeleton-card">
-        <div class="card-head">
-          <div>
+          <div v-if="showMainSkeleton" class="op-card dashboard-skeleton-card">
             <div class="dashboard-skeleton-line dashboard-skeleton-title" />
             <div class="dashboard-skeleton-line dashboard-skeleton-subtitle" />
-          </div>
-          <div class="dashboard-skeleton-line dashboard-skeleton-action" />
-        </div>
-        <div class="dashboard-skeleton-list">
-          <div v-for="slot in 4" :key="`exec-loading-${slot}`" class="dashboard-skeleton-item">
-            <span class="dashboard-skeleton-line dashboard-skeleton-dot" />
-            <span class="dashboard-skeleton-line dashboard-skeleton-wide" />
-            <span class="dashboard-skeleton-line dashboard-skeleton-short" />
-          </div>
-        </div>
-      </div>
-
-      <div class="side-col">
-        <div v-if="canViewTicket" class="op-card dashboard-skeleton-card">
-          <div class="dashboard-skeleton-line dashboard-skeleton-title" />
-          <div class="dashboard-skeleton-line dashboard-skeleton-subtitle" />
-          <div class="dashboard-skeleton-pie" />
-          <div class="dashboard-skeleton-legend">
-            <span v-for="slot in 4" :key="`legend-loading-${slot}`" class="dashboard-skeleton-line" />
-          </div>
-        </div>
-        <div class="op-card dashboard-skeleton-card">
-          <div class="dashboard-skeleton-line dashboard-skeleton-title" />
-          <div class="dashboard-skeleton-line dashboard-skeleton-subtitle" />
-          <div class="dashboard-skeleton-services">
-            <span v-for="slot in 3" :key="`service-loading-${slot}`" class="dashboard-skeleton-line" />
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="row-main" v-else-if="summary?.execution || summary?.ticket">
-      <div v-if="summary?.ticket" class="op-card">
-        <div class="card-head">
-          <div>
-            <div class="op-card-title">提单数趋势</div>
-            <div class="op-card-sub">
-              {{ { day: '近 30 天', week: '近 12 周', month: '近 12 个月', year: '近 5 年' }[granularity] }}按提交时间统计
+            <div class="dashboard-skeleton-services">
+              <span v-for="slot in 3" :key="'service-loading-' + slot" class="dashboard-skeleton-line" />
             </div>
           </div>
-          <a-segmented
-            v-model:value="granularity"
-            :options="[
-              { label: '天', value: 'day' },
-              { label: '周', value: 'week' },
-              { label: '月', value: 'month' },
-              { label: '年', value: 'year' },
-            ]"
-            @change="loadTrend"
-          />
-        </div>
-        <div class="trend-chart-shell">
-          <div ref="trendRef" class="trend-chart" />
-          <div v-if="trendLoading" class="trend-loading" role="status" aria-label="正在加载提单趋势">
-            <LoadingOutlined spin />
-          </div>
-        </div>
-      </div>
-
-      <div v-else-if="summary?.execution" class="op-card exec-card">
-        <div class="card-head">
-          <div>
-            <div class="op-card-title">执行动态</div>
-            <div class="op-card-sub">最近执行记录 · 30 秒自动刷新</div>
-          </div>
-          <a class="more-link" @click="router.push('/executions')">全部执行 →</a>
-        </div>
-        <div v-if="summary.execution.recent.length" class="exec-list">
-          <div
-            v-for="e in summary.execution.recent"
-            :key="e.id"
-            class="exec-row"
-            @click="router.push(`/executions/${e.id}`)"
-          >
-            <span class="dot" :class="e.status" />
-            <div class="exec-main">
-              <b>{{ e.ticket_no }} · {{ e.title }}</b>
-              <span>{{ e.job_host_name || '—' }} · {{ e.total_steps }} 步骤 · {{ e.creator_name }}</span>
-            </div>
-            <div class="exec-meta">
-              <span class="exec-time">{{ fmtTime(e.created_at) }}</span>
-              <span class="exec-dur">{{ execDuration(e.started_at, e.finished_at) }}</span>
-              <a-tag :color="execStatusMeta[e.status as keyof typeof execStatusMeta]?.color">
-                {{ execStatusMeta[e.status as keyof typeof execStatusMeta]?.text || e.status }}
-              </a-tag>
-            </div>
-          </div>
-        </div>
-        <div v-else class="exec-empty">
-          <a-empty description="暂无执行记录" :image-style="{ height: '72px' }" />
-        </div>
-      </div>
-
-      <div class="side-col">
-        <div v-if="summary?.ticket" class="op-card">
-          <div class="op-card-title">工单状态分布</div>
-          <div class="op-card-sub">全部工单 {{ ticketTotal }} 笔按状态归组</div>
-          <div v-if="ticketTotal" class="pie-wrap">
-            <div ref="pieRef" class="pie-chart" />
-            <div class="pie-center">
-              <b>{{ ticketTotal }}</b>
-              <span>工单总数</span>
-            </div>
-          </div>
-          <a-empty v-else description="暂无工单" :image-style="{ height: '56px' }" style="margin: 24px 0" />
-          <div v-if="ticketTotal" class="pie-legend">
-            <div v-for="d in distData" :key="d.name" class="legend-item">
-              <span class="legend-dot" :style="{ background: d.itemStyle.color }" />
-              <span class="legend-name">{{ d.name }}</span>
-              <b>{{ d.value }}</b>
-            </div>
-          </div>
-        </div>
-
-        <div class="op-card">
-          <div class="op-card-title">系统状态</div>
-          <div class="op-card-sub">nginx → api → MySQL / Redis 全链路探活</div>
-          <div class="svc-row">
-            <div v-for="svc in services" :key="svc.name" class="svc-mini">
-              <span class="svc-abbr" :style="{ background: svc.grad }">{{ svc.abbr }}</span>
-              <span class="svc-name">{{ svc.name }}</span>
-              <span class="pill" :class="apiStatus === 'up' ? 'ok' : apiStatus === 'down' ? 'bad' : ''">
-                {{ apiStatus === 'checking' ? '检测中' : apiStatus === 'up' ? '正常' : '异常' }}
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- D 执行动态 + 快捷入口 -->
-    <div v-if="initialLoading && canViewExecution && canViewTicket" class="row-main dashboard-skeleton-row">
-      <div class="op-card exec-card dashboard-skeleton-card">
-        <div class="card-head">
-          <div>
+          <div class="op-card quick-card dashboard-skeleton-card">
             <div class="dashboard-skeleton-line dashboard-skeleton-title" />
             <div class="dashboard-skeleton-line dashboard-skeleton-subtitle" />
-          </div>
-          <div class="dashboard-skeleton-line dashboard-skeleton-action" />
-        </div>
-        <div class="dashboard-skeleton-list">
-          <div v-for="slot in 4" :key="`exec-bottom-loading-${slot}`" class="dashboard-skeleton-item">
-            <span class="dashboard-skeleton-line dashboard-skeleton-dot" />
-            <span class="dashboard-skeleton-line dashboard-skeleton-wide" />
-            <span class="dashboard-skeleton-line dashboard-skeleton-short" />
-          </div>
-        </div>
-      </div>
-      <div class="op-card quick-card dashboard-skeleton-card">
-        <div class="dashboard-skeleton-line dashboard-skeleton-title" />
-        <div class="dashboard-skeleton-line dashboard-skeleton-subtitle" />
-        <div class="quick-grid dashboard-skeleton-quick-grid">
-          <div v-for="slot in 4" :key="`quick-loading-${slot}`" class="quick-item dashboard-skeleton-quick">
-            <span class="dashboard-skeleton-line dashboard-skeleton-quick-icon" />
-            <span class="dashboard-skeleton-line dashboard-skeleton-quick-label" />
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="row-main" v-else>
-      <div v-if="summary?.execution && summary?.ticket" class="op-card exec-card">
-        <div class="card-head">
-          <div>
-            <div class="op-card-title">执行动态</div>
-            <div class="op-card-sub">最近执行记录 · 30 秒自动刷新</div>
-          </div>
-          <a class="more-link" @click="router.push('/executions')">全部执行 →</a>
-        </div>
-        <div v-if="summary.execution.recent.length" class="exec-list">
-          <div
-            v-for="e in summary.execution.recent"
-            :key="e.id"
-            class="exec-row"
-            @click="router.push(`/executions/${e.id}`)"
-          >
-            <span class="dot" :class="e.status" />
-            <div class="exec-main">
-              <b>{{ e.ticket_no }} · {{ e.title }}</b>
-              <span>{{ e.job_host_name || '—' }} · {{ e.total_steps }} 步骤 · {{ e.creator_name }}</span>
-            </div>
-            <div class="exec-meta">
-              <span class="exec-time">{{ fmtTime(e.created_at) }}</span>
-              <span class="exec-dur">{{ execDuration(e.started_at, e.finished_at) }}</span>
-              <a-tag :color="execStatusMeta[e.status as keyof typeof execStatusMeta]?.color">
-                {{ execStatusMeta[e.status as keyof typeof execStatusMeta]?.text || e.status }}
-              </a-tag>
+            <div class="quick-grid dashboard-skeleton-quick-grid">
+              <div v-for="slot in 4" :key="'quick-loading-' + slot" class="quick-item dashboard-skeleton-quick">
+                <span class="dashboard-skeleton-line dashboard-skeleton-quick-icon" />
+                <span class="dashboard-skeleton-line dashboard-skeleton-quick-label" />
+              </div>
             </div>
           </div>
-        </div>
-        <div v-else class="exec-empty">
-          <a-empty description="暂无执行记录" :image-style="{ height: '72px' }" />
-        </div>
-      </div>
+        </template>
+        <template v-else>
+          <div v-if="summary?.ticket" class="op-card">
+            <div class="op-card-title">工单状态分布</div>
+            <div class="op-card-sub">全部工单 {{ ticketTotal }} 笔按状态归组</div>
+            <div v-if="ticketTotal" class="pie-wrap">
+              <div ref="pieRef" class="pie-chart" />
+              <div class="pie-center">
+                <b>{{ ticketTotal }}</b>
+                <span>工单总数</span>
+              </div>
+            </div>
+            <a-empty v-else description="暂无工单" :image-style="{ height: '56px' }" style="margin: 24px 0" />
+            <div v-if="ticketTotal" class="pie-legend">
+              <div v-for="d in distData" :key="d.name" class="legend-item">
+                <span class="legend-dot" :style="{ background: d.itemStyle.color }" />
+                <span class="legend-name">{{ d.name }}</span>
+                <b>{{ d.value }}</b>
+              </div>
+            </div>
+          </div>
 
-      <div class="op-card quick-card">
-        <div class="op-card-title">快捷入口</div>
-        <div class="op-card-sub">按你的权限展示可用功能</div>
-        <div class="quick-grid">
-          <div v-for="l in quickLinks" :key="l.path + l.label" class="quick-item" @click="router.push(l.path)">
-            <span
-              class="quick-icon"
-              :style="{ color: l.color, background: `color-mix(in srgb, ${l.color} 13%, transparent)` }"
-            >
-              <component :is="l.icon" />
-            </span>
-            <span>{{ l.label }}</span>
+          <div v-if="summary?.execution || summary?.ticket" class="op-card">
+            <div class="op-card-title">系统状态</div>
+            <div class="op-card-sub">nginx → api → MySQL / Redis 全链路探活</div>
+            <div class="svc-row">
+              <div v-for="svc in services" :key="svc.name" class="svc-mini">
+                <span class="svc-abbr" :style="{ background: svc.grad }">{{ svc.abbr }}</span>
+                <span class="svc-name">{{ svc.name }}</span>
+                <span class="pill" :class="apiStatus === 'up' ? 'ok' : apiStatus === 'down' ? 'bad' : ''">
+                  {{ apiStatus === 'checking' ? '检测中' : apiStatus === 'up' ? '正常' : '异常' }}
+                </span>
+              </div>
+            </div>
           </div>
-        </div>
+
+          <div class="op-card quick-card">
+            <div class="op-card-title">快捷入口</div>
+            <div class="op-card-sub">按你的权限展示可用功能</div>
+            <div class="quick-grid">
+              <div v-for="l in quickLinks" :key="l.path + l.label" class="quick-item" @click="router.push(l.path)">
+                <span
+                  class="quick-icon"
+                  :style="{ color: l.color, background: `color-mix(in srgb, ${l.color} 13%, transparent)` }"
+                >
+                  <component :is="l.icon" />
+                </span>
+                <span>{{ l.label }}</span>
+              </div>
+            </div>
+          </div>
+        </template>
       </div>
     </div>
   </div>
@@ -902,16 +851,18 @@ onUnmounted(() => {
 }
 
 /* ===== 主体两栏 ===== */
-.row-main {
+.dashboard-content-layout {
   display: grid;
   grid-template-columns: 1fr 340px;
   gap: 16px;
   align-items: start;
 }
-.side-col {
+.dashboard-left-stack,
+.dashboard-right-stack {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
 }
 .card-head {
   display: flex;
@@ -927,8 +878,8 @@ onUnmounted(() => {
 }
 
 /* ===== 执行动态列表 ===== */
-/* 卡片拉伸至与右侧列（状态分布+系统状态）等高并固定：
-   列表 flex:1（basis 0）不参与撑高，空态居中填满、记录超高时内部滚动 */
+/* 保持执行卡片的最小高度：列表 flex:1（basis 0）不参与撑高，
+   空态居中填满、记录超高时内部滚动 */
 .exec-card {
   align-self: stretch;
   min-height: 380px;
@@ -1193,7 +1144,7 @@ onUnmounted(() => {
 /* ===== 响应式降级 ===== */
 @media (max-width: 1200px) {
   .kpi-row { grid-template-columns: repeat(2, 1fr) !important; }
-  .row-main { grid-template-columns: 1fr; }
+  .dashboard-content-layout { grid-template-columns: 1fr; }
   /* 单列堆叠时无右列可对齐，回退为固定最小高度内容自适应 */
   .exec-card { align-self: auto; min-height: 420px; }
 }
