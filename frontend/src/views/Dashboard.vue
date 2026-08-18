@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 工作台：真实业务数据总览（概览 KPI / 执行动态 / 工单状态分布 / 提单趋势 / 快捷入口）
+// 工作台：真实业务数据总览（概览 KPI / 提单数趋势 / 执行动态 / 工单状态分布 / 快捷入口）
 // 数据源：GET /dashboard/summary（30s 轮询）+ GET /dashboard/ticket-trend（粒度切换单独拉取）
 // 各分区按 summary 中对应段是否为 null（即权限点）自动显隐
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
@@ -12,6 +12,7 @@ import {
   DatabaseOutlined,
   FileAddOutlined,
   FileDoneOutlined,
+  LoadingOutlined,
   RocketOutlined,
   SafetyCertificateOutlined,
   TeamOutlined,
@@ -44,28 +45,60 @@ const summary = ref<DashboardSummary | null>(null)
 const trendItems = ref<TrendPoint[]>([])
 const granularity = ref<TrendGranularity>('day')
 const apiStatus = ref<'checking' | 'up' | 'down'>('checking')
+const summaryLoading = ref(true)
+const trendLoading = ref(true)
 let pollTimer: number | undefined
 // 卸载标志：onMounted 中 await 之后组件可能已被卸载（快速切路由），
 // 若不检查会在卸载后启动 setInterval 导致定时器泄漏
 let unmounted = false
 
 async function loadSummary() {
+  summaryLoading.value = true
   try {
     summary.value = await fetchDashboardSummary()
     apiStatus.value = 'up'
   } catch {
     apiStatus.value = 'down'
+  } finally {
+    summaryLoading.value = false
   }
 }
 
 async function loadTrend() {
-  if (!userStore.hasPerm('ticket:read')) return
+  if (!userStore.hasPerm('ticket:read')) {
+    trendLoading.value = false
+    return
+  }
+  trendLoading.value = true
   try {
     trendItems.value = (await fetchTicketTrend(granularity.value)).items
   } catch {
     /* 全局拦截器已提示 */
+  } finally {
+    trendLoading.value = false
   }
 }
+
+const initialLoading = computed(() => summary.value === null && summaryLoading.value)
+const dashboardLoading = computed(
+  () => initialLoading.value || (!!summary.value?.ticket && trendLoading.value),
+)
+const canViewCmdb = computed(() => userStore.hasPerm('cmdb:read'))
+const canViewTicket = computed(() => userStore.hasPerm('ticket:read'))
+const canViewExecution = computed(() => userStore.hasPerm('execution:read'))
+const canViewApproval = computed(() => userStore.hasPerm('ticket:approve'))
+const canViewAudit = computed(() => userStore.hasPerm('audit:read'))
+const loadingKpiCount = computed(() => {
+  let count = canViewCmdb.value ? 2 : 0
+  if (canViewTicket.value) count += 1
+  if (canViewApproval.value || canViewExecution.value || canViewAudit.value) count += 1
+  return Math.min(count, 4)
+})
+const loadingHeroStatCount = computed(() => Math.max(
+  1,
+  [canViewApproval.value, canViewExecution.value, canViewTicket.value].filter(Boolean).length,
+))
+const showMainSkeleton = computed(() => canViewExecution.value || canViewTicket.value)
 
 // ===== 问候横幅 =====
 const greeting = computed(() => {
@@ -321,20 +354,48 @@ onUnmounted(() => {
         <div class="op-hero-sub">{{ roleNames }} · {{ todayText }}</div>
       </div>
       <div class="op-hero-extra">
-        <div
-          v-for="st in heroStats"
-          :key="st.label"
-          class="op-hero-stat hero-stat-click"
-          @click="router.push(st.path)"
-        >
-          <b>{{ st.value }}</b>
-          <span>{{ st.label }}</span>
+        <template v-if="initialLoading">
+          <div
+            v-for="slot in loadingHeroStatCount"
+            :key="`hero-loading-${slot}`"
+            class="op-hero-stat hero-stat-skeleton"
+          >
+            <b class="dashboard-skeleton-line hero-skeleton-value" />
+            <span class="dashboard-skeleton-line hero-skeleton-label" />
+          </div>
+        </template>
+        <template v-else>
+          <div
+            v-for="st in heroStats"
+            :key="st.label"
+            class="op-hero-stat hero-stat-click"
+            @click="router.push(st.path)"
+          >
+            <b>{{ st.value }}</b>
+            <span>{{ st.label }}</span>
+          </div>
+        </template>
+        <div v-if="dashboardLoading" class="op-hero-loading" role="status" aria-label="正在加载工作台">
+          <LoadingOutlined spin />
+          <span>加载中</span>
         </div>
       </div>
     </div>
 
     <!-- B KPI 渐变卡（真实业务数，点击直达） -->
-    <div v-if="kpis.length" class="kpi-row" :style="{ gridTemplateColumns: `repeat(${kpis.length}, 1fr)` }">
+    <div
+      v-if="initialLoading && loadingKpiCount"
+      class="kpi-row"
+      :style="{ gridTemplateColumns: `repeat(${loadingKpiCount}, 1fr)` }"
+    >
+      <div v-for="slot in loadingKpiCount" :key="`kpi-loading-${slot}`" class="kpi kpi-skeleton">
+        <div class="kpi-icon dashboard-skeleton-line" />
+        <div class="dashboard-skeleton-line kpi-skeleton-num" />
+        <div class="dashboard-skeleton-line kpi-skeleton-label" />
+        <div class="dashboard-skeleton-line kpi-skeleton-trend" />
+      </div>
+    </div>
+    <div v-else-if="kpis.length" class="kpi-row" :style="{ gridTemplateColumns: `repeat(${kpis.length}, 1fr)` }">
       <div v-for="kpi in kpis" :key="kpi.label" class="kpi" :class="kpi.grad" @click="router.push(kpi.path)">
         <div class="kpi-icon"><component :is="kpi.icon" /></div>
         <div class="num">{{ kpi.num }}</div>
@@ -343,9 +404,82 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- C 执行动态 + 状态分布/系统状态 -->
-    <div class="row-main" v-if="summary?.execution || summary?.ticket">
-      <div v-if="summary?.execution" class="op-card exec-card">
+    <!-- C 提单趋势 + 状态分布/系统状态 -->
+    <div v-if="initialLoading && showMainSkeleton" class="row-main dashboard-skeleton-row">
+      <div v-if="canViewTicket" class="op-card dashboard-skeleton-card">
+        <div class="card-head">
+          <div>
+            <div class="dashboard-skeleton-line dashboard-skeleton-title" />
+            <div class="dashboard-skeleton-line dashboard-skeleton-subtitle" />
+          </div>
+          <div class="dashboard-skeleton-line dashboard-skeleton-action" />
+        </div>
+        <div class="dashboard-skeleton-chart" />
+      </div>
+      <div v-else-if="canViewExecution" class="op-card exec-card dashboard-skeleton-card">
+        <div class="card-head">
+          <div>
+            <div class="dashboard-skeleton-line dashboard-skeleton-title" />
+            <div class="dashboard-skeleton-line dashboard-skeleton-subtitle" />
+          </div>
+          <div class="dashboard-skeleton-line dashboard-skeleton-action" />
+        </div>
+        <div class="dashboard-skeleton-list">
+          <div v-for="slot in 4" :key="`exec-loading-${slot}`" class="dashboard-skeleton-item">
+            <span class="dashboard-skeleton-line dashboard-skeleton-dot" />
+            <span class="dashboard-skeleton-line dashboard-skeleton-wide" />
+            <span class="dashboard-skeleton-line dashboard-skeleton-short" />
+          </div>
+        </div>
+      </div>
+
+      <div class="side-col">
+        <div v-if="canViewTicket" class="op-card dashboard-skeleton-card">
+          <div class="dashboard-skeleton-line dashboard-skeleton-title" />
+          <div class="dashboard-skeleton-line dashboard-skeleton-subtitle" />
+          <div class="dashboard-skeleton-pie" />
+          <div class="dashboard-skeleton-legend">
+            <span v-for="slot in 4" :key="`legend-loading-${slot}`" class="dashboard-skeleton-line" />
+          </div>
+        </div>
+        <div class="op-card dashboard-skeleton-card">
+          <div class="dashboard-skeleton-line dashboard-skeleton-title" />
+          <div class="dashboard-skeleton-line dashboard-skeleton-subtitle" />
+          <div class="dashboard-skeleton-services">
+            <span v-for="slot in 3" :key="`service-loading-${slot}`" class="dashboard-skeleton-line" />
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="row-main" v-else-if="summary?.execution || summary?.ticket">
+      <div v-if="summary?.ticket" class="op-card">
+        <div class="card-head">
+          <div>
+            <div class="op-card-title">提单数趋势</div>
+            <div class="op-card-sub">
+              {{ { day: '近 30 天', week: '近 12 周', month: '近 12 个月', year: '近 5 年' }[granularity] }}按提交时间统计
+            </div>
+          </div>
+          <a-segmented
+            v-model:value="granularity"
+            :options="[
+              { label: '天', value: 'day' },
+              { label: '周', value: 'week' },
+              { label: '月', value: 'month' },
+              { label: '年', value: 'year' },
+            ]"
+            @change="loadTrend"
+          />
+        </div>
+        <div class="trend-chart-shell">
+          <div ref="trendRef" class="trend-chart" />
+          <div v-if="trendLoading" class="trend-loading" role="status" aria-label="正在加载提单趋势">
+            <LoadingOutlined spin />
+          </div>
+        </div>
+      </div>
+
+      <div v-else-if="summary?.execution" class="op-card exec-card">
         <div class="card-head">
           <div>
             <div class="op-card-title">执行动态</div>
@@ -416,28 +550,68 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- D 提单趋势 + 快捷入口 -->
-    <div class="row-main">
-      <div v-if="summary?.ticket" class="op-card">
+    <!-- D 执行动态 + 快捷入口 -->
+    <div v-if="initialLoading && canViewExecution && canViewTicket" class="row-main dashboard-skeleton-row">
+      <div class="op-card exec-card dashboard-skeleton-card">
         <div class="card-head">
           <div>
-            <div class="op-card-title">提单数趋势</div>
-            <div class="op-card-sub">
-              {{ { day: '近 30 天', week: '近 12 周', month: '近 12 个月', year: '近 5 年' }[granularity] }}按提交时间统计
+            <div class="dashboard-skeleton-line dashboard-skeleton-title" />
+            <div class="dashboard-skeleton-line dashboard-skeleton-subtitle" />
+          </div>
+          <div class="dashboard-skeleton-line dashboard-skeleton-action" />
+        </div>
+        <div class="dashboard-skeleton-list">
+          <div v-for="slot in 4" :key="`exec-bottom-loading-${slot}`" class="dashboard-skeleton-item">
+            <span class="dashboard-skeleton-line dashboard-skeleton-dot" />
+            <span class="dashboard-skeleton-line dashboard-skeleton-wide" />
+            <span class="dashboard-skeleton-line dashboard-skeleton-short" />
+          </div>
+        </div>
+      </div>
+      <div class="op-card quick-card dashboard-skeleton-card">
+        <div class="dashboard-skeleton-line dashboard-skeleton-title" />
+        <div class="dashboard-skeleton-line dashboard-skeleton-subtitle" />
+        <div class="quick-grid dashboard-skeleton-quick-grid">
+          <div v-for="slot in 4" :key="`quick-loading-${slot}`" class="quick-item dashboard-skeleton-quick">
+            <span class="dashboard-skeleton-line dashboard-skeleton-quick-icon" />
+            <span class="dashboard-skeleton-line dashboard-skeleton-quick-label" />
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="row-main" v-else>
+      <div v-if="summary?.execution && summary?.ticket" class="op-card exec-card">
+        <div class="card-head">
+          <div>
+            <div class="op-card-title">执行动态</div>
+            <div class="op-card-sub">最近执行记录 · 30 秒自动刷新</div>
+          </div>
+          <a class="more-link" @click="router.push('/executions')">全部执行 →</a>
+        </div>
+        <div v-if="summary.execution.recent.length" class="exec-list">
+          <div
+            v-for="e in summary.execution.recent"
+            :key="e.id"
+            class="exec-row"
+            @click="router.push(`/executions/${e.id}`)"
+          >
+            <span class="dot" :class="e.status" />
+            <div class="exec-main">
+              <b>{{ e.ticket_no }} · {{ e.title }}</b>
+              <span>{{ e.job_host_name || '—' }} · {{ e.total_steps }} 步骤 · {{ e.creator_name }}</span>
+            </div>
+            <div class="exec-meta">
+              <span class="exec-time">{{ fmtTime(e.created_at) }}</span>
+              <span class="exec-dur">{{ execDuration(e.started_at, e.finished_at) }}</span>
+              <a-tag :color="execStatusMeta[e.status as keyof typeof execStatusMeta]?.color">
+                {{ execStatusMeta[e.status as keyof typeof execStatusMeta]?.text || e.status }}
+              </a-tag>
             </div>
           </div>
-          <a-segmented
-            v-model:value="granularity"
-            :options="[
-              { label: '天', value: 'day' },
-              { label: '周', value: 'week' },
-              { label: '月', value: 'month' },
-              { label: '年', value: 'year' },
-            ]"
-            @change="loadTrend"
-          />
         </div>
-        <div ref="trendRef" class="trend-chart" />
+        <div v-else class="exec-empty">
+          <a-empty description="暂无执行记录" :image-style="{ height: '72px' }" />
+        </div>
       </div>
 
       <div class="op-card quick-card">
@@ -464,6 +638,186 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* ===== 首屏加载占位：保持最终布局尺寸，数据到达后只替换内容 ===== */
+.dashboard-skeleton-line {
+  display: block;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--bg-hover), var(--bg-input), var(--bg-hover));
+  background-size: 200% 100%;
+  animation: dashboard-skeleton-shimmer 1.6s ease-in-out infinite;
+}
+@keyframes dashboard-skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.hero-stat-skeleton {
+  pointer-events: none;
+}
+.hero-skeleton-value {
+  width: 24px;
+  height: 18px;
+  margin: 0 auto;
+}
+.hero-skeleton-label {
+  width: 44px;
+  height: 9px;
+  margin: 5px auto 0;
+}
+.op-hero-loading {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.op-hero-loading .anticon {
+  font-size: 14px;
+}
+.kpi.kpi-skeleton {
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+  color: var(--text-2);
+  cursor: default;
+}
+.kpi.kpi-skeleton::before,
+.kpi.kpi-skeleton::after {
+  display: none;
+}
+.kpi-skeleton .kpi-icon {
+  background: var(--bg-hover);
+}
+.kpi-skeleton-num {
+  width: 42px;
+  height: 30px;
+  margin-top: 12px;
+}
+.kpi-skeleton-label {
+  width: 62px;
+  height: 10px;
+  margin-top: 6px;
+}
+.kpi-skeleton-trend {
+  width: 118px;
+  height: 8px;
+  margin-top: 9px;
+}
+.dashboard-skeleton-card {
+  pointer-events: none;
+}
+.dashboard-skeleton-title {
+  width: 88px;
+  height: 15px;
+}
+.dashboard-skeleton-subtitle {
+  width: 148px;
+  height: 10px;
+  margin-top: 7px;
+}
+.dashboard-skeleton-action {
+  width: 62px;
+  height: 22px;
+}
+.dashboard-skeleton-chart {
+  height: 240px;
+  margin-top: 8px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, var(--bg-hover), transparent);
+}
+.dashboard-skeleton-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+.dashboard-skeleton-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 42px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--bg-hover);
+}
+.dashboard-skeleton-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.dashboard-skeleton-wide {
+  width: 42%;
+  height: 10px;
+}
+.dashboard-skeleton-short {
+  width: 64px;
+  height: 9px;
+  margin-left: auto;
+}
+.dashboard-skeleton-pie {
+  width: 132px;
+  height: 132px;
+  margin: 18px auto 16px;
+  border: 18px solid var(--bg-hover);
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: 0 0 0 1px var(--bg-input);
+}
+.dashboard-skeleton-legend {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px 14px;
+}
+.dashboard-skeleton-legend .dashboard-skeleton-line {
+  width: 100%;
+  height: 9px;
+}
+.dashboard-skeleton-services {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+.dashboard-skeleton-services .dashboard-skeleton-line {
+  width: 100%;
+  height: 42px;
+  border-radius: 10px;
+}
+.trend-chart-shell {
+  position: relative;
+}
+.trend-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--bg-card) 72%, transparent);
+  pointer-events: none;
+}
+.trend-loading .anticon {
+  font-size: 24px;
+}
+.dashboard-skeleton-quick-grid {
+  pointer-events: none;
+}
+.dashboard-skeleton-quick {
+  cursor: default;
+}
+.dashboard-skeleton-quick-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+.dashboard-skeleton-quick-label {
+  width: 54px;
+  height: 9px;
 }
 
 /* ===== 横幅右侧快览可点击 ===== */
@@ -630,6 +984,8 @@ onUnmounted(() => {
   50% { box-shadow: 0 0 0 5px rgba(59, 130, 246, 0); }
 }
 @media (prefers-reduced-motion: reduce) {
+  .dashboard-skeleton-line { animation: none; }
+  .dashboard .anticon-spin { animation: none; }
   .dot.running { animation: none; }
   .kpi, .exec-row, .quick-item, .hero-stat-click { transition: none; }
 }
