@@ -88,13 +88,40 @@ function fmtDuration(started: string | null, finished: string | null): string {
 interface LogSegment {
   step_order: number
   step_name: string
-  lines: string[]
+  lines: LogToken[][]
   offset: number // 该步骤下一次拉取的行偏移
   eof: boolean // 服务端已读到当前文件尾
   done: boolean // 步骤已终态且 eof：不再拉取
   truncated: boolean // 触发行数上限后段头部已丢弃较早日志
   dropped: number // 头部已丢弃行数（供渲染 key 计算绝对行号，裁剪时保留行 key 稳定）
 }
+
+type LogTokenKind = 'text' | 'timestamp' | 'info' | 'success' | 'warning' | 'error' | 'command' | 'path'
+
+interface LogToken {
+  text: string
+  kind: LogTokenKind
+}
+
+const LOG_TOKEN_PATTERN = /(\$\s.*$)|(\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b)|(\/?(?:[\w.-]+\/)+(?:[\w.-]+)\b)|(\b(?:SUCCESS|SUCCEEDED|OK|DONE|COMPLETED)\b)|(\b(?:WARN|WARNING)\b)|(\b(?:ERROR|FAILED|FAILURE|FATAL|EXCEPTION)\b)|(\b(?:INFO|DEBUG|TRACE)\b)/gi
+
+/** 将外部日志拆为纯文本令牌，供模板安全地按关键字着色。 */
+function tokenizeLogLine(line: string): LogToken[] {
+  const tokens: LogToken[] = []
+  let offset = 0
+  const kindByGroup: LogTokenKind[] = ['command', 'timestamp', 'path', 'success', 'warning', 'error', 'info']
+
+  for (const match of line.matchAll(LOG_TOKEN_PATTERN)) {
+    const index = match.index ?? 0
+    if (index > offset) tokens.push({ text: line.slice(offset, index), kind: 'text' })
+    const group = match.slice(1).findIndex(Boolean)
+    tokens.push({ text: match[0], kind: kindByGroup[group] })
+    offset = index + match[0].length
+  }
+  if (offset < line.length || !tokens.length) tokens.push({ text: line.slice(offset), kind: 'text' })
+  return tokens
+}
+
 const segments = ref<LogSegment[]>([])
 const logBox = ref<HTMLElement | null>(null)
 const logReady = ref(false)
@@ -159,7 +186,7 @@ async function fetchSegment(seg: LogSegment): Promise<boolean> {
         step_order: seg.step_order, offset: seg.offset, limit: 2000,
       })
       if (data.lines.length) {
-        seg.lines.push(...data.lines)
+        seg.lines.push(...data.lines.map(tokenizeLogLine))
         trimToCapacity()
         scrollLogToBottom()
       }
@@ -613,8 +640,13 @@ onBeforeUnmount(() => {
             ━━━ 步骤 {{ seg.step_order }} · {{ seg.step_name }} ━━━
           </div>
           <div v-if="seg.truncated" class="log-trunc">…较早日志已省略…</div>
-          <div v-for="(line, i) in seg.lines" :key="seg.dropped + i" class="log-line">{{ line }}</div>
+          <div v-for="(line, i) in seg.lines" :key="seg.dropped + i" class="log-line">
+            <span v-for="(token, tokenIndex) in line" :key="tokenIndex" class="log-token" :class="`is-${token.kind}`">
+              {{ token.text }}
+            </span>
+          </div>
         </template>
+        <div v-if="logPhase === 'streaming'" class="log-tail-loading" aria-label="日志同步中"><span /><span /><span /></div>
         </template>
       </div>
       <div class="log-resize" title="拖拽调整日志区高度" @mousedown="onResizeStart">
@@ -969,6 +1001,35 @@ onBeforeUnmount(() => {
   white-space: pre-wrap;
   word-break: break-all;
   line-height: 1.6;
+}
+.log-token.is-timestamp { color: #64748b; }
+.log-token.is-info, .log-token.is-path { color: #67e8f9; }
+.log-token.is-success { color: #86efac; }
+.log-token.is-warning { color: #fcd34d; }
+.log-token.is-error { color: #fda4af; }
+.log-token.is-command { color: #d8b4fe; }
+.log-tail-loading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding-left: 2px;
+}
+.log-tail-loading span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #7dd3fc;
+  animation: log-tail-pulse 1.1s ease-in-out infinite;
+}
+.log-tail-loading span:nth-child(2) { animation-delay: 0.15s; }
+.log-tail-loading span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes log-tail-pulse {
+  0%, 100% { opacity: 0.25; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .log-tail-loading span { animation: none; opacity: 0.7; }
 }
 /* 步骤分隔行：Jenkins 风格高亮标记，与普通日志行明显区分 */
 .log-sep {
