@@ -59,13 +59,14 @@ async function loadTodoCount() {
   if (!userStore.hasPerm('ticket:approve')) return
   try {
     const data = await todoTickets({ page: 1, page_size: 1 })
+    if (todoPollAbort) return
     todoCount.value = data.total
   } catch {
     /* 角标拉取失败静默，不影响布局 */
   }
 }
 
-let todoPollAbort: AbortController | null = null
+let todoPollAbort = false
 let todoPolling = false
 let lastTodoSeq = 0
 
@@ -73,25 +74,25 @@ let lastTodoSeq = 0
 async function startTodoEventPoll() {
   if (!userStore.hasPerm('ticket:approve') || todoPolling) return
   todoPolling = true
-  todoPollAbort = new AbortController()
+  todoPollAbort = false
   try {
-    while (!todoPollAbort.signal.aborted) {
+    while (!todoPollAbort) {
       try {
-        const data = await pollTodoEvents(lastTodoSeq, todoPollAbort.signal)
-        if (todoPollAbort.signal.aborted) return
+        const data = await pollTodoEvents(lastTodoSeq)
+        if (todoPollAbort) return
         lastTodoSeq = data.last_seq // 服务端会在游标失效时回退，必须直接覆盖。
         if (data.events.length) {
           await loadTodoCount()
+          if (todoPollAbort) return
         }
       } catch {
-        if (!todoPollAbort.signal.aborted) {
-          await new Promise((resolve) => window.setTimeout(resolve, 3000))
-        }
+        if (todoPollAbort) return
+        await new Promise((resolve) => window.setTimeout(resolve, 3000))
+        if (todoPollAbort) return
       }
     }
   } finally {
     todoPolling = false
-    todoPollAbort = null
   }
 }
 
@@ -179,7 +180,7 @@ function onMenuClick(item: MenuItem) {
 
 onMounted(loadTodoCount)
 onMounted(() => void startTodoEventPoll())
-onUnmounted(() => todoPollAbort?.abort())
+onUnmounted(() => (todoPollAbort = true))
 watch(() => route.path, (path) => {
   loadTodoCount()
   if (path.startsWith('/job/templates')) templateMenuOpen.value = true
