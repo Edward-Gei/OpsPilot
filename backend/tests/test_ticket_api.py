@@ -387,10 +387,25 @@ class TestTodoEventPolling:
         monkeypatch.setattr(ticket_api, "_TODO_EVENT_POLL_TIMEOUT", 0, raising=False)
 
         response = await client.get(
-            "/api/v1/tickets/todo/events", params={"since_seq": 7}, headers=approver_headers,
+            "/api/v1/tickets/todo/events", params={"since_seq": 0}, headers=approver_headers,
         )
         assert response.status_code == 200
-        assert response.json()["data"] == {"events": [], "last_seq": 7}
+        assert response.json()["data"] == {"events": [], "last_seq": 0}
+
+    async def test_todo_events_stale_cursor_returns_resync_event(
+        self, client, db_factory, seed, monkeypatch,
+    ):
+        await _base_env(client)
+        approver_headers = await _approver_headers(client, db_factory, seed)
+        monkeypatch.setattr(ticket_api, "_TODO_EVENT_POLL_TIMEOUT", 0)
+
+        response = await client.get(
+            "/api/v1/tickets/todo/events", params={"since_seq": 9}, headers=approver_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["data"] == {
+            "events": [{"seq": 0, "kind": "todo.changed"}], "last_seq": 0,
+        }
 
 
 class TestApproveAndCancel:

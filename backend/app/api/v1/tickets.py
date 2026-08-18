@@ -191,6 +191,12 @@ async def poll_todo_events(
     """回放当前用户待办事件；无新事件时最长等待 30 秒。"""
     # 长轮询只访问 Redis，先归还数据库连接，避免请求占满连接池。
     await session.close()
+    current_seq = await todo_events.current_seq(actor.id)
+    if since_seq > current_seq:
+        return ok({
+            "events": [{"seq": current_seq, "kind": "todo.changed"}],
+            "last_seq": current_seq,
+        })
     deadline = asyncio.get_running_loop().time() + _TODO_EVENT_POLL_TIMEOUT
     while True:
         events = await todo_events.fetch_since(actor.id, since_seq)
