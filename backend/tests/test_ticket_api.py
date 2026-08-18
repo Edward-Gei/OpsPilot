@@ -13,6 +13,7 @@
 from sqlalchemy import select
 
 from app.core.redis import EXEC_QUEUE
+from app.engine import todo_events
 from app.models.auth import User, UserRole
 from app.models.execution import Execution
 from app.models.notify import NotificationRecord
@@ -384,6 +385,52 @@ class TestApproveAndCancel:
         assert [(a["step_order"], a["action"], a["approver_name"]) for a in detail["approvals"]] == [
             (1, "approve", "appr1"), (2, "approve", "admin"),
         ]
+
+    async def test_approval_changes_publish_todo_events_to_affected_role_members(
+        self, client, db_factory, seed, fake_redis,
+    ):
+        """待审批的分配、转移、驳回和撤回应只通知受影响的审批角色成员。"""
+        env = await _base_env(client)
+        appr1_h = await _approver_headers(client, db_factory, seed, "appr1")
+        await _approver_headers(client, db_factory, seed, "appr2")
+        async with db_factory() as session:
+            approver_ids = list((await session.execute(
+                select(User.id).where(User.username.in_(["appr1", "appr2"])).order_by(User.id)
+            )).scalars())
+        tpl_id = await _create_template(client, env, approval_roles=[
+            seed["roles"]["approver"], seed["roles"]["admin"],
+        ], steps=[_step(env), _step(env, name="终审")])
+
+        first = await _submit(client, env["ops_h"], tpl_id)
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[0], 0)] == [1]
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[1], 0)] == [1]
+        assert await todo_events.fetch_since(seed["users"]["newbie"], 0) == []
+
+        response = await client.post(
+            f"/api/v1/tickets/{first['id']}/approve",
+            json={"action": "approve"}, headers=appr1_h,
+        )
+        assert response.json()["data"] == {"status": "approving", "current_step": 2}
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[0], 0)] == [1, 2]
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[1], 0)] == [1, 2]
+        assert [event["seq"] for event in await todo_events.fetch_since(seed["users"]["admin"], 0)] == [1]
+
+        rejected = await _submit(client, env["ops_h"], tpl_id)
+        response = await client.post(
+            f"/api/v1/tickets/{rejected['id']}/approve",
+            json={"action": "reject", "comment": "窗口期不合适"}, headers=appr1_h,
+        )
+        assert response.json()["data"] == {"status": "rejected", "current_step": 0}
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[0], 0)] == [1, 2, 3, 4]
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[1], 0)] == [1, 2, 3, 4]
+
+        cancelled = await _submit(client, env["ops_h"], tpl_id)
+        response = await client.post(f"/api/v1/tickets/{cancelled['id']}/cancel", headers=env["ops_h"])
+        assert response.json()["data"] == {"status": "cancelled"}
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[0], 0)] == [1, 2, 3, 4, 5, 6]
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[1], 0)] == [1, 2, 3, 4, 5, 6]
+        assert [event["seq"] for event in await todo_events.fetch_since(seed["users"]["admin"], 0)] == [1]
+        assert await todo_events.fetch_since(seed["users"]["newbie"], 0) == []
 
     async def test_reject_requires_comment_and_closes(self, client, db_factory, seed):
         """驳回意见必填 40001；驳回后 rejected 终态 + 通知创建人。"""

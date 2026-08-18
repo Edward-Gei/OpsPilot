@@ -33,7 +33,7 @@ from app.models.cmdb import JobHost
 from app.models.execution import Execution, ExecutionStep
 from app.models.job import Credential
 from app.models.ticket import Ticket, TicketApproval, TicketStep
-from app.engine import ansible_runner, control as ctrl, events, ssh_runner
+from app.engine import ansible_runner, control as ctrl, events, ssh_runner, todo_events
 from app.engine.logs import LogChannel
 
 logger = logging.getLogger("opspilot.engine.pipeline")
@@ -219,9 +219,15 @@ class PipelineRunner:
                     self.ticket.current_step = step.step_order
                     self.execution.status = ExecutionStatus.QUEUED.value
                     # 执行到带审批角色的步骤时才通知，避免提前通知尚未到达的审批步骤。
-                    from app.services.ticket_service import _notify_pending_approval
+                    from app.services.ticket_service import _notify_pending_approval, current_approval_user_ids
                     await _notify_pending_approval(s, self.ticket)
+                    approval_user_ids = await current_approval_user_ids(s, self.ticket)
                     await s.commit()
+                    if approval_user_ids:
+                        try:
+                            await todo_events.publish_for_users(approval_user_ids)
+                        except Exception:
+                            logger.exception("发布后续审批待办变更事件失败", extra={"ticket_id": self.ticket.id})
                     return None
             step_failed = await self._run_one_step(step, tstep)
             # 检查点③：每步骤结束后
