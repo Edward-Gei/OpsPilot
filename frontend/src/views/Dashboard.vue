@@ -579,11 +579,17 @@ onUnmounted(() => {
         </template>
       </div>
     </div>
+
+    <div v-if="initialLoading" class="dashboard-loading-layer" role="status" aria-label="正在加载工作台">
+      <LoadingOutlined spin />
+      <span>正在加载工作台</span>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .dashboard {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -628,6 +634,26 @@ onUnmounted(() => {
 }
 .op-hero-loading .anticon {
   font-size: 14px;
+}
+.dashboard-loading-layer {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 9px;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--bg-card) 58%, transparent);
+  pointer-events: none;
+}
+.dashboard-loading-layer .anticon {
+  font-size: 30px;
+}
+.dashboard-loading-layer span {
+  color: var(--text-2);
+  font-size: 12px;
 }
 .kpi.kpi-skeleton {
   background: var(--bg-card);
