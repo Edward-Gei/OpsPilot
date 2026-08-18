@@ -12,7 +12,6 @@ import {
   DatabaseOutlined,
   FileAddOutlined,
   FileDoneOutlined,
-  LoadingOutlined,
   RocketOutlined,
   SafetyCertificateOutlined,
   TeamOutlined,
@@ -376,7 +375,7 @@ onUnmounted(() => {
           </div>
         </template>
         <div v-if="dashboardLoading" class="op-hero-loading" role="status" aria-label="正在加载工作台">
-          <LoadingOutlined spin />
+          <a-spin />
           <span>加载中</span>
         </div>
       </div>
@@ -458,7 +457,7 @@ onUnmounted(() => {
             <div class="trend-chart-shell">
               <div ref="trendRef" class="trend-chart" />
               <div v-if="trendLoading" class="trend-loading" role="status" aria-label="正在加载提单趋势">
-                <LoadingOutlined spin />
+                <a-spin />
               </div>
             </div>
           </div>
@@ -581,8 +580,8 @@ onUnmounted(() => {
     </div>
 
     <div v-if="initialLoading" class="dashboard-loading-layer" role="status" aria-label="正在加载工作台">
-      <LoadingOutlined spin />
-      <span>正在加载工作台</span>
+      <a-spin />
+      <span class="dashboard-loading-label">正在加载工作台</span>
     </div>
   </div>
 </template>
@@ -632,9 +631,6 @@ onUnmounted(() => {
   font-size: 12px;
   white-space: nowrap;
 }
-.op-hero-loading .anticon {
-  font-size: 14px;
-}
 .dashboard-loading-layer {
   position: absolute;
   z-index: 2;
@@ -648,10 +644,7 @@ onUnmounted(() => {
   background: color-mix(in srgb, var(--bg-card) 58%, transparent);
   pointer-events: none;
 }
-.dashboard-loading-layer .anticon {
-  font-size: 30px;
-}
-.dashboard-loading-layer span {
+.dashboard-loading-label {
   color: var(--text-2);
   font-size: 12px;
 }
@@ -775,9 +768,6 @@ onUnmounted(() => {
   color: var(--primary);
   background: color-mix(in srgb, var(--bg-card) 72%, transparent);
   pointer-events: none;
-}
-.trend-loading .anticon {
-  font-size: 24px;
 }
 .dashboard-skeleton-quick-grid {
   pointer-events: none;
