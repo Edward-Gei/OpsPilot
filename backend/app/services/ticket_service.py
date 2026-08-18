@@ -133,6 +133,23 @@ async def _first_approval_step(session: AsyncSession, ticket: Ticket) -> int | N
     return None
 
 
+async def current_approval_user_ids(session: AsyncSession, ticket: Ticket) -> list[int]:
+    """解析当前审批步骤快照角色下的用户 ID，用于待办变更推送。"""
+    if not ticket.current_step:
+        return []
+    role_id = (await session.execute(
+        select(TicketStep.approval_role_id_snap).where(
+            TicketStep.ticket_id == ticket.id,
+            TicketStep.step_order == ticket.current_step,
+        )
+    )).scalar_one_or_none()
+    if not role_id:
+        return []
+    return list((await session.execute(
+        select(UserRole.user_id).where(UserRole.role_id == role_id)
+    )).scalars())
+
+
 async def _resolve_receivers(session: AsyncSession, ticket: Ticket, expressions: list[str]) -> list[str]:
     """解析通知规则收件人，保证角色成员和创建人都使用用户名发送。"""
     receivers: list[str] = []

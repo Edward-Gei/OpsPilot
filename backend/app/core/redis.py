@@ -40,6 +40,10 @@ KEY_EXEC_EVENT = "ops:event:{eid}"        # 状态事件通道（PubSub）
 KEY_EXEC_EVENT_LIST = "ops:events:{eid}"  # 事件回放列表（List，长轮询/WS 断线补发）
 KEY_EXEC_EVENT_SEQ = "ops:event:seq:{eid}"  # 事件序号发号器（INCR，单调递增）
 
+# 待办变更事件键名模板（用户级回放）
+KEY_TODO_EVENT_LIST = "ops:todo:events:{user_id}"
+KEY_TODO_EVENT_SEQ = "ops:todo:event:seq:{user_id}"
+
 # 认证相关键名模板（M1）
 KEY_LOGIN_FAIL = "login:fail:{username}"
 KEY_TOKEN_REVOKED = "auth:revoked:{jti}"

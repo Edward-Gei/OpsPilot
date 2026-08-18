@@ -12,10 +12,13 @@
 """
 from sqlalchemy import select
 
+from app.api.v1 import tickets as ticket_api
 from app.core.redis import EXEC_QUEUE
+from app.engine import todo_events
 from app.models.auth import User, UserRole
 from app.models.execution import Execution
 from app.models.notify import NotificationRecord
+from app.services import ticket_service
 from tests.conftest import TEST_PASSWORD_HASH, auth_header, login_for_tokens
 
 
@@ -348,6 +351,63 @@ class TestSubmit:
         assert resp.json()["code"] == 40302
 
 
+class TestTodoEventPolling:
+    """待办角标的用户事件回放与长轮询。"""
+
+    async def test_todo_events_replay_only_current_user_and_require_approve_perm(
+        self, client, db_factory, seed,
+    ):
+        env = await _base_env(client)
+        approver_headers = await _approver_headers(client, db_factory, seed)
+        async with db_factory() as session:
+            approver_id = (await session.execute(
+                select(User.id).where(User.username == "appr1")
+            )).scalar_one()
+
+        await todo_events.publish_for_users([approver_id, seed["users"]["newbie"]])
+
+        response = await client.get(
+            "/api/v1/tickets/todo/events", params={"since_seq": 0}, headers=approver_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["data"] == {
+            "events": [{"seq": 1, "kind": "todo.changed"}], "last_seq": 1,
+        }
+
+        response = await client.get(
+            "/api/v1/tickets/todo/events", params={"since_seq": 0}, headers=env["ops_h"],
+        )
+        assert response.json()["code"] == 40301
+
+    async def test_todo_events_timeout_returns_empty_events_and_original_sequence(
+        self, client, db_factory, seed, monkeypatch,
+    ):
+        await _base_env(client)
+        approver_headers = await _approver_headers(client, db_factory, seed)
+        monkeypatch.setattr(ticket_api, "_TODO_EVENT_POLL_TIMEOUT", 0, raising=False)
+
+        response = await client.get(
+            "/api/v1/tickets/todo/events", params={"since_seq": 0}, headers=approver_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["data"] == {"events": [], "last_seq": 0}
+
+    async def test_todo_events_stale_cursor_returns_resync_event(
+        self, client, db_factory, seed, monkeypatch,
+    ):
+        await _base_env(client)
+        approver_headers = await _approver_headers(client, db_factory, seed)
+        monkeypatch.setattr(ticket_api, "_TODO_EVENT_POLL_TIMEOUT", 0)
+
+        response = await client.get(
+            "/api/v1/tickets/todo/events", params={"since_seq": 9}, headers=approver_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["data"] == {
+            "events": [{"seq": 0, "kind": "todo.changed"}], "last_seq": 0,
+        }
+
+
 class TestApproveAndCancel:
     """节点审批推进 / 驳回 / 撤回。"""
 
@@ -384,6 +444,113 @@ class TestApproveAndCancel:
         assert [(a["step_order"], a["action"], a["approver_name"]) for a in detail["approvals"]] == [
             (1, "approve", "appr1"), (2, "approve", "admin"),
         ]
+
+    async def test_approval_changes_publish_todo_events_to_affected_role_members(
+        self, client, db_factory, seed, fake_redis,
+    ):
+        """待审批的分配、转移、驳回和撤回应只通知受影响的审批角色成员。"""
+        env = await _base_env(client)
+        appr1_h = await _approver_headers(client, db_factory, seed, "appr1")
+        await _approver_headers(client, db_factory, seed, "appr2")
+        async with db_factory() as session:
+            approver_ids = list((await session.execute(
+                select(User.id).where(User.username.in_(["appr1", "appr2"])).order_by(User.id)
+            )).scalars())
+        tpl_id = await _create_template(client, env, approval_roles=[
+            seed["roles"]["approver"], seed["roles"]["admin"],
+        ], steps=[_step(env), _step(env, name="终审")])
+
+        first = await _submit(client, env["ops_h"], tpl_id)
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[0], 0)] == [1]
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[1], 0)] == [1]
+        assert await todo_events.fetch_since(seed["users"]["newbie"], 0) == []
+
+        response = await client.post(
+            f"/api/v1/tickets/{first['id']}/approve",
+            json={"action": "approve"}, headers=appr1_h,
+        )
+        assert response.json()["data"] == {"status": "approving", "current_step": 2}
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[0], 0)] == [1, 2]
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[1], 0)] == [1, 2]
+        assert [event["seq"] for event in await todo_events.fetch_since(seed["users"]["admin"], 0)] == [1]
+
+        response = await client.post(
+            f"/api/v1/tickets/{first['id']}/approve",
+            json={"action": "approve", "comment": "终审通过"}, headers=env["admin_h"],
+        )
+        assert response.json()["data"] == {"status": "queued", "current_step": 0}
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[0], 0)] == [1, 2]
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[1], 0)] == [1, 2]
+        assert [event["seq"] for event in await todo_events.fetch_since(seed["users"]["admin"], 0)] == [1, 2]
+        assert await todo_events.fetch_since(seed["users"]["newbie"], 0) == []
+
+        rejected = await _submit(client, env["ops_h"], tpl_id)
+        response = await client.post(
+            f"/api/v1/tickets/{rejected['id']}/approve",
+            json={"action": "reject", "comment": "窗口期不合适"}, headers=appr1_h,
+        )
+        assert response.json()["data"] == {"status": "rejected", "current_step": 0}
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[0], 0)] == [1, 2, 3, 4]
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[1], 0)] == [1, 2, 3, 4]
+
+        cancelled = await _submit(client, env["ops_h"], tpl_id)
+        response = await client.post(f"/api/v1/tickets/{cancelled['id']}/cancel", headers=env["ops_h"])
+        assert response.json()["data"] == {"status": "cancelled"}
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[0], 0)] == [1, 2, 3, 4, 5, 6]
+        assert [event["seq"] for event in await todo_events.fetch_since(approver_ids[1], 0)] == [1, 2, 3, 4, 5, 6]
+        assert [event["seq"] for event in await todo_events.fetch_since(seed["users"]["admin"], 0)] == [1, 2]
+        assert await todo_events.fetch_since(seed["users"]["newbie"], 0) == []
+
+    async def test_todo_publish_starts_after_approval_assignment_is_committed(
+        self, client, db_factory, seed, monkeypatch,
+    ):
+        """发布待办事件时，独立会话已能看到新审批节点。"""
+        env = await _base_env(client)
+        appr_h = await _approver_headers(client, db_factory, seed)
+        tpl_id = await _create_template(client, env, approval_roles=[
+            seed["roles"]["approver"], seed["roles"]["admin"],
+        ], steps=[_step(env), _step(env, name="终审")])
+        ticket = await _submit(client, env["ops_h"], tpl_id)
+        published: list[list[int]] = []
+
+        async def publish_after_commit(user_ids: list[int]):
+            async with db_factory() as verification_session:
+                todos, total = await ticket_service.todo_tickets(
+                    verification_session, user_id=seed["users"]["admin"], page=1, page_size=20,
+                )
+            assert total == 1
+            assert [item.id for item in todos] == [ticket["id"]]
+            published.append(user_ids)
+
+        monkeypatch.setattr(todo_events, "publish_for_users", publish_after_commit)
+        response = await client.post(
+            f"/api/v1/tickets/{ticket['id']}/approve",
+            json={"action": "approve"}, headers=appr_h,
+        )
+        assert response.json()["data"] == {"status": "approving", "current_step": 2}
+        assert seed["users"]["admin"] in published[0]
+
+    async def test_todo_publish_failure_does_not_rollback_approval_api(
+        self, client, db_factory, seed, monkeypatch,
+    ):
+        """Redis 发布失败不应改变成功审批请求及其已提交的状态。"""
+        env = await _base_env(client)
+        appr_h = await _approver_headers(client, db_factory, seed)
+        tpl_id = await _create_template(client, env, approval_roles=[seed["roles"]["approver"]])
+        ticket = await _submit(client, env["ops_h"], tpl_id)
+
+        async def publish_failure(user_ids: list[int]):
+            raise RuntimeError("redis unavailable")
+
+        monkeypatch.setattr(todo_events, "publish_for_users", publish_failure)
+        response = await client.post(
+            f"/api/v1/tickets/{ticket['id']}/approve",
+            json={"action": "approve"}, headers=appr_h,
+        )
+        assert response.json()["data"] == {"status": "queued", "current_step": 0}
+        detail = (await client.get(f"/api/v1/tickets/{ticket['id']}", headers=env["ops_h"])).json()["data"]
+        assert detail["status"] == "queued"
+        assert [(item["step_order"], item["action"]) for item in detail["approvals"]] == [(1, "approve")]
 
     async def test_reject_requires_comment_and_closes(self, client, db_factory, seed):
         """驳回意见必填 40001；驳回后 rejected 终态 + 通知创建人。"""

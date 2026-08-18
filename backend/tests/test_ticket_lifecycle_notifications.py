@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.core.constants import HostExecStatus, NotifyEvent, TicketStatus
 from app.core.security import encrypt_text
 from app.core.response import BizError
+from app.engine import todo_events
 from app.engine import pipeline
 from app.models.auth import User, UserRole
 from app.models.cmdb import JobHost
@@ -165,6 +166,56 @@ async def test_pipeline_emits_pending_when_reaching_later_approval_step(db_facto
         assert await runner._run_steps() is None
         await session.commit()
         assert await _notification_events(session) == [NotifyEvent.TICKET_PENDING_APPROVAL.value]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_commits_before_publishing_later_approval_todo_change(
+    db_factory, seed, monkeypatch,
+):
+    """Worker 到达后续审批节点后，提交成功才能发布待办变更事件。"""
+    async with db_factory() as session:
+        creator = await session.get(User, seed["users"]["ops1"])
+        approver_role_id = seed["roles"]["approver"]
+        session.add(UserRole(user_id=creator.id, role_id=approver_role_id))
+        await session.flush()
+        template = await _template(session, creator_id=creator.id)
+        session.add(ProcessStep(
+            process_template_id=template.process_template_id, step_order=2,
+            name="approve-later", script_type="shell", content="echo later",
+            timeout=60, approval_role_id=approver_role_id,
+        ))
+        await session.flush()
+        ticket = await ticket_service.create_ticket(
+            session, creator=creator, template_id=template.id, params={},
+        )
+        execution = (await session.execute(select(Execution))).scalar_one()
+        first_step = (await session.execute(
+            select(ExecutionStep).where(ExecutionStep.step_order == 1)
+        )).scalar_one()
+        first_step.status = "success"
+        commits = 0
+        original_commit = session.commit
+
+        async def commit_and_track():
+            nonlocal commits
+            await original_commit()
+            commits += 1
+
+        published: list[tuple[int, list[int]]] = []
+
+        async def publish_and_track(user_ids: list[int]):
+            published.append((commits, user_ids))
+
+        monkeypatch.setattr(session, "commit", commit_and_track)
+        monkeypatch.setattr(todo_events, "publish_for_users", publish_and_track)
+        runner = pipeline.PipelineRunner(execution.id)
+        runner.session = session
+        runner.ticket = ticket
+        runner.execution = execution
+        runner.strategy = ticket.exec_strategy_snap or {}
+
+        assert await runner._run_steps() is None
+        assert published == [(1, [creator.id])]
 
 
 @pytest.mark.asyncio

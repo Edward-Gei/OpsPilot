@@ -6,6 +6,9 @@
 
 注意路由顺序：/templates 静态路径必须先于 /{ticket_id} 动态路径注册。
 """
+import asyncio
+import logging
+
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 
@@ -13,12 +16,27 @@ from app import audit
 from app.core.deps import DbSession, get_client_ip, require_perm
 from app.core.response import ok
 from app.engine import control as exec_ctrl
+from app.engine import todo_events
 from app.models.auth import User
 from app.models.cmdb import JobHost
 from app.schemas.ticket import ApproveRequest, TicketCreateRequest, TicketPrepareRequest
 from app.services import parameter_prepare_service, ticket_service
 
 router = APIRouter(prefix="/tickets", tags=["工单"])
+logger = logging.getLogger("opspilot.api.tickets")
+
+_TODO_EVENT_POLL_TIMEOUT = 30
+_TODO_EVENT_POLL_INTERVAL = 1.0
+
+
+async def _publish_todo_changes(user_ids: list[int]) -> None:
+    """事务已提交后最佳努力发布待办变更，Redis 异常不影响已成功的请求。"""
+    if not user_ids:
+        return
+    try:
+        await todo_events.publish_for_users(user_ids)
+    except Exception:
+        logger.exception("发布工单待办变更事件失败", extra={"user_ids": user_ids})
 
 
 def _ticket_brief(t, creator_names: dict[int, str] | None = None) -> dict:
@@ -119,6 +137,9 @@ async def create_ticket(
               target_type="ticket", target_id=str(ticket.id), target_name=ticket.ticket_no,
               detail={"template_id": req.template_id, "status": ticket.status,
                       "steps": len((ticket.flow_snap or {}).get("steps", []))})
+    affected_user_ids = await ticket_service.current_approval_user_ids(session, ticket)
+    await session.commit()
+    await _publish_todo_changes(affected_user_ids)
     return ok({"id": ticket.id, "ticket_no": ticket.ticket_no,
                "status": ticket.status, "current_step": ticket.current_step})
 
@@ -159,6 +180,31 @@ async def todo_tickets(
     names = await _creator_name_map(session, tickets)
     return ok({"items": [_ticket_brief(t, names) for t in tickets], "total": total,
                "page": page, "page_size": page_size})
+
+
+@router.get("/todo/events", summary="待办变更事件")
+async def poll_todo_events(
+    session: DbSession,
+    actor: User = Depends(require_perm("ticket:approve")),
+    since_seq: int = Query(0, ge=0),
+) -> dict:
+    """回放当前用户待办事件；无新事件时最长等待 30 秒。"""
+    # 长轮询只访问 Redis，先归还数据库连接，避免请求占满连接池。
+    await session.close()
+    current_seq = await todo_events.current_seq(actor.id)
+    if since_seq > current_seq:
+        return ok({
+            "events": [{"seq": current_seq, "kind": "todo.changed"}],
+            "last_seq": current_seq,
+        })
+    deadline = asyncio.get_running_loop().time() + _TODO_EVENT_POLL_TIMEOUT
+    while True:
+        events = await todo_events.fetch_since(actor.id, since_seq)
+        if events:
+            return ok({"events": events, "last_seq": events[-1]["seq"]})
+        if asyncio.get_running_loop().time() >= deadline:
+            return ok({"events": [], "last_seq": since_seq})
+        await asyncio.sleep(_TODO_EVENT_POLL_INTERVAL)
 
 
 # ---------- 详情 / 审批 / 撤回 ----------
@@ -227,13 +273,19 @@ async def approve_ticket(
     actor: User = Depends(require_perm("ticket:approve")),
 ) -> dict:
     """审批通过/驳回：校验当前步骤角色归属；最后一个审批步骤通过后进入执行队列。"""
+    affected_user_ids = await ticket_service.current_approval_user_ids(
+        session, await ticket_service.get_ticket_or_404(session, ticket_id),
+    )
     ticket = await ticket_service.approve_ticket(
         session, ticket_id, actor=actor, action=req.action, comment=req.comment
     )
+    affected_user_ids.extend(await ticket_service.current_approval_user_ids(session, ticket))
     audit.log(module="ticket", action=f"ticket.{req.action}", actor_id=actor.id,
               actor_name=actor.username, source_ip=get_client_ip(request),
               target_type="ticket", target_id=str(ticket.id), target_name=ticket.ticket_no,
               detail={"status": ticket.status, "comment": req.comment})
+    await session.commit()
+    await _publish_todo_changes(list(dict.fromkeys(affected_user_ids)))
     return ok({"status": ticket.status, "current_step": ticket.current_step})
 
 
@@ -245,10 +297,15 @@ async def cancel_ticket(
     actor: User = Depends(require_perm("ticket:write")),
 ) -> dict:
     """撤回：仅创建人、approving 状态、且模板允许撤回（TICKET-05）。"""
+    affected_user_ids = await ticket_service.current_approval_user_ids(
+        session, await ticket_service.get_ticket_or_404(session, ticket_id),
+    )
     ticket = await ticket_service.cancel_ticket(session, ticket_id, actor=actor)
     audit.log(module="ticket", action="ticket.cancel", actor_id=actor.id,
               actor_name=actor.username, source_ip=get_client_ip(request),
               target_type="ticket", target_id=str(ticket.id), target_name=ticket.ticket_no)
+    await session.commit()
+    await _publish_todo_changes(affected_user_ids)
     return ok({"status": ticket.status})
 
 

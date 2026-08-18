@@ -154,6 +154,7 @@
 | POST | `/tickets` | `ticket:write` | `{template_id,params,prepare_id?}` 提交工单 |
 | GET | `/tickets` | `ticket:read` | 分页、状态、创建人、关键字和时间筛选 |
 | GET | `/tickets/todo` | `ticket:approve` | 当前角色待审批列表 |
+| GET | `/tickets/todo/events` | `ticket:approve` | `since_seq`（整数，`>=0`，默认 `0`）回放当前用户的待办变更事件；无新事件最长等待 30 秒，返回 `{events:[{seq,kind:"todo.changed"}],last_seq}`，超时返回空 `events` 和原 `since_seq`。客户端必须直接赋值返回的 `last_seq`；若游标大于当前序号，返回一条合成 `todo.changed` 重同步事件和较小的 `last_seq` |
 | GET | `/tickets/{id}` | `ticket:read` | 工单、快照、审批时间线和执行概要 |
 | POST | `/tickets/{id}/approve` | `ticket:approve` | `{action:approve/reject,comment?}` |
 | POST | `/tickets/{id}/cancel` | `ticket:write` | 创建人在 `approving` 或 `queued` 状态撤回 |
