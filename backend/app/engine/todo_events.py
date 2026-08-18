@@ -44,6 +44,14 @@ async def publish_for_users(user_ids: list[int]) -> dict[int, int]:
     return sequences
 
 
+async def current_seq(user_id: int) -> int:
+    """读取用户当前待办事件序号；序号键过期或不存在时返回 0。"""
+    value = await redis_mod.redis_client.get(
+        redis_mod.KEY_TODO_EVENT_SEQ.format(user_id=user_id)
+    )
+    return int(value) if value else 0
+
+
 async def fetch_since(user_id: int, since_seq: int) -> list[dict]:
     """回放指定用户序号之后仍保留在 Redis 中的待办事件。"""
     raw = await redis_mod.redis_client.lrange(

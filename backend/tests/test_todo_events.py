@@ -74,3 +74,11 @@ async def test_publish_stops_after_bounded_watch_retries(fake_redis, monkeypatch
     with pytest.raises(WatchError, match="conflict"):
         await todo_events.publish_for_users([41])
     assert attempts == 3
+
+
+async def test_current_seq_returns_zero_when_sequence_key_is_missing(fake_redis):
+    await todo_events.publish_for_users([51])
+    assert await todo_events.current_seq(51) == 1
+
+    await fake_redis.delete("ops:todo:event:seq:51")
+    assert await todo_events.current_seq(51) == 0
