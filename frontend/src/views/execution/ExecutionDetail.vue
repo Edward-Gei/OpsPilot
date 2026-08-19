@@ -31,6 +31,26 @@ const executionId = Number(route.params.id)
 
 // ---------- 详情状态 ----------
 const detail = ref<execApi.ExecutionDetail | null>(null)
+const detailLoading = ref(false)
+const showSkeleton = ref(false)
+const SKELETON_DELAY = 160
+let skeletonTimer: number | null = null
+
+function clearSkeletonTimer() {
+  if (skeletonTimer !== null) {
+    window.clearTimeout(skeletonTimer)
+    skeletonTimer = null
+  }
+}
+
+function beginDetailLoading() {
+  clearSkeletonTimer()
+  detailLoading.value = true
+  showSkeleton.value = false
+  skeletonTimer = window.setTimeout(() => {
+    if (detailLoading.value) showSkeleton.value = true
+  }, SKELETON_DELAY)
+}
 
 /** 终态判定：终态后关闭实时通道，不再重连 */
 const isFinished = computed(() =>
@@ -39,9 +59,16 @@ const isFinished = computed(() =>
 
 /** 初始加载 / 断线恢复：REST 拉全量详情（含步骤列表） */
 async function loadDetail() {
-  const d = await execApi.getExecution(executionId)
-  detail.value = d
-  void fetchAllSegments()
+  beginDetailLoading()
+  try {
+    const d = await execApi.getExecution(executionId)
+    detail.value = d
+    void fetchAllSegments()
+  } finally {
+    detailLoading.value = false
+    showSkeleton.value = false
+    clearSkeletonTimer()
+  }
 }
 
 // ---------- 流水线步骤节点（点击定位到合并流中对应日志段） ----------
@@ -436,10 +463,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div>
-    <!-- 首屏骨架：立即显示，同时占住最终布局高度 -->
+    <!-- 首屏骨架：延迟显示避免快速请求闪屏，同时占住最终布局高度 -->
     <div
       v-if="!detail"
       class="detail-loading-shell"
+      :class="{ 'is-visible': showSkeleton }"
       aria-busy="true"
       aria-label="正在加载执行详情"
     >
@@ -630,6 +658,13 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.detail-loading-shell {
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+.detail-loading-shell.is-visible {
+  opacity: 1;
+}
 .detail-skeleton-hero {
   min-height: 104px;
   background: var(--bg-card);
@@ -816,7 +851,9 @@ onBeforeUnmount(() => {
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .detail-loading-shell,
   .detail-skeleton-block {
+    transition: none;
     animation: none;
   }
   .step-node.is-running .node-dot {
