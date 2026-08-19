@@ -436,48 +436,50 @@ onBeforeUnmount(() => {
 
 <template>
   <div>
-    <!-- 首屏加载：保持最终三区布局，用执行会话状态替代通用骨架 -->
+    <!-- 首屏骨架：立即显示，同时占住最终布局高度 -->
     <div
       v-if="!detail"
       class="detail-loading-shell"
       aria-busy="true"
       aria-label="正在加载执行详情"
     >
-      <div class="op-hero op-hero--indigo detail-hero detail-loading-hero">
-        <div class="detail-loading-icon"><ThunderboltOutlined /></div>
-        <div class="hero-main">
-          <div class="detail-loading-title">
-            正在打开执行详情 <code>#{{ executionId }}</code>
+      <div class="op-hero op-hero--indigo detail-hero detail-skeleton-hero">
+        <div class="detail-skeleton-icon"><ThunderboltOutlined /></div>
+        <div class="hero-main detail-skeleton-main">
+          <div class="detail-skeleton-row">
+            <span class="detail-skeleton-block detail-skeleton-title" />
+            <span class="detail-skeleton-block detail-skeleton-pill" />
           </div>
-          <div class="detail-loading-sub">正在同步执行概览、流程步骤与实时日志</div>
+          <span class="detail-skeleton-block detail-skeleton-sub" />
         </div>
-        <div class="detail-loading-connection">
-          <span class="detail-loading-dot" />正在连接
+        <div class="hero-actions detail-skeleton-actions">
+          <span class="detail-skeleton-block detail-skeleton-button" />
+          <span class="detail-skeleton-block detail-skeleton-button detail-skeleton-button-short" />
         </div>
       </div>
 
-      <div class="step-flow detail-loading-flow" aria-label="正在初始化执行详情">
-        <div class="detail-loading-phase is-active"><span>1</span>读取概览</div>
-        <i class="detail-loading-connector" />
-        <div class="detail-loading-phase"><span>2</span>对齐步骤</div>
-        <i class="detail-loading-connector" />
-        <div class="detail-loading-phase"><span>3</span>连接日志</div>
+      <div class="step-flow detail-skeleton-flow" aria-hidden="true">
+        <span class="detail-skeleton-block detail-skeleton-step" />
+        <span class="detail-skeleton-block detail-skeleton-step" />
+        <span class="detail-skeleton-block detail-skeleton-step" />
       </div>
 
-      <div class="log-panel detail-loading-log">
+      <div class="log-panel detail-skeleton-log">
         <div class="log-head">
           <span>执行日志（全部步骤）</span>
-          <span class="log-phase"><LoadingOutlined spin />初始化连接中</span>
+          <span class="log-phase"><LoadingOutlined spin />正在加载执行概览</span>
         </div>
         <div
           ref="logBox"
-          class="log-body detail-loading-log-body"
+          class="log-body detail-skeleton-log-body"
           :style="{ height: logHeight + 'px' }"
           aria-hidden="true"
         >
-          <div class="detail-loading-command">&gt; opspilot execution --attach {{ executionId }}</div>
-          <div class="detail-loading-message">
-            正在建立实时执行通道<span class="detail-loading-tail"><i /><i /><i /></span>
+          <div class="detail-skeleton-lines">
+            <span class="detail-skeleton-block" />
+            <span class="detail-skeleton-block" />
+            <span class="detail-skeleton-block" />
+            <span class="detail-skeleton-block" />
           </div>
         </div>
         <div class="log-resize"><span class="grip" /></div>
@@ -628,12 +630,12 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.detail-loading-hero {
+.detail-skeleton-hero {
   min-height: 104px;
   background: var(--bg-card);
   box-shadow: var(--shadow-card);
 }
-.detail-loading-icon {
+.detail-skeleton-icon {
   width: 38px;
   height: 38px;
   display: grid;
@@ -644,111 +646,74 @@ onBeforeUnmount(() => {
   background: var(--bg-hover);
   flex: none;
 }
-.detail-loading-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-1);
-  font-size: 17px;
-  font-weight: 600;
-}
-.detail-loading-title code {
-  color: var(--text-3);
-  font-family: 'Cascadia Code', Consolas, Menlo, monospace;
-  font-size: 12px;
-  font-weight: 400;
-}
-.detail-loading-sub {
-  margin-top: 8px;
-  color: var(--text-3);
-  font-size: 12px;
-}
-.detail-loading-connection {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  color: var(--text-3);
-  font-size: 12px;
-}
-.detail-loading-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--primary);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 14%, transparent);
-  animation: detail-loading-pulse 1.4s ease-in-out infinite;
-}
-.detail-loading-flow {
-  min-height: 92px;
-  padding: 10px 28px;
-}
-.detail-loading-phase {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  flex: none;
-  color: var(--text-3);
-  font-size: 12px;
-}
-.detail-loading-phase span {
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  font-size: 10px;
-}
-.detail-loading-phase.is-active {
-  color: var(--primary);
-  font-weight: 600;
-}
-.detail-loading-phase.is-active span {
-  border-color: var(--primary);
-  color: #fff;
-  background: var(--primary);
-  animation: detail-loading-pulse 1.4s ease-in-out infinite;
-}
-.detail-loading-connector {
-  height: 1px;
+.detail-skeleton-main {
   flex: 1;
-  min-width: 24px;
-  margin: 0 13px;
-  background: var(--border);
 }
-.detail-loading-log-body {
-  padding: 18px 12px;
+.detail-skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
-.detail-loading-command {
-  color: #7895bb;
+.detail-skeleton-block {
+  display: block;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--bg-hover), var(--bg-card), var(--bg-hover));
+  background-size: 220% 100%;
+  animation: detail-skeleton-shimmer 1.7s ease-in-out infinite;
 }
-.detail-loading-message {
-  margin-top: 4px;
-  color: #a2b5cc;
+.detail-skeleton-title {
+  width: 184px;
+  height: 23px;
 }
-.detail-loading-tail {
-  display: inline-flex;
-  gap: 3px;
-  margin-left: 5px;
-  vertical-align: middle;
+.detail-skeleton-pill {
+  width: 70px;
+  height: 22px;
+  border-radius: 999px;
 }
-.detail-loading-tail i {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: #7dd3fc;
-  animation: detail-loading-tail 1.1s ease-in-out infinite;
+.detail-skeleton-sub {
+  width: min(520px, 72%);
+  height: 13px;
+  margin-top: 8px;
 }
-.detail-loading-tail i:nth-child(2) { animation-delay: 0.15s; }
-.detail-loading-tail i:nth-child(3) { animation-delay: 0.3s; }
-@keyframes detail-loading-pulse {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 1; }
+.detail-skeleton-actions {
+  min-width: 164px;
 }
-@keyframes detail-loading-tail {
-  0%, 100% { opacity: 0.25; transform: translateY(0); }
-  50% { opacity: 1; transform: translateY(-2px); }
+.detail-skeleton-button {
+  width: 76px;
+  height: 31px;
+}
+.detail-skeleton-button-short {
+  width: 62px;
+}
+.detail-skeleton-flow {
+  min-height: 92px;
+  gap: 10px;
+}
+.detail-skeleton-step {
+  height: 48px;
+  flex: 1;
+}
+.detail-skeleton-log-body {
+  height: 440px;
+  display: flex;
+  align-items: flex-start;
+}
+.detail-skeleton-lines {
+  width: min(560px, 78%);
+  display: grid;
+  gap: 12px;
+}
+.detail-skeleton-lines .detail-skeleton-block {
+  height: 10px;
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0.08), rgba(125, 211, 252, 0.2), rgba(148, 163, 184, 0.08));
+  background-size: 220% 100%;
+}
+.detail-skeleton-lines .detail-skeleton-block:nth-child(2) { width: 84%; }
+.detail-skeleton-lines .detail-skeleton-block:nth-child(3) { width: 68%; }
+.detail-skeleton-lines .detail-skeleton-block:nth-child(4) { width: 48%; }
+@keyframes detail-skeleton-shimmer {
+  0% { background-position: 150% 0; }
+  100% { background-position: -50% 0; }
 }
 .detail-hero {
   align-items: center;
@@ -851,9 +816,7 @@ onBeforeUnmount(() => {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .detail-loading-dot,
-  .detail-loading-phase.is-active span,
-  .detail-loading-tail i {
+  .detail-skeleton-block {
     animation: none;
   }
   .step-node.is-running .node-dot {
