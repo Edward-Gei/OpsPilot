@@ -462,7 +462,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div>
+  <div class="execution-detail">
+    <div v-if="detailLoading && !detail" class="detail-loading-spin" role="status" aria-label="正在加载执行详情">
+      <a-spin />
+    </div>
+
     <!-- 首屏骨架：延迟显示避免快速请求闪屏，同时占住最终布局高度 -->
     <div
       v-if="!detail"
@@ -658,6 +662,19 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.execution-detail {
+  position: relative;
+}
+.detail-loading-spin {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-card) 58%, transparent);
+  pointer-events: none;
+}
 .detail-loading-shell {
   opacity: 0;
   transition: opacity 0.16s ease;
