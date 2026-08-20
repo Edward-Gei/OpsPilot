@@ -64,6 +64,7 @@ def _app_brief(a, stats: dict | None = None) -> dict:
         "description": a.description,
         "language": a.language,
         "deploy_type": a.deploy_type,
+        "project_type": a.project_type,
         "host_count": stats.get("host_count", 0),
         "host_ips": stats.get("host_ips", []),
         "created_at": a.created_at.isoformat() if a.created_at else None,
@@ -237,10 +238,11 @@ async def export_apps(
     keyword: str | None = None,
     language: str | None = None,
     deploy_type: str | None = None,
+    project_type: Literal["frontend", "backend"] | None = None,
 ) -> Response:
     """导出与列表相同筛选语义的全量应用。"""
     apps, host_stats = await cmdb_service.iter_apps_filtered(
-        session, keyword=keyword, language=language, deploy_type=deploy_type,
+        session, keyword=keyword, language=language, deploy_type=deploy_type, project_type=project_type,
     )
     audit.log(module="cmdb", action="app.export", actor_id=actor.id, actor_name=actor.username,
               source_ip=get_client_ip(request), target_type="app", detail={"count": len(apps)})
@@ -255,13 +257,14 @@ async def list_apps(
     keyword: str | None = None,
     language: str | None = None,
     deploy_type: str | None = None,
+    project_type: Literal["frontend", "backend"] | None = None,
     sort_by: Literal["language", "created_at"] | None = None,
     sort_order: Literal["asc", "desc"] | None = None,
 ) -> dict:
     """分页查应用；items 含关联主机数与 IP 清单。"""
     apps, total, host_stats = await cmdb_service.list_apps(
         session, page=page, page_size=page_size, keyword=keyword,
-        language=language, deploy_type=deploy_type,
+        language=language, deploy_type=deploy_type, project_type=project_type,
         sort_by=sort_by, sort_order=sort_order,
     )
     return ok({

@@ -27,6 +27,11 @@ const deployText: Record<string, { text: string; color: string }> = {
   k8s: { text: 'K8s', color: 'purple' },
 }
 const deployOptions = Object.entries(deployText).map(([value, v]) => ({ label: v.text, value }))
+const projectTypeText: Record<string, { text: string; color: string }> = {
+  frontend: { text: '前端', color: 'blue' },
+  backend: { text: '后端', color: 'green' },
+}
+const projectTypeOptions = Object.entries(projectTypeText).map(([value, v]) => ({ label: v.text, value }))
 
 // ---------- 列表 ----------
 const loading = ref(false)
@@ -40,6 +45,7 @@ const query = reactive({
   page_size: 20,
   keyword: '',
   deploy_type: undefined as string | undefined,
+  project_type: undefined as cmdbApi.AppProjectType | undefined,
   sort_by: undefined as 'language' | 'created_at' | undefined,
   sort_order: undefined as 'asc' | 'desc' | undefined,
 })
@@ -49,6 +55,7 @@ const columns = ref(makeResizable([
   { title: '应用名', dataIndex: 'name', key: 'name', width: 140, ellipsis: true },
   { title: '语言', dataIndex: 'language', key: 'language', width: 100, ellipsis: true, sorter: true },
   { title: '部署方式', key: 'deploy_type', width: 100 },
+  { title: '项目类型', key: 'project_type', width: 100 },
   { title: '关联主机', key: 'host_count', width: 95 },
   { title: '主机 IP', key: 'host_ips', width: 140 },
   { title: '说明', key: 'description', width: 180, ellipsis: true },
@@ -65,6 +72,7 @@ async function loadList() {
       page_size: query.page_size,
       keyword: query.keyword || undefined,
       deploy_type: query.deploy_type,
+      project_type: query.project_type,
       sort_by: query.sort_by,
       sort_order: query.sort_order,
     })
@@ -154,6 +162,7 @@ async function onExport() {
     await cmdbApi.exportApps({
       keyword: query.keyword || undefined,
       deploy_type: query.deploy_type,
+      project_type: query.project_type,
     })
   } catch {
     message.error('导出失败')
@@ -197,10 +206,17 @@ async function loadAllHosts() {
 const editVisible = ref(false)
 const editLoading = ref(false)
 const editing = ref<cmdbApi.AppItem | null>(null) // null=创建
-const editForm = reactive({
+const editForm = reactive<{
+  name: string
+  language: string
+  deploy_type: string
+  project_type: cmdbApi.AppProjectType
+  description: string
+}>({
   name: '',
   language: '',
   deploy_type: 'shell',
+  project_type: 'frontend',
   description: '',
 })
 // a-transfer 的 targetKeys 为字符串，提交时转回 number[]
@@ -208,7 +224,9 @@ const targetKeys = ref<string[]>([])
 
 function openCreate() {
   editing.value = null
-  Object.assign(editForm, { name: '', language: '', deploy_type: 'shell', description: '' })
+  Object.assign(editForm, {
+    name: '', language: '', deploy_type: 'shell', project_type: 'frontend', description: '',
+  })
   targetKeys.value = []
   editVisible.value = true
   loadAllHosts()
@@ -221,6 +239,7 @@ async function openEdit(row: cmdbApi.AppItem) {
     name: row.name,
     language: row.language || '',
     deploy_type: row.deploy_type,
+    project_type: row.project_type,
     description: row.description || '',
   })
   editVisible.value = true
@@ -241,6 +260,7 @@ async function onSubmitEdit() {
       name: editForm.name,
       language: editForm.language || undefined,
       deploy_type: editForm.deploy_type,
+      project_type: editForm.project_type,
       description: editForm.description || undefined,
       host_ids: targetKeys.value.map(Number),
     }
@@ -333,6 +353,14 @@ onMounted(() => {
         :options="deployOptions"
         @change="onSearch"
       />
+      <a-select
+        v-model:value="query.project_type"
+        placeholder="项目类型"
+        class="deploy-sel"
+        allow-clear
+        :options="projectTypeOptions"
+        @change="onSearch"
+      />
       <!-- 右侧操作组：批量删除 + 新建整体钉右 -->
       <div class="toolbar-actions">
         <a-popconfirm
@@ -358,7 +386,7 @@ onMounted(() => {
       :loading="loading"
       row-key="id"
       bordered
-      :scroll="{ x: 1160 }"
+      :scroll="{ x: 1260 }"
       :row-selection="rowSelection"
       @resize-column="onResizeColumn"
       @change="onTableChange"
@@ -376,6 +404,11 @@ onMounted(() => {
         <template v-else-if="column.key === 'deploy_type'">
           <a-tag :color="deployText[record.deploy_type]?.color">
             {{ deployText[record.deploy_type]?.text || record.deploy_type }}
+          </a-tag>
+        </template>
+        <template v-else-if="column.key === 'project_type'">
+          <a-tag :color="projectTypeText[record.project_type]?.color">
+            {{ projectTypeText[record.project_type]?.text || record.project_type }}
           </a-tag>
         </template>
         <template v-else-if="column.key === 'host_count'">
@@ -424,6 +457,9 @@ onMounted(() => {
           <a-form-item label="部署方式" required class="form-col">
             <a-select v-model:value="editForm.deploy_type" :options="deployOptions" />
           </a-form-item>
+          <a-form-item label="项目类型" required class="form-col">
+            <a-select v-model:value="editForm.project_type" :options="projectTypeOptions" />
+          </a-form-item>
         </div>
         <a-form-item label="说明">
           <a-textarea v-model:value="editForm.description" :rows="2" />
@@ -456,6 +492,11 @@ onMounted(() => {
             <a-descriptions-item label="部署方式">
               <a-tag :color="deployText[detail.deploy_type]?.color">
                 {{ deployText[detail.deploy_type]?.text || detail.deploy_type }}
+              </a-tag>
+            </a-descriptions-item>
+            <a-descriptions-item label="项目类型">
+              <a-tag :color="projectTypeText[detail.project_type]?.color">
+                {{ projectTypeText[detail.project_type]?.text || detail.project_type }}
               </a-tag>
             </a-descriptions-item>
             <a-descriptions-item label="说明">{{ detail.description || '—' }}</a-descriptions-item>

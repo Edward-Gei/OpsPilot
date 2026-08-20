@@ -52,6 +52,9 @@ class Application(Base):
     description: Mapped[str | None] = mapped_column(String(255))
     language: Mapped[str | None] = mapped_column(String(32), comment="开发语言")
     deploy_type: Mapped[str] = mapped_column(String(16), nullable=False, comment="shell/docker/k8s")
+    project_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="frontend", server_default="frontend", comment="frontend/backend"
+    )
     created_by: Mapped[int | None] = mapped_column(UBIGINT)
     created_at: Mapped[datetime] = created_at_column()
     updated_at: Mapped[datetime] = updated_at_column()

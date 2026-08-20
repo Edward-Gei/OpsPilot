@@ -355,6 +355,51 @@ class TestAppCrud:
         )
         assert resp.json()["code"] == 40001
 
+    async def test_app_project_type_default_update_and_filter(self, client):
+        """项目类型默认前端，支持更新和列表筛选，并拒绝枚举外的值。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        frontend = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "前端门户", "deploy_type": "docker", "project_type": "frontend", "host_ids": []},
+            headers=headers,
+        )
+        backend = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "订单后端", "deploy_type": "shell", "project_type": "backend", "host_ids": []},
+            headers=headers,
+        )
+        defaulted = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "默认应用", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+        frontend_id = frontend.json()["data"]["id"]
+        backend_id = backend.json()["data"]["id"]
+        defaulted_id = defaulted.json()["data"]["id"]
+
+        detail = await client.get(f"/api/v1/cmdb/apps/{defaulted_id}", headers=headers)
+        assert detail.json()["data"]["project_type"] == "frontend"
+
+        resp = await client.put(
+            f"/api/v1/cmdb/apps/{backend_id}",
+            json={"name": "订单后端", "deploy_type": "shell", "project_type": "frontend", "host_ids": []},
+            headers=headers,
+        )
+        assert resp.json()["code"] == 0
+        resp = await client.get(
+            "/api/v1/cmdb/apps", params={"project_type": "frontend"}, headers=headers
+        )
+        assert {item["id"] for item in resp.json()["data"]["items"]} == {
+            frontend_id, backend_id, defaulted_id,
+        }
+
+        resp = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "非法类型", "deploy_type": "shell", "project_type": "mobile", "host_ids": []},
+            headers=headers,
+        )
+        assert resp.json()["code"] == 40001
+
     async def test_app_only_prod_hosts(self, client):
         """应用仅可关联生产环境主机：非生产主机 -> 40001。"""
         tokens = await login_for_tokens(client, "ops1")
@@ -485,6 +530,30 @@ class TestHostExcel:
 
 
 class TestAppExcel:
+    async def test_export_with_project_type_filter(self, client):
+        """应用导出按项目类型筛选，并包含项目类型列。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "前端应用", "deploy_type": "docker", "project_type": "frontend", "host_ids": []},
+            headers=headers,
+        )
+        await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "后端应用", "deploy_type": "shell", "project_type": "backend", "host_ids": []},
+            headers=headers,
+        )
+
+        resp = await client.get(
+            "/api/v1/cmdb/apps/export", params={"project_type": "backend"}, headers=headers
+        )
+        assert resp.status_code == 200
+        ws = load_workbook(BytesIO(resp.content)).active
+        assert [cell.value for cell in ws[1]][:4] == ["应用名", "开发语言", "部署方式", "项目类型"]
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        assert len(rows) == 1
+        assert rows[0][:4] == ("后端应用", None, "shell", "后端")
+
     async def test_export_with_filter(self, client):
         """应用导出仅包含当前部署方式筛选结果。"""
         headers = auth_header(await login_for_tokens(client, "ops1"))
