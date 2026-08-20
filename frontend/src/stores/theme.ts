@@ -12,9 +12,9 @@ function applyTheme(mode: ThemeMode) {
 }
 
 export const useThemeStore = defineStore('theme', () => {
-  // 默认暗色；读取历史偏好（仅接受合法值，防脏数据）
+  // 默认明亮；读取历史偏好（仅接受合法值，防脏数据）
   const saved = localStorage.getItem(STORAGE_KEY)
-  const mode = ref<ThemeMode>(saved === 'light' ? 'light' : 'dark')
+  const mode = ref<ThemeMode>(saved === 'dark' ? 'dark' : 'light')
   applyTheme(mode.value)
 
   // 切换主题并持久化

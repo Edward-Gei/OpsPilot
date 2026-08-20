@@ -9,6 +9,7 @@
 - 作业主机连通性测试：SSH 异常返回 ok=False（不抛错）。
 """
 import os
+from datetime import datetime
 
 from sqlalchemy import select, update
 
@@ -24,9 +25,9 @@ from tests.test_ticket_api import _approver_headers, _base_env, _create_template
 
 # ---------- 测试辅助 ----------
 
-async def _queued_ticket(client, env, db_factory) -> tuple[dict, int]:
+async def _queued_ticket(client, env, db_factory, **template_override) -> tuple[dict, int]:
     """免审提交一张工单（queued），返回 (提交返回体, execution_id)。"""
-    tpl_id = await _create_template(client, env)
+    tpl_id = await _create_template(client, env, **template_override)
     data = await _submit(client, env["ops_h"], tpl_id)
     async with db_factory() as s:
         eid = (await s.execute(
@@ -119,6 +120,29 @@ class TestExecutionControl:
 
 class TestExecutionReadApis:
     """执行记录只读接口：列表 / 详情 / 日志 / 事件长轮询。"""
+
+    async def test_list_filters_by_started_at(self, client, db_factory):
+        """时间范围按实际开始时间过滤，而不是执行记录创建时间。"""
+        env = await _base_env(client)
+        _first, in_range_id = await _queued_ticket(client, env, db_factory)
+        _second, out_range_id = await _queued_ticket(
+            client, env, db_factory, name="重启 Nginx 2",
+        )
+        async with db_factory() as session:
+            await session.execute(update(Execution).where(Execution.id == in_range_id).values(
+                created_at=datetime(2026, 7, 1, 10), started_at=datetime(2026, 8, 10, 10),
+            ))
+            await session.execute(update(Execution).where(Execution.id == out_range_id).values(
+                created_at=datetime(2026, 8, 10, 10), started_at=datetime(2026, 7, 1, 10),
+            ))
+            await session.commit()
+
+        body = (await client.get("/api/v1/executions", params={
+            "start": "2026-08-01 00:00:00", "end": "2026-08-31 23:59:59",
+        }, headers=env["ops_h"])).json()["data"]
+
+        assert body["total"] == 1
+        assert [item["id"] for item in body["items"]] == [in_range_id]
 
     async def test_list_and_detail(self, client, db_factory):
         """列表筛选与详情步骤装配（预建步骤子表全 pending）。"""

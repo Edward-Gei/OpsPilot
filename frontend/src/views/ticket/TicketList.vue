@@ -39,7 +39,10 @@ const query = reactive({
   keyword: '',
   status: undefined as string | undefined,
   // 创建时间范围：[开始, 结束]，精确到秒（YYYY-MM-DD HH:mm:ss）
-  range: [] as string[],
+  range: [
+    dayjs().subtract(30, 'day').format('YYYY-MM-DD HH:mm:ss'),
+    dayjs().format('YYYY-MM-DD HH:mm:ss'),
+  ] as string[],
 })
 
 // 时间筛选快捷项：最近 N 天 → 当前时刻，精确到秒

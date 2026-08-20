@@ -460,7 +460,7 @@ async def list_tickets(session: AsyncSession, *, page: int, page_size: int, stat
     if creator_id: query = query.where(Ticket.creator_id == creator_id)
     if keyword: query = query.where(Ticket.ticket_no.like(f"%{keyword}%") | Ticket.title.like(f"%{keyword}%"))
     if start: query = query.where(Ticket.created_at >= start)
-    if end: query = query.where(Ticket.created_at <= f"{end} 23:59:59")
+    if end: query = query.where(Ticket.created_at <= (f"{end} 23:59:59" if len(end) == 10 else end))
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
     rows = await session.execute(query.order_by(Ticket.id.desc()).offset((page - 1) * page_size).limit(page_size))
     return list(rows.scalars()), total

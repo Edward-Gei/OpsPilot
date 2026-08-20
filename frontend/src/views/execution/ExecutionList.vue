@@ -2,6 +2,7 @@
 // 执行中心（M5）：执行记录列表，行点击进入详情页（步骤列表 + 实时日志）
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import dayjs, { type Dayjs } from 'dayjs'
 import {
   EyeOutlined,
   SearchOutlined,
@@ -23,7 +24,17 @@ const query = reactive({
   page_size: 20,
   ticket_no: '',
   status: undefined as string | undefined,
+  range: [
+    dayjs().subtract(30, 'day').format('YYYY-MM-DD HH:mm:ss'),
+    dayjs().format('YYYY-MM-DD HH:mm:ss'),
+  ] as string[],
 })
+
+const rangePresets: { label: string; value: [Dayjs, Dayjs] }[] = [
+  { label: '最近 7 天', value: [dayjs().subtract(7, 'day'), dayjs()] },
+  { label: '最近 30 天', value: [dayjs().subtract(30, 'day'), dayjs()] },
+  { label: '最近 90 天', value: [dayjs().subtract(90, 'day'), dayjs()] },
+]
 
 const columns = ref(makeResizable([
   { title: '执行 ID', dataIndex: 'id', key: 'id', width: 90 },
@@ -47,6 +58,8 @@ async function loadList() {
       page_size: query.page_size,
       ticket_no: query.ticket_no || undefined,
       status: query.status,
+      start: query.range[0] || undefined,
+      end: query.range[1] || undefined,
     })
     items.value = data.items
     total.value = data.total
@@ -133,6 +146,15 @@ onMounted(() => {
         :options="execStatusOptions"
         @change="onSearch"
       />
+      <a-range-picker
+        v-model:value="query.range"
+        show-time
+        value-format="YYYY-MM-DD HH:mm:ss"
+        class="range"
+        :placeholder="['开始时间', '结束时间']"
+        :presets="rangePresets"
+        @change="onSearch"
+      />
     </div>
 
     <!-- 列表 -->
@@ -188,5 +210,8 @@ onMounted(() => {
 }
 .status-sel {
   width: 120px;
+}
+.range {
+  width: 400px;
 }
 </style>

@@ -10,7 +10,7 @@
 - 免审模板：提交直接 queued；
 - 待办列表 = 当前步骤审批角色 ∩ 我的角色；通知按模板 notify_rules 落 record（M6 打桩）。
 """
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app.api.v1 import tickets as ticket_api
 from app.core.redis import EXEC_QUEUE
@@ -618,7 +618,7 @@ class TestApproveAndCancel:
         body = resp.json()["data"]
         assert body["total"] == 1 and body["items"][0]["ticket_no"] == data_a["ticket_no"]
 
-    async def test_list_time_range(self, client, seed):
+    async def test_list_time_range(self, client, seed, db_factory):
         """创建时间范围筛选：秒级 start/end 命中；回归——曾因缺括号把裸字符串传入 where 报 500。"""
         env = await _base_env(client)
         tpl = await _create_template(client, env, name="免审模板")
@@ -631,5 +631,20 @@ class TestApproveAndCancel:
         # 秒级范围：包含当前时刻命中，未来区间不命中
         assert await _total({"start": "2000-01-01 00:00:00", "end": "2099-12-31 23:59:59"}) == 1
         assert await _total({"start": "2099-01-01 00:00:00", "end": "2099-12-31 23:59:59"}) == 0
+
+        bound_params: list[object] = []
+
+        def capture_end_param(_conn, _cursor, statement, parameters, _context, _executemany):
+            if "ticket.created_at <=" in statement:
+                bound_params.append(parameters)
+
+        engine = db_factory.kw["bind"]
+        event.listen(engine.sync_engine, "before_cursor_execute", capture_end_param)
+        try:
+            await _total({"end": "2099-12-31 12:00:00"})
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", capture_end_param)
+        assert ("2099-12-31 12:00:00",) in bound_params
+
         # 纯日期上界：自动补到当天末
         assert await _total({"end": "2099-12-31"}) == 1

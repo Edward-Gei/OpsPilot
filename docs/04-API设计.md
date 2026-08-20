@@ -169,7 +169,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/executions` | `execution:read` | 执行记录分页和筛选 |
+| GET | `/executions` | `execution:read` | 执行记录分页；工单号、状态、发起人和实际开始时间（`start/end`）筛选 |
 | GET | `/executions/{id}` | `execution:read` | 执行详情和步骤状态 |
 | GET | `/executions/{id}/logs` | `execution:read` | `step_order`、`offset`、`limit` 读取日志行 |
 | GET | `/executions/{id}/events` | `execution:read` | 状态事件 REST 长轮询 |

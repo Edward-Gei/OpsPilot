@@ -45,9 +45,9 @@ async def list_executions(
     if status:
         query = query.where(Execution.status == status)
     if start:
-        query = query.where(Execution.created_at >= start)
+        query = query.where(Execution.started_at >= start)
     if end:
-        query = query.where(Execution.created_at <= (f"{end} 23:59:59" if len(end) == 10 else end))
+        query = query.where(Execution.started_at <= (f"{end} 23:59:59" if len(end) == 10 else end))
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
     rows = (
         await session.execute(
