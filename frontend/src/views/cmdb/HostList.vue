@@ -527,74 +527,77 @@ onMounted(() => {
     <a-modal
       v-model:open="editVisible"
       :title="editing ? '编辑主机' : '新建主机'"
+      :width="920"
       :confirm-loading="editLoading"
       @ok="onSubmitEdit"
     >
-      <a-form layout="vertical">
-        <a-form-item label="主机名" required>
-          <a-input v-model:value="editForm.hostname" placeholder="如 web-prod-01" />
-        </a-form-item>
-        <a-form-item label="内网 IP 地址" required>
-          <a-input v-model:value="editForm.ip" placeholder="如 10.0.0.1" />
-        </a-form-item>
-        <a-form-item label="公网 IP 地址">
-          <a-input v-model:value="editForm.public_ip" placeholder="如 203.0.113.1" />
-        </a-form-item>
-        <a-form-item label="项目">
-          <a-select v-model:value="editForm.project" :options="projectOptions" />
-        </a-form-item>
-        <a-form-item label="RI">
-          <a-input v-model:value="editForm.ri" />
-        </a-form-item>
-        <a-form-item label="主机系列">
-          <a-auto-complete
-            v-model:value="editForm.host_series"
-            placeholder="如 C7（可自由输入）"
-            :options="hostSeriesOptions"
-            @focus="loadSuggest('host_series')"
-            @search="(q: string) => loadSuggest('host_series', q)"
-          />
-        </a-form-item>
-        <a-form-item label="所属平台">
-          <a-auto-complete
-            v-model:value="editForm.platform"
-            placeholder="如 阿里云（可自由输入）"
-            :options="platformOptions"
-            @focus="loadSuggest('platform')"
-            @search="(q: string) => loadSuggest('platform', q)"
-          />
-        </a-form-item>
-        <a-form-item label="所属区域">
-          <a-auto-complete
-            v-model:value="editForm.region"
-            placeholder="如 华东1（可自由输入）"
-            :options="regionOptions"
-            @focus="loadSuggest('region')"
-            @search="(q: string) => loadSuggest('region', q)"
-          />
-        </a-form-item>
-        <a-form-item label="操作系统">
-          <a-input v-model:value="editForm.os" placeholder="如 CentOS 7.9" />
-        </a-form-item>
-        <a-form-item label="资源配置">
-          <div class="spec-inputs">
-            <a-input-number v-model:value="editForm.cpu_cores" :min="1" :max="4096" placeholder="CPU 核数" addon-after="核" />
-            <a-input-number v-model:value="editForm.memory_gb" :min="1" :max="65536" placeholder="内存" addon-after="GB" />
-            <a-input-number v-model:value="editForm.disk_gb" :min="1" :max="1048576" placeholder="磁盘" addon-after="GB" />
-          </div>
-        </a-form-item>
-        <a-form-item label="环境" required>
-          <a-select v-model:value="editForm.environment" :options="envOptions" />
-        </a-form-item>
-        <a-form-item label="状态">
-          <a-select v-model:value="editForm.status" :options="statusOptions" />
-        </a-form-item>
-        <a-form-item label="SSH 端口">
-          <a-input-number v-model:value="editForm.ssh_port" :min="1" :max="65535" style="width: 100%" />
-        </a-form-item>
-        <a-form-item label="说明">
-          <a-textarea v-model:value="editForm.description" :rows="2" />
-        </a-form-item>
+      <a-form layout="vertical" class="host-edit-form">
+        <div class="host-form-grid">
+          <a-form-item label="主机名" required>
+            <a-input v-model:value="editForm.hostname" placeholder="如 web-prod-01" />
+          </a-form-item>
+          <a-form-item label="项目">
+            <a-select v-model:value="editForm.project" :options="projectOptions" />
+          </a-form-item>
+          <a-form-item label="内网 IP 地址" required>
+            <a-input v-model:value="editForm.ip" placeholder="如 10.0.0.1" />
+          </a-form-item>
+          <a-form-item label="公网 IP 地址">
+            <a-input v-model:value="editForm.public_ip" placeholder="如 203.0.113.1" />
+          </a-form-item>
+          <a-form-item label="所属平台">
+            <a-auto-complete
+              v-model:value="editForm.platform"
+              placeholder="如 阿里云（可自由输入）"
+              :options="platformOptions"
+              @focus="loadSuggest('platform')"
+              @search="(q: string) => loadSuggest('platform', q)"
+            />
+          </a-form-item>
+          <a-form-item label="所属区域">
+            <a-auto-complete
+              v-model:value="editForm.region"
+              placeholder="如 华东1（可自由输入）"
+              :options="regionOptions"
+              @focus="loadSuggest('region')"
+              @search="(q: string) => loadSuggest('region', q)"
+            />
+          </a-form-item>
+          <a-form-item label="RI">
+            <a-input v-model:value="editForm.ri" />
+          </a-form-item>
+          <a-form-item label="主机系列">
+            <a-auto-complete
+              v-model:value="editForm.host_series"
+              placeholder="如 C7（可自由输入）"
+              :options="hostSeriesOptions"
+              @focus="loadSuggest('host_series')"
+              @search="(q: string) => loadSuggest('host_series', q)"
+            />
+          </a-form-item>
+          <a-form-item label="操作系统">
+            <a-input v-model:value="editForm.os" placeholder="如 CentOS 7.9" />
+          </a-form-item>
+          <a-form-item label="资源配置">
+            <div class="spec-inputs">
+              <a-input-number v-model:value="editForm.cpu_cores" :min="1" :max="4096" placeholder="CPU 核数" addon-after="核" />
+              <a-input-number v-model:value="editForm.memory_gb" :min="1" :max="65536" placeholder="内存" addon-after="GB" />
+              <a-input-number v-model:value="editForm.disk_gb" :min="1" :max="1048576" placeholder="磁盘" addon-after="GB" />
+            </div>
+          </a-form-item>
+          <a-form-item label="环境" required>
+            <a-select v-model:value="editForm.environment" :options="envOptions" />
+          </a-form-item>
+          <a-form-item label="状态">
+            <a-select v-model:value="editForm.status" :options="statusOptions" />
+          </a-form-item>
+          <a-form-item label="SSH 端口">
+            <a-input-number v-model:value="editForm.ssh_port" :min="1" :max="65535" style="width: 100%" />
+          </a-form-item>
+          <a-form-item label="说明">
+            <a-textarea v-model:value="editForm.description" :rows="2" />
+          </a-form-item>
+        </div>
       </a-form>
     </a-modal>
 
@@ -722,6 +725,19 @@ onMounted(() => {
 }
 .spec-inputs :deep(.ant-input-number) {
   flex: 1;
+}
+.host-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+.host-form-grid :deep(.ant-form-item) {
+  margin-bottom: 18px;
+}
+@media (max-width: 768px) {
+  .host-form-grid {
+    grid-template-columns: 1fr;
+  }
 }
 .import-tip {
   margin-bottom: 14px;
