@@ -24,12 +24,15 @@ export interface HostItem {
   updated_at: string | null
 }
 
+export type AppProjectType = 'frontend' | 'backend'
+
 export interface AppItem {
   id: number
   name: string
   description: string | null
   language: string | null
   deploy_type: string
+  project_type: AppProjectType
   host_count: number
   // 关联主机 IP 清单（列表多行展示）
   host_ips: string[]
@@ -152,6 +155,7 @@ export interface AppQuery {
   keyword?: string
   language?: string
   deploy_type?: string
+  project_type?: AppProjectType
   sort_by?: 'language' | 'created_at'
   sort_order?: 'asc' | 'desc'
 }
@@ -174,6 +178,7 @@ export function createApp(data: {
   description?: string
   language?: string
   deploy_type: string
+  project_type: AppProjectType
   host_ids: number[]
 }) {
   return request<{ id: number }>({ url: '/cmdb/apps', method: 'post', data })
@@ -181,7 +186,14 @@ export function createApp(data: {
 
 export function updateApp(
   id: number,
-  data: { name: string; description?: string; language?: string; deploy_type: string; host_ids: number[] },
+  data: {
+    name: string
+    description?: string
+    language?: string
+    deploy_type: string
+    project_type: AppProjectType
+    host_ids: number[]
+  },
 ) {
   return request<null>({ url: `/cmdb/apps/${id}`, method: 'put', data })
 }

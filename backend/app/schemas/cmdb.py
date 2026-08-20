@@ -45,4 +45,5 @@ class AppUpsertRequest(BaseModel):
     description: str | None = Field(default=None, max_length=255)
     language: str | None = Field(default=None, max_length=32)
     deploy_type: Literal["shell", "docker", "k8s"]
+    project_type: Literal["frontend", "backend"] = "frontend"
     host_ids: list[int] = Field(default_factory=list)
