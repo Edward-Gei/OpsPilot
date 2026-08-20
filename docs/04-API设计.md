@@ -78,11 +78,11 @@
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/cmdb/hosts` | `cmdb:read` | 分页、关键字、平台/区域/环境/状态筛选 |
-| POST | `/cmdb/hosts` | `cmdb:write` | 新建主机，IP 唯一 |
+| POST | `/cmdb/hosts` | `cmdb:write` | 新建主机，内网 IP 唯一 |
 | GET | `/cmdb/hosts/{id}` | `cmdb:read` | 主机详情和关联应用 |
 | PUT | `/cmdb/hosts/{id}` | `cmdb:write` | 编辑主机 |
 | DELETE | `/cmdb/hosts/{id}` | `cmdb:delete` | 被应用关联时拒绝 |
-| GET | `/cmdb/hosts/suggest` | `cmdb:read` | 平台/区域补全 |
+| GET | `/cmdb/hosts/suggest` | `cmdb:read` | 平台/区域/主机系列补全 |
 | GET | `/cmdb/hosts/import-template` | `cmdb:import` | 下载 Excel 模板 |
 | POST | `/cmdb/hosts/import` | `cmdb:import` | 逐行校验、可选存在即更新 |
 | GET | `/cmdb/hosts/export` | `cmdb:read` | 导出当前筛选 |

@@ -128,10 +128,14 @@ async def delete_host(session: AsyncSession, host_id: int) -> Host:
 
 
 async def suggest_host_field(session: AsyncSession, field: str, q: str | None) -> list[str]:
-    """平台/区域自由文本自动补全：返回已有去重值（HOST-03）。"""
-    column = {"platform": Host.platform, "region": Host.region}.get(field)
+    """平台/区域/主机系列自由文本自动补全：返回已有去重值。"""
+    column = {
+        "platform": Host.platform,
+        "region": Host.region,
+        "host_series": Host.host_series,
+    }.get(field)
     if column is None:
-        raise Errors.param("field 仅支持 platform / region")
+        raise Errors.param("field 仅支持 platform / region / host_series")
     query = select(column).where(column.is_not(None)).distinct().order_by(column).limit(20)
     if q:
         query = query.where(column.like(f"%{q}%"))

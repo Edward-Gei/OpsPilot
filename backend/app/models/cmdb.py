@@ -21,6 +21,12 @@ class Host(Base):
     id: Mapped[int] = pk_column()
     hostname: Mapped[str] = mapped_column(String(128), nullable=False, comment="主机名")
     ip: Mapped[str] = mapped_column(String(45), unique=True, nullable=False, comment="管理 IP（兼容 IPv6 长度）")
+    project: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="mitrade", comment="项目：mitrade/tradingkey"
+    )
+    public_ip: Mapped[str | None] = mapped_column(String(45), comment="公网 IP（兼容 IPv6 长度）")
+    ri: Mapped[str | None] = mapped_column(String(64), comment="RI")
+    host_series: Mapped[str | None] = mapped_column(String(64), comment="主机系列，自由文本")
     platform: Mapped[str | None] = mapped_column(String(64), comment="平台，自由文本")
     region: Mapped[str | None] = mapped_column(String(64), comment="区域，自由文本")
     os: Mapped[str | None] = mapped_column(String(64), comment="操作系统，自由文本")

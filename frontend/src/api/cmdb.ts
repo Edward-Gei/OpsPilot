@@ -6,6 +6,10 @@ export interface HostItem {
   id: number
   hostname: string
   ip: string
+  project: 'mitrade' | 'tradingkey'
+  public_ip: string | null
+  ri: string | null
+  host_series: string | null
   platform: string | null
   region: string | null
   os: string | null
@@ -57,6 +61,10 @@ export interface HostQuery {
 export interface HostForm {
   hostname: string
   ip: string
+  project: 'mitrade' | 'tradingkey'
+  public_ip?: string
+  ri?: string
+  host_series?: string
   platform?: string
   region?: string
   os?: string
@@ -96,8 +104,8 @@ export function deleteHost(id: number) {
   return request<null>({ url: `/cmdb/hosts/${id}`, method: 'delete' })
 }
 
-/** 平台/区域自由文本自动补全 */
-export function suggestHostField(field: 'platform' | 'region', q?: string) {
+/** 平台/区域/主机系列自由文本自动补全 */
+export function suggestHostField(field: 'platform' | 'region' | 'host_series', q?: string) {
   return request<{ items: string[] }>({
     url: '/cmdb/hosts/suggest',
     method: 'get',

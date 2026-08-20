@@ -23,7 +23,11 @@ from app.schemas.cmdb import HostUpsertRequest
 # 列定义：(表头, 字段名, 列宽)；顺序即模板/导出列序
 COLUMNS: list[tuple[str, str, int]] = [
     ("主机名*", "hostname", 22),
-    ("IP地址*", "ip", 18),
+    ("内网IP地址*", "ip", 18),
+    ("公网IP地址", "public_ip", 18),
+    ("项目", "project", 14),
+    ("RI", "ri", 16),
+    ("主机系列", "host_series", 16),
     ("所属平台", "platform", 16),
     ("所属区域", "region", 16),
     ("操作系统", "os", 16),
@@ -69,8 +73,9 @@ def build_import_template() -> bytes:
     dv_env.add(f"{env_col}2:{env_col}{MAX_IMPORT_ROWS + 1}")
     dv_status.add(f"{status_col}2:{status_col}{MAX_IMPORT_ROWS + 1}")
     ws.append([
-        "web-server-01", "10.0.0.1", "阿里云", "华东1", "CentOS 7.9", 4, 8, 100,
-        "prod", "online", 22, "示例行，导入前请删除",
+        "web-server-01", "10.0.0.1", "203.0.113.1", "mitrade", "ri-cn-001", "C7",
+        "阿里云", "华东1", "CentOS 7.9", 4, 8, 100, "prod", "online", 22,
+        "示例行，导入前请删除",
     ])
     buf = BytesIO()
     wb.save(buf)
@@ -138,6 +143,11 @@ async def import_hosts(
 def _parse_row(values: dict) -> dict:
     """单行清洗 + pydantic 校验，异常统一转 ValueError（含首条错误原因）。"""
     cleaned = {k: (str(v).strip() if v is not None else None) for k, v in values.items()}
+    if not cleaned.get("project"):
+        cleaned.pop("project", None)
+    for field in ("public_ip", "ri", "host_series"):
+        if not cleaned.get(field):
+            cleaned[field] = None
     if not cleaned.get("status"):
         cleaned["status"] = "online"
     if not cleaned.get("ssh_port"):
@@ -162,7 +172,7 @@ def export_hosts(hosts: list[Host]) -> bytes:
     ws.append([title.rstrip("*") for title, _, _ in COLUMNS] + ["创建时间"])
     for h in hosts:
         ws.append([
-            h.hostname, h.ip, h.platform, h.region, h.os,
+            h.hostname, h.ip, h.public_ip, h.project, h.ri, h.host_series, h.platform, h.region, h.os,
             h.cpu_cores, h.memory_gb, h.disk_gb, h.environment,
             h.status, h.ssh_port, h.description,
             h.created_at.strftime("%Y-%m-%d %H:%M:%S") if h.created_at else None,

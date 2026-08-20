@@ -12,6 +12,10 @@ from tests.conftest import auth_header, login_for_tokens
 HOST_PAYLOAD = {
     "hostname": "web-01",
     "ip": "10.0.0.1",
+    "public_ip": "203.0.113.1",
+    "project": "tradingkey",
+    "ri": "ri-cn-001",
+    "host_series": "C7",
     "platform": "阿里云",
     "region": "华东1",
     "os": "CentOS 7.9",
@@ -35,10 +39,13 @@ async def _create_host(client, headers, **overrides) -> int:
 
 
 def _make_xlsx(rows: list[list]) -> bytes:
-    """测试辅助：构造导入用 xlsx（首行表头随意，导入从第 2 行读；列序含资源配置四列）。"""
+    """测试辅助：构造导入用 xlsx（首行表头随意，导入从第 2 行读）。"""
     wb = Workbook()
     ws = wb.active
-    ws.append(["主机名", "IP", "平台", "区域", "操作系统", "CPU", "内存", "磁盘", "环境", "状态", "端口", "说明"])
+    ws.append([
+        "主机名", "内网IP地址", "公网IP地址", "项目", "RI", "主机系列", "平台", "区域",
+        "操作系统", "CPU", "内存", "磁盘", "环境", "状态", "端口", "说明",
+    ])
     for row in rows:
         ws.append(row)
     buf = BytesIO()
@@ -123,13 +130,47 @@ class TestHostCrud:
         )
         assert resp.json()["code"] == 40001
 
+    async def test_host_extended_fields_and_validation(self, client):
+        """项目、RI、主机系列和公网 IP 可维护，项目默认值与校验生效。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        host_id = await _create_host(client, headers)
+        detail = (await client.get(f"/api/v1/cmdb/hosts/{host_id}", headers=headers)).json()["data"]
+        assert (detail["project"], detail["ri"], detail["host_series"], detail["public_ip"]) == (
+            "tradingkey", "ri-cn-001", "C7", "203.0.113.1",
+        )
+
+        edited = {
+            **HOST_PAYLOAD,
+            "project": "mitrade",
+            "ri": "ri-cn-002",
+            "host_series": "C8",
+            "public_ip": "2001:db8::1",
+        }
+        assert (await client.put(f"/api/v1/cmdb/hosts/{host_id}", json=edited, headers=headers)).json()["code"] == 0
+        detail = (await client.get(f"/api/v1/cmdb/hosts/{host_id}", headers=headers)).json()["data"]
+        assert (detail["project"], detail["ri"], detail["host_series"], detail["public_ip"]) == (
+            "mitrade", "ri-cn-002", "C8", "2001:db8::1",
+        )
+
+        default_payload = {**HOST_PAYLOAD, "ip": "10.0.0.8"}
+        default_payload.pop("project")
+        default_id = (await client.post("/api/v1/cmdb/hosts", json=default_payload, headers=headers)).json()["data"]["id"]
+        default_detail = (await client.get(f"/api/v1/cmdb/hosts/{default_id}", headers=headers)).json()["data"]
+        assert default_detail["project"] == "mitrade"
+
+        for payload in (
+            {**HOST_PAYLOAD, "ip": "10.0.0.9", "project": "invalid"},
+            {**HOST_PAYLOAD, "ip": "10.0.0.10", "public_ip": "not-an-ip"},
+        ):
+            assert (await client.post("/api/v1/cmdb/hosts", json=payload, headers=headers)).json()["code"] == 40001
+
     async def test_suggest(self, client):
-        """platform/region 自动补全去重 + 前缀过滤。"""
+        """平台和主机系列自动补全去重 + 前缀过滤。"""
         tokens = await login_for_tokens(client, "ops1")
         headers = auth_header(tokens)
-        await _create_host(client, headers, ip="10.1.0.1", platform="阿里云")
-        await _create_host(client, headers, ip="10.1.0.2", platform="腾讯云")
-        await _create_host(client, headers, ip="10.1.0.3", platform="阿里云")
+        await _create_host(client, headers, ip="10.1.0.1", platform="阿里云", host_series="C7")
+        await _create_host(client, headers, ip="10.1.0.2", platform="腾讯云", host_series="C8")
+        await _create_host(client, headers, ip="10.1.0.3", platform="阿里云", host_series="C7")
 
         resp = await client.get(
             "/api/v1/cmdb/hosts/suggest", params={"field": "platform"}, headers=headers
@@ -142,6 +183,11 @@ class TestHostCrud:
             "/api/v1/cmdb/hosts/suggest", params={"field": "platform", "q": "腾"}, headers=headers
         )
         assert resp.json()["data"]["items"] == ["腾讯云"]
+
+        resp = await client.get(
+            "/api/v1/cmdb/hosts/suggest", params={"field": "host_series", "q": "C7"}, headers=headers
+        )
+        assert resp.json()["data"]["items"] == ["C7"]
 
         # 非法 field -> 40001
         resp = await client.get(
@@ -360,7 +406,9 @@ class TestHostExcel:
         assert "spreadsheetml" in resp.headers["content-type"]
         ws = load_workbook(BytesIO(resp.content)).active
         assert ws.cell(row=1, column=1).value == "主机名*"
-        assert ws.cell(row=1, column=2).value == "IP地址*"
+        assert [ws.cell(row=1, column=idx).value for idx in range(1, 7)] == [
+            "主机名*", "内网IP地址*", "公网IP地址", "项目", "RI", "主机系列",
+        ]
 
     async def test_import_and_failed_rows(self, client):
         """导入：成功行入库、失败行返回明细（行号+原因）。"""
@@ -369,11 +417,14 @@ class TestHostExcel:
         await _create_host(client, headers, ip="10.4.0.9", hostname="exists")
 
         content = _make_xlsx([
-            ["imp-1", "10.4.0.1", "华为云", "华北", "Ubuntu 22.04", 8, 16, 200, "prod", "online", 22, ""],
-            ["imp-2", "bad-ip", "华为云", "华北", None, None, None, None, "prod", "online", 22, ""],   # IP 非法
-            ["imp-3", "10.4.0.3", None, None, None, None, None, None, "wrong-env", None, None, ""],   # 环境非法
-            ["imp-4", "10.4.0.9", None, None, None, None, None, None, "demo", None, None, ""],          # 已存在（未开 upsert）
-            ["imp-5", "10.4.0.1", None, None, None, None, None, None, "demo", None, None, ""],          # 文件内重复
+            ["imp-1", "10.4.0.1", "203.0.113.11", "tradingkey", "ri-1", "C7", "华为云", "华北", "Ubuntu 22.04", 8, 16, 200, "prod", "online", 22, ""],
+            ["imp-default", "10.4.0.8", None, None, None, None, None, None, None, None, None, None, "prod", "online", 22, ""],
+            ["imp-2", "bad-ip", None, None, None, None, "华为云", "华北", None, None, None, None, "prod", "online", 22, ""],
+            ["imp-3", "10.4.0.3", None, None, None, None, None, None, None, None, None, None, "wrong-env", None, None, ""],
+            ["imp-4", "10.4.0.9", None, None, None, None, None, None, None, None, None, None, "demo", None, None, ""],
+            ["imp-5", "10.4.0.1", None, None, None, None, None, None, None, None, None, None, "demo", None, None, ""],
+            ["imp-6", "10.4.0.6", None, "invalid", None, None, None, None, None, None, None, None, "prod", None, None, ""],
+            ["imp-7", "10.4.0.7", "not-an-ip", None, None, None, None, None, None, None, None, None, "prod", None, None, ""],
         ])
         resp = await client.post(
             "/api/v1/cmdb/hosts/import",
@@ -383,13 +434,16 @@ class TestHostExcel:
         )
         body = resp.json()
         assert body["code"] == 0
-        assert body["data"]["success_count"] == 1
+        assert body["data"]["success_count"] == 2
         failed = {r["row"]: r["reason"] for r in body["data"]["failed_rows"]}
-        assert set(failed) == {3, 4, 5, 6}
+        assert set(failed) == {4, 5, 6, 7, 8, 9}
+
+        resp = await client.get("/api/v1/cmdb/hosts", params={"keyword": "10.4.0.8"}, headers=headers)
+        assert resp.json()["data"]["items"][0]["project"] == "mitrade"
 
         # upsert 模式：已存在 IP 被更新（含资源配置字段）
         content = _make_xlsx([
-            ["exists-new", "10.4.0.9", None, None, "Debian 12", 2, 4, 50, "stage", "offline", 2222, ""],
+            ["exists-new", "10.4.0.9", "203.0.113.19", "mitrade", "ri-updated", "C8", None, None, "Debian 12", 2, 4, 50, "stage", "offline", 2222, ""],
         ])
         resp = await client.post(
             "/api/v1/cmdb/hosts/import?upsert=true",
@@ -405,13 +459,19 @@ class TestHostExcel:
         assert item["ssh_port"] == 2222
         assert item["os"] == "Debian 12"
         assert (item["cpu_cores"], item["memory_gb"], item["disk_gb"]) == (2, 4, 50)
+        assert (item["public_ip"], item["project"], item["ri"], item["host_series"]) == (
+            "203.0.113.19", "mitrade", "ri-updated", "C8",
+        )
 
     async def test_export_with_filter(self, client):
         """导出：按筛选条件输出 xlsx，行数与筛选结果一致。"""
         tokens = await login_for_tokens(client, "ops1")
         headers = auth_header(tokens)
         await _create_host(client, headers, ip="10.5.0.1", environment="prod")
-        await _create_host(client, headers, ip="10.5.0.2", environment="demo")
+        await _create_host(
+            client, headers, ip="10.5.0.2", environment="demo", public_ip="203.0.113.52",
+            project="tradingkey", ri="ri-export", host_series="C9",
+        )
 
         resp = await client.get(
             "/api/v1/cmdb/hosts/export", params={"environment": "demo"}, headers=headers
@@ -421,6 +481,7 @@ class TestHostExcel:
         rows = list(ws.iter_rows(min_row=2, values_only=True))
         assert len(rows) == 1
         assert rows[0][1] == "10.5.0.2"
+        assert rows[0][2:6] == ("203.0.113.52", "tradingkey", "ri-export", "C9")
 
 
 class TestAppExcel:

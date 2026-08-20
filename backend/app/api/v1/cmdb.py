@@ -36,6 +36,10 @@ def _host_brief(h) -> dict:
         "id": h.id,
         "hostname": h.hostname,
         "ip": h.ip,
+        "project": h.project,
+        "public_ip": h.public_ip,
+        "ri": h.ri,
+        "host_series": h.host_series,
         "platform": h.platform,
         "region": h.region,
         "os": h.os,
@@ -76,14 +80,14 @@ def _hosts_stats(hosts: list) -> dict:
 
 # ---------- 主机（静态路径在前） ----------
 
-@router.get("/hosts/suggest", summary="平台/区域自动补全")
+@router.get("/hosts/suggest", summary="平台/区域/主机系列自动补全")
 async def suggest_hosts(
     session: DbSession,
     _: User = Depends(require_perm("cmdb:read")),
-    field: str = Query(..., description="platform | region"),
+    field: str = Query(..., description="platform | region | host_series"),
     q: str | None = None,
 ) -> dict:
-    """自由文本字段补全：返回已有去重值（HOST-03）。"""
+    """自由文本字段补全：返回已有去重值。"""
     return ok({"items": await cmdb_service.suggest_host_field(session, field, q)})
 
 
