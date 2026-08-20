@@ -12,6 +12,8 @@ export interface ApiResponse<T = unknown> {
 
 export interface RequestConfig extends AxiosRequestConfig {
   silentCancel?: boolean
+  /** 后台轮询的传输错误由调用方退避重试，不显示全局提示。 */
+  silentTransportError?: boolean
 }
 
 /** 业务错误：携带后端业务码与 data 载荷（三态流程用） */
@@ -84,7 +86,9 @@ http.interceptors.response.use(
       return Promise.reject(error)
     }
     if (!body || typeof body.code !== 'number') {
-      message.error(error.message || '网络异常，请稍后重试')
+      if (!config?.silentTransportError) {
+        message.error(error.message || '网络异常，请稍后重试')
+      }
       return Promise.reject(error)
     }
     // Access Token 过期：静默刷新后重放原请求（仅一次）

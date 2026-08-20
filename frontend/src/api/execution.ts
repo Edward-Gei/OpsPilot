@@ -97,12 +97,15 @@ export function getExecutionLogs(
 }
 
 /** 事件实时主通道：长轮询以 since_seq 拉增量事件（服务端最长挂 30s，有事件立即返回） */
-export function pollExecutionEvents(id: number, sinceSeq: number) {
+export function pollExecutionEvents(id: number, sinceSeq: number, signal?: AbortSignal) {
   return request<{ events: ExecutionEvent[]; last_seq: number; finished: boolean }>({
     url: `/executions/${id}/events`,
     method: 'get',
     params: { since_seq: sinceSeq },
     timeout: 40000, // 覆盖默认 30s：服务端挂起上限 30s + 网络余量
+    signal,
+    silentCancel: true,
+    silentTransportError: true,
   })
 }
 

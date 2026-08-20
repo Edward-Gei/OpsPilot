@@ -324,6 +324,7 @@ function onResizeStart(e: MouseEvent) {
 
 // ---------- 长轮询实时通道（事件长轮询 + 日志定时增量） ----------
 let pollAbort = false // 事件长轮询循环停止标志
+let eventPollAbort: AbortController | null = null
 let polling = false // 事件轮询单飞：避免叠加多个并发循环占满连接
 let logTimer: number | null = null // 日志增量拉取定时器（2s）
 const pollActive = ref(false) // 实时通道指示灯：事件轮询循环在跑即为活跃
@@ -360,11 +361,13 @@ async function startEventPoll() {
   if (polling) return // 已有循环在跑：不再叠加
   polling = true
   pollAbort = false
+  const controller = new AbortController()
+  eventPollAbort = controller
   pollActive.value = true
   try {
     while (!pollAbort && !isFinished.value) {
       try {
-        const data = await execApi.pollExecutionEvents(executionId, lastSeq)
+        const data = await execApi.pollExecutionEvents(executionId, lastSeq, controller.signal)
         if (pollAbort) return
         lastSeq = Math.max(lastSeq, data.last_seq)
         for (const evt of data.events) applyEvent(evt.kind, evt.data)
@@ -374,10 +377,12 @@ async function startEventPoll() {
           return
         }
       } catch {
+        if (pollAbort) return
         await new Promise((r) => setTimeout(r, 3000)) // 网络异常退避
       }
     }
   } finally {
+    if (eventPollAbort === controller) eventPollAbort = null
     polling = false
     pollActive.value = false
   }
@@ -398,6 +403,7 @@ function startRealtime() {
 /** 终态/离开页面：停止全部轮询 */
 function teardownRealtime() {
   pollAbort = true
+  eventPollAbort?.abort()
   if (logTimer) {
     clearInterval(logTimer)
     logTimer = null

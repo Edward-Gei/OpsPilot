@@ -206,6 +206,7 @@ export function pollTodoEvents(sinceSeq: number, signal?: AbortSignal) {
     timeout: 40000,
     signal,
     silentCancel: true,
+    silentTransportError: true,
   })
 }
 
