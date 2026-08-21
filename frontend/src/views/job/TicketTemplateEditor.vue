@@ -201,7 +201,7 @@ async function save(): Promise<void> {
             </div>
             <a-form-item label="说明"><a-textarea v-model:value="form.description" :rows="3" /></a-form-item>
             <template v-if="canReadSecret">
-              <a-divider orientation="left">脚本密钥引用</a-divider>
+              <a-divider orientation="left" :orientation-margin="0">脚本密钥引用</a-divider>
               <div v-for="(ref, index) in form.credential_refs" :key="index" class="secret-ref-row">
                 <a-input v-model:value="ref.alias" placeholder="别名，如 DEPLOY_TOKEN" />
                 <a-select v-model:value="ref.credential_id" show-search option-filter-prop="label" :options="scriptCredentialOptions" placeholder="选择脚本密钥" />
