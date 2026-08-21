@@ -3,6 +3,7 @@
 import asyncio
 import json
 import secrets
+import shlex
 from datetime import datetime, timedelta
 
 from jinja2.sandbox import SandboxedEnvironment
@@ -16,11 +17,16 @@ from app.models.ticket import TicketParameterPrepare
 from app.services import template_service
 
 
+def _generator_command(params: dict) -> str:
+    """将参数 JSON 安全传入远端 Shell，避免引号破坏 export 命令。"""
+    return f"export PARAMS_JSON={shlex.quote(json.dumps(params, ensure_ascii=False))}; bash -s"
+
+
 async def _run_generator(host: JobHost, credential, script: str, timeout: int, params: dict):
     """执行生成脚本并只返回 stdout；不接入执行日志或审计写入器。"""
     connection = await open_connection(host.ip, host.ssh_port, credential)
     try:
-        command = f"export PARAMS_JSON={json.dumps(json.dumps(params), ensure_ascii=False)!r}; bash -s"
+        command = _generator_command(params)
         # 先渲染模板，让固定值和用户参数可直接用于脚本；完整参数仍通过 PARAMS_JSON 提供。
         rendered_script = SandboxedEnvironment(
             autoescape=False, keep_trailing_newline=True,
