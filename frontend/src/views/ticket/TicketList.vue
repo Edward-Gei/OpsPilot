@@ -44,6 +44,7 @@ const query = reactive({
     dayjs().format('YYYY-MM-DD HH:mm:ss'),
   ] as string[],
 })
+const usingDefaultRange = ref(true)
 
 // 时间筛选快捷项：最近 N 天 → 当前时刻，精确到秒
 const rangePresets: { label: string; value: [Dayjs, Dayjs] }[] = [
@@ -107,6 +108,20 @@ function refreshAll() {
 function onSearch() {
   query.page = 1
   loadList()
+}
+
+function onRangeChange() {
+  usingDefaultRange.value = false
+  onSearch()
+}
+
+/** 提交成功后仅推进默认时间范围，避免覆盖用户主动筛选。 */
+function onTicketCreated() {
+  if (usingDefaultRange.value) {
+    query.range = [dayjs().subtract(30, 'day').format('YYYY-MM-DD HH:mm:ss'), dayjs().format('YYYY-MM-DD HH:mm:ss')]
+  }
+  query.page = 1
+  refreshAll()
 }
 
 function onPageChange(page: number, pageSize: number) {
@@ -199,7 +214,7 @@ onMounted(() => {
         class="range"
         :placeholder="['创建开始时间', '创建结束时间']"
         :presets="rangePresets"
-        @change="onSearch"
+        @change="onRangeChange"
       />
       <a-button v-if="canWrite" type="primary" class="create-btn" @click="wizardOpen = true">
         <PlusOutlined />提交工单
@@ -253,7 +268,7 @@ onMounted(() => {
     </a-table>
 
     <!-- 提交向导 + 详情抽屉 -->
-    <TicketWizard v-model:open="wizardOpen" @saved="refreshAll" />
+    <TicketWizard v-model:open="wizardOpen" @saved="onTicketCreated" />
     <TicketDetailDrawer v-model:open="detailOpen" :ticket-id="detailId" />
   </div>
 </template>
