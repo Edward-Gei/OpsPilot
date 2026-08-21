@@ -118,7 +118,7 @@ function onRangeChange() {
 /** 提交成功后仅推进默认时间范围，避免覆盖用户主动筛选。 */
 function onTicketCreated() {
   if (usingDefaultRange.value) {
-    query.range = [dayjs().subtract(30, 'day').format('YYYY-MM-DD HH:mm:ss'), dayjs().format('YYYY-MM-DD HH:mm:ss')]
+    query.range = [dayjs().subtract(30, 'day').format('YYYY-MM-DD HH:mm:ss'), dayjs().add(1, 'second').format('YYYY-MM-DD HH:mm:ss')]
   }
   query.page = 1
   refreshAll()
