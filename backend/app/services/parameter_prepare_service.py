@@ -10,7 +10,8 @@ from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import select
 
 from app.core.response import Errors
-from app.engine.ssh_runner import open_connection
+from app.engine.secret_runtime import SecretRuntime, cleanup_secret_files, load_secret_runtime, materialize_secret_files
+from app.engine.ssh_runner import _env_prelude, open_connection
 from app.models.cmdb import JobHost
 from app.models.job import Credential
 from app.models.ticket import TicketParameterPrepare
@@ -22,20 +23,31 @@ def _generator_command(params: dict) -> str:
     return f"export PARAMS_JSON={shlex.quote(json.dumps(params, ensure_ascii=False))}; bash -s"
 
 
-async def _run_generator(host: JobHost, credential, script: str, timeout: int, params: dict):
+async def _run_generator(host: JobHost, credential, script: str, timeout: int, params: dict,
+                         secret_runtime: SecretRuntime | None = None):
     """执行生成脚本并只返回 stdout；不接入执行日志或审计写入器。"""
     connection = await open_connection(host.ip, host.ssh_port, credential)
+    remote_secret_dir: str | None = None
     try:
         command = _generator_command(params)
         # 先渲染模板，让固定值和用户参数可直接用于脚本；完整参数仍通过 PARAMS_JSON 提供。
         rendered_script = SandboxedEnvironment(
             autoescape=False, keep_trailing_newline=True,
         ).from_string(script).render(**(params or {}))
-        result = await asyncio.wait_for(connection.run(command, input=rendered_script), timeout=timeout)
+        script_input = rendered_script
+        if secret_runtime:
+            remote_secret_dir, secret_env = await materialize_secret_files(connection, secret_runtime)
+            command = "bash -s"
+            script_input = _env_prelude({"PARAMS_JSON": json.dumps(params, ensure_ascii=False), **secret_env}) + "\n" + rendered_script
+        result = await asyncio.wait_for(connection.run(command, input=script_input), timeout=timeout)
         if result.exit_status != 0:
             raise Errors.param("动态参数脚本执行失败")
-        return str(result.stdout).strip()
+        output = str(result.stdout).strip()
+        if secret_runtime and secret_runtime.redact(output) != output:
+            raise Errors.rejected("动态参数脚本输出包含脚本密钥，已拒绝保存")
+        return output
     finally:
+        await cleanup_secret_files(connection, remote_secret_dir)
         connection.close()
 
 
@@ -79,7 +91,10 @@ async def prepare_parameters(session, *, template_id: int, params: dict) -> dict
         credential = await session.get(Credential, host.credential_id) if host else None
         if not host or not credential:
             raise Errors.conflict("作业主机未配置可用凭据")
-        output = await _run_generator(host, credential, tpl.generator_script or "", tpl.generator_timeout or 60, values)
+        secret_runtime = await load_secret_runtime(session, tpl.credential_refs or [])
+        output = await _run_generator(
+            host, credential, tpl.generator_script or "", tpl.generator_timeout or 60, values, secret_runtime,
+        )
         generated_values, generated_options = _parse_output(output, generated)
         values.update(generated_values)
         options.update(generated_options)

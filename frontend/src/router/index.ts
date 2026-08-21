@@ -83,7 +83,7 @@ const router = createRouter({
           path: 'job/credentials',
           name: 'job-credentials',
           component: () => import('@/views/job/CredentialList.vue'),
-          meta: { title: '凭据管理', perm: 'credential:read' },
+          meta: { title: '凭据管理', perms: ['credential:read', 'secret:read'] },
         },
         {
           path: 'ticket/list',
@@ -165,7 +165,8 @@ router.beforeEach(async (to) => {
     }
   }
   const perm = to.meta.perm as string | undefined
-  if (perm && !userStore.hasPerm(perm)) {
+  const perms = to.meta.perms as string[] | undefined
+  if ((perm && !userStore.hasPerm(perm)) || (perms && !userStore.hasAnyPerm(perms))) {
     return { path: '/' }
   }
   return true

@@ -47,6 +47,7 @@ interface MenuItem {
   icon: Component
   path?: string // 可跳转路由
   perm?: string // 所需权限点（无权隐藏）
+  perms?: string[] // 任一权限满足即可显示
   milestone?: string // 未开放模块显示里程碑徽标
   count?: number // 待办计数角标（0 不显示）
 }
@@ -110,7 +111,7 @@ const menuGroups = computed(() =>
         { key: 'cmdb-apps', label: '应用管理', icon: AppstoreAddOutlined, path: '/cmdb/apps', perm: 'cmdb:read' },
         // M3 已开放：作业中心拆分为模板/凭据两个入口（作业主机配置已入系统设置）
         { key: 'job-templates', label: '模板管理', icon: CodeOutlined, path: '/job/templates', perm: 'template:read' },
-        { key: 'job-credentials', label: '凭据管理', icon: KeyOutlined, path: '/job/credentials', perm: 'credential:read' },
+        { key: 'job-credentials', label: '凭据管理', icon: KeyOutlined, path: '/job/credentials', perms: ['credential:read', 'secret:read'] },
         // M4 已开放：工单中心 + 待办审批（角标显示待我审批数）
         { key: 'ticket-list', label: '工单中心', icon: FileDoneOutlined, path: '/ticket/list', perm: 'ticket:read' },
         { key: 'ticket-todo', label: '待办审批', icon: AuditOutlined, path: '/ticket/todo', perm: 'ticket:approve', count: todoCount.value },
@@ -150,7 +151,7 @@ const menuGroups = computed(() =>
   ]
     .map((g) => ({
       ...g,
-      items: g.items.filter((it) => !it.perm || userStore.hasPerm(it.perm)),
+      items: g.items.filter((it) => (!it.perm || userStore.hasPerm(it.perm)) && (!it.perms || userStore.hasAnyPerm(it.perms))),
     }))
     .filter((g) => g.items.length > 0),
 )

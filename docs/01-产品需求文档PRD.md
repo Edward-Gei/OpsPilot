@@ -38,7 +38,7 @@ CMDB 主机和应用是资产台账；实际执行节点由工单模板绑定的
 | 登录鉴权 | 本地账号、LDAP、OIDC、JWT Access/Refresh、密码策略、登录锁定 |
 | MFA | TOTP 绑定、验证、关闭/可选/强制策略、管理员重置 |
 | 密码重置 | 本地账号邮箱找回、反枚举响应、Redis 单次令牌、SMTP 安全邮件 |
-| RBAC | 用户、角色、30 个权限点，权限取角色并集 |
+| RBAC | 用户、角色、33 个权限点，权限取角色并集 |
 | CMDB | 主机、应用、应用-主机关联、Excel 导入/导出 |
 | 作业资源 | AES-256-GCM 加密 SSH 凭据；作业主机 CRUD、连通性测试、启停 |
 | 模板 | 工单模板、可复用流程模板、参数和动态生成、通知规则、可见角色 |
@@ -64,6 +64,7 @@ CMDB 主机和应用是资产台账；实际执行节点由工单模板绑定的
 user:read user:write user:mfa role:read role:write
 cmdb:read cmdb:write cmdb:delete cmdb:import
 credential:read credential:write credential:delete
+secret:read secret:write secret:delete
 template:read template:write template:delete
 job_host:read job_host:write job_host:delete
 ticket:read ticket:write ticket:approve
@@ -75,7 +76,7 @@ notify:read notify:write notify:test system:config
 默认角色能力：
 
 - `admin`：全部权限。
-- `ops`：CMDB 查看/管理/导入、凭据查看、作业主机查看、模板查看/管理、工单查看/创建、执行查看/控制。
+- `ops`：CMDB 查看/管理/导入、SSH 凭据和脚本密钥查看、作业主机查看、模板查看/管理、工单查看/创建、执行查看/控制。
 - `approver`：CMDB 查看、工单查看/审批、执行查看。
 - `auditor`：CMDB 查看、执行查看、审计查看/导出。
 
@@ -104,11 +105,11 @@ notify:read notify:write notify:test system:config
 
 ### 4.4 凭据与作业主机
 
-凭据支持密码和私钥两种 SSH 认证，敏感字段使用 AES-256-GCM 加密，任何接口不回显明文。作业主机包含名称、IP、SSH 端口、凭据、工作目录、启用状态和最近连通性测试结果；IP+端口唯一。停用作业主机不能被新模板使用；被工单模板引用时不能删除。
+凭据在同一管理页维护 SSH 凭据和脚本密钥：SSH 密码（`password`）与 SSH 私钥（`private_key`）仅用于作业主机登录；脚本密钥支持 API Token、用户名密码和 UTF-8 文本密钥文件（最大 128 KiB）。敏感字段使用 AES-256-GCM 加密，任何接口不回显明文；凭据类型创建后不可修改。作业主机只能关联 SSH 凭据，包含名称、IP、SSH 端口、工作目录、启用状态和最近连通性测试结果；IP+端口唯一。停用作业主机不能被新模板使用；被工单模板引用时不能删除。
 
 ### 4.5 模板和工单
 
-工单模板维护名称、类型、作业主机、流程模板引用、参数、动态脚本、撤回开关、通知规则、可见角色和启用状态。流程模板维护名称、说明、步骤、步骤前审批角色和执行策略。两者边界和快照规则见《模板管理与流程模板设计》。
+工单模板维护名称、类型、作业主机、流程模板引用、参数、脚本密钥引用、动态脚本、撤回开关、通知规则、可见角色和启用状态。脚本密钥使用唯一别名绑定，模板和工单只保存别名、ID 与名称，不保存密文。流程模板维护名称、说明、步骤、步骤前审批角色和执行策略。两者边界和快照规则见《模板管理与流程模板设计》。
 
 工单提交只传模板 ID、参数和可选预生成 ID。服务端校验模板可见性、模板/流程启用状态、固定参数、用户参数和动态结果，然后保存工单快照。标题使用模板名称；没有草稿状态。
 
@@ -116,7 +117,7 @@ notify:read notify:write notify:test system:config
 
 ### 4.6 执行和日志
 
-Worker 通过 SSH 连接作业主机，在其 workspace 执行步骤。Shell 步骤直接执行脚本；Playbook 步骤执行作业主机上的 Ansible 命令。步骤严格串行，按步骤超时和 `fail_fast` 策略推进。
+Worker 通过 SSH 连接作业主机，在其 workspace 执行步骤。Shell 步骤和动态参数脚本可按工单/模板引用注入脚本密钥：API Token 与用户名密码通过环境变量注入，文本密钥文件写入远端随机临时目录并在结束时清理；日志、错误摘要和动态参数输出均精确脱敏。Playbook 步骤不注入脚本密钥。步骤严格串行，按步骤超时和 `fail_fast` 策略推进。
 
 执行控制包括暂停、恢复、中止和强制中止。普通中止在当前步骤结束后生效；强制中止尽力终止作业主机上的当前进程，并单独记录高风险审计。日志按执行 ID 和步骤顺序落盘；前端通过 `/events` 长轮询获取状态，通过 `/logs` 按行偏移增量读取。
 

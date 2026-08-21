@@ -36,6 +36,13 @@ class TicketParam(BaseModel):
         return self
 
 
+class CredentialRefInput(BaseModel):
+    """脚本密钥引用仅保存别名与凭据 ID，密文始终不进入模板。"""
+
+    alias: str = Field(min_length=1, max_length=32, pattern=r"^[A-Z][A-Z0-9_]{0,31}$")
+    credential_id: int
+
+
 class TicketTemplateUpsertRequest(BaseModel):
     """工单模板保存业务入口、参数定义和动态生成配置。"""
 
@@ -47,6 +54,7 @@ class TicketTemplateUpsertRequest(BaseModel):
     params_schema: list[TicketParam] = Field(default_factory=list, max_length=100)
     generator_script: str | None = None
     generator_timeout: int | None = Field(default=60, ge=1, le=3600)
+    credential_refs: list[CredentialRefInput] = Field(default_factory=list, max_length=50)
     allow_withdraw: bool = True
     notify_rules: list[NotifyRuleInput] = Field(default_factory=list)
     visible_role_ids: list[int] = Field(default_factory=list)
@@ -63,6 +71,12 @@ class TicketTemplateUpsertRequest(BaseModel):
             raise ValueError("动态参数必须配置生成脚本")
         if self.generator_script and not generated:
             raise ValueError("配置生成脚本时至少声明一个动态参数")
+        aliases = [item.alias for item in self.credential_refs]
+        if len(aliases) != len(set(aliases)):
+            raise ValueError("脚本密钥别名不能重复")
+        credential_ids = [item.credential_id for item in self.credential_refs]
+        if len(credential_ids) != len(set(credential_ids)):
+            raise ValueError("同一凭据不能重复绑定")
         return self
 
 

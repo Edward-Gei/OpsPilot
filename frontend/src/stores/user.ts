@@ -19,6 +19,11 @@ export const useUserStore = defineStore('user', () => {
     return permissions.value.has(perm)
   }
 
+  /** 任一权限满足即可，用于同页管理 SSH 凭据与脚本密钥。 */
+  function hasAnyPerm(perms: string[]): boolean {
+    return perms.some((perm) => permissions.value.has(perm))
+  }
+
   /** 登录成功后保存令牌对 */
   function applyTokens(tokens: TokenPair): void {
     setTokens(tokens.access_token, tokens.refresh_token)
@@ -47,5 +52,5 @@ export const useUserStore = defineStore('user', () => {
     userInfo.value = null
   }
 
-  return { userInfo, isLoggedIn, hasPerm, applyTokens, loadUserInfo, logout, reset }
+  return { userInfo, isLoggedIn, hasPerm, hasAnyPerm, applyTokens, loadUserInfo, logout, reset }
 })

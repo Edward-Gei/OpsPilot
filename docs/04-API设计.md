@@ -104,17 +104,17 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/credentials` | `credential:read` | 分页和认证类型筛选，永不返回密文 |
-| POST | `/credentials` | `credential:write` | 创建密码或私钥凭据 |
-| PUT | `/credentials/{id}` | `credential:write` | 更新；secret 为空表示保留原密文 |
-| DELETE | `/credentials/{id}` | `credential:delete` | 被作业主机引用时拒绝 |
+| GET | `/credentials` | `credential:read` 或 `secret:read` | 分页和凭据类型筛选，按权限仅返回 SSH 凭据或脚本密钥，永不返回密文 |
+| POST | `/credentials` | SSH 类型需 `credential:write`；脚本密钥需 `secret:write` | 创建凭据，类型创建后不可修改 |
+| PUT | `/credentials/{id}` | 同创建类型的写权限 | 更新；secret 为空表示保留原密文 |
+| DELETE | `/credentials/{id}` | 同创建类型的删除权限 | SSH 凭据被作业主机引用、脚本密钥被模板或活动工单引用时拒绝 |
 
 ### 5.2 `/job-hosts`
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/job-hosts` | `job_host:read` | 分页、关键字和启用状态筛选 |
-| POST | `/job-hosts` | `job_host:write` | 创建并绑定凭据 |
+| POST | `/job-hosts` | `job_host:write` | 创建并绑定 SSH 凭据（拒绝脚本密钥） |
 | GET | `/job-hosts/{id}` | `job_host:read` | 详情，不返回凭据密文 |
 | PUT | `/job-hosts/{id}` | `job_host:write` | 编辑连接信息 |
 | DELETE | `/job-hosts/{id}` | `job_host:delete` | 被工单模板引用时拒绝 |
@@ -223,6 +223,7 @@
 user:read user:write user:mfa role:read role:write
 cmdb:read cmdb:write cmdb:delete cmdb:import
 credential:read credential:write credential:delete
+secret:read secret:write secret:delete
 template:read template:write template:delete
 job_host:read job_host:write job_host:delete
 ticket:read ticket:write ticket:approve

@@ -129,6 +129,108 @@ class TestCredentialApi:
         resp = await client.delete(f"/api/v1/credentials/{cred_id}", headers=headers)
         assert resp.json()["code"] == 40401
 
+    async def test_script_secret_types_are_stored_without_echo(self, client, db_factory):
+        """Token、用户名密码与文本密钥文件仅返回安全元数据。"""
+        headers = auth_header(await login_for_tokens(client, "admin"))
+        token_id = await _create_credential(
+            client, headers, name="deploy-token", login_user=None,
+            auth_type="api_token", secret="token-value",
+        )
+        await _create_credential(
+            client, headers, name="registry-login", login_user="robot",
+            auth_type="username_password", secret="registry-password",
+        )
+        await _create_credential(
+            client, headers, name="cluster-config", login_user=None,
+            auth_type="secret_file", file_name="kubeconfig", secret="apiVersion: v1\n",
+        )
+
+        items = (await client.get("/api/v1/credentials", headers=headers)).json()["data"]["items"]
+        by_name = {item["name"]: item for item in items}
+        assert by_name["deploy-token"]["auth_type"] == "api_token"
+        assert by_name["deploy-token"]["login_user"] is None
+        assert by_name["cluster-config"]["file_name"] == "kubeconfig"
+        assert all("secret" not in item and "secret_enc" not in item for item in items)
+        async with db_factory() as session:
+            assert decrypt_text((await session.get(Credential, token_id)).secret_enc) == "token-value"
+
+    async def test_script_secret_validation_and_type_is_immutable(self, client):
+        """文本文件限制 128 KiB，更新请求不能改写已创建的凭据类型。"""
+        headers = auth_header(await login_for_tokens(client, "admin"))
+        oversized = await client.post(
+            "/api/v1/credentials", headers=headers,
+            json={**CRED_PAYLOAD, "name": "oversized-file", "login_user": None,
+                  "auth_type": "secret_file", "file_name": "too-large.pem", "secret": "x" * (128 * 1024 + 1)},
+        )
+        assert oversized.json()["code"] == 40001
+        cred_id = await _create_credential(
+            client, headers, name="immutable-token", login_user=None,
+            auth_type="api_token", secret="old-token",
+        )
+        resp = await client.put(
+            f"/api/v1/credentials/{cred_id}", headers=headers,
+            json={"name": "immutable-token", "auth_type": "username_password",
+                  "login_user": "robot", "secret": "new-password"},
+        )
+        assert resp.json()["code"] == 40001
+
+    async def test_secret_permissions_are_separate_from_ssh_credentials(self, client):
+        """ops 可查看脚本密钥用于模板选择，但不能创建或修改它。"""
+        admin_headers = auth_header(await login_for_tokens(client, "admin"))
+        await _create_credential(
+            client, admin_headers, name="visible-token", login_user=None,
+            auth_type="api_token", secret="token-value",
+        )
+        ops_headers = auth_header(await login_for_tokens(client, "ops1"))
+        items = (await client.get("/api/v1/credentials", headers=ops_headers)).json()["data"]["items"]
+        assert [item["name"] for item in items] == ["visible-token"]
+        resp = await client.post(
+            "/api/v1/credentials", headers=ops_headers,
+            json={**CRED_PAYLOAD, "name": "ops-token", "login_user": None,
+                  "auth_type": "api_token", "secret": "token-value"},
+        )
+        assert resp.json()["code"] == 40301
+
+    async def test_script_secret_cannot_bind_job_host_or_be_deleted_while_referenced(self, client):
+        """脚本密钥不参与 SSH 登录，模板和活动工单引用期间均不可删除。"""
+        admin_h = auth_header(await login_for_tokens(client, "admin"))
+        ssh_id = await _create_credential(client, admin_h, name="ssh-login")
+        host = await client.post("/api/v1/job-hosts", headers=admin_h, json={
+            **JOB_HOST_PAYLOAD, "credential_id": ssh_id,
+        })
+        host_id = host.json()["data"]["id"]
+        secret_id = await _create_credential(
+            client, admin_h, name="protected-token", login_user=None,
+            auth_type="api_token", secret="token-value",
+        )
+        invalid_host = await client.post("/api/v1/job-hosts", headers=admin_h, json={
+            **JOB_HOST_PAYLOAD, "name": "invalid-secret-host", "ip": "10.8.0.2", "credential_id": secret_id,
+        })
+        assert invalid_host.json()["code"] == 40001
+
+        process = await client.post("/api/v1/process-templates", headers=admin_h, json={
+            "name": "删除保护流程", "exec_strategy": {},
+            "steps": [{"name": "执行", "script_type": "shell", "content": "echo ok", "timeout": 60}],
+        })
+        payload = {
+            "name": "删除保护模板", "type": "daily_ops", "job_host_id": host_id,
+            "process_template_id": process.json()["data"]["id"], "params_schema": [],
+            "notify_rules": [], "visible_role_ids": [],
+            "credential_refs": [{"alias": "DEPLOY_TOKEN", "credential_id": secret_id}],
+        }
+        template = await client.post("/api/v1/templates", headers=admin_h, json=payload)
+        assert (await client.delete(f"/api/v1/credentials/{secret_id}", headers=admin_h)).json()["code"] == 42201
+
+        ticket = await client.post("/api/v1/tickets", headers=admin_h, json={
+            "template_id": template.json()["data"]["id"], "params": {},
+        })
+        assert ticket.json()["code"] == 0
+        payload["credential_refs"] = []
+        assert (await client.put(
+            f"/api/v1/templates/{template.json()['data']['id']}", headers=admin_h, json=payload,
+        )).json()["code"] == 0
+        assert (await client.delete(f"/api/v1/credentials/{secret_id}", headers=admin_h)).json()["code"] == 42201
+
 
 async def test_job_host_credential_binding(client):
     """作业主机凭据关联：必填校验 / 不存在 40401 / 响应带 credential_name / 删除保护。"""

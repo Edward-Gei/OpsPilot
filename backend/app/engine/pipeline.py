@@ -35,6 +35,7 @@ from app.models.job import Credential
 from app.models.ticket import Ticket, TicketApproval, TicketStep
 from app.engine import ansible_runner, control as ctrl, events, ssh_runner, todo_events
 from app.engine.logs import LogChannel
+from app.engine.secret_runtime import SecretRuntime, load_secret_runtime
 
 logger = logging.getLogger("opspilot.engine.pipeline")
 
@@ -73,6 +74,7 @@ class PipelineRunner:
         self.job_host: JobHost | None = None
         self.credential: Credential | None = None   # 作业主机登录凭据（建连用）
         self.cred_env: dict[str, str] = {}          # 模板引用凭据 env（shell 步骤注入）
+        self.secret_runtime: SecretRuntime | None = None
         self.cred_error: str | None = None          # 凭据加载失败原因（步骤级失败归档）
 
     # ---------- 入口 ----------
@@ -138,6 +140,10 @@ class PipelineRunner:
         if self.credential is None:
             self.cred_error = "作业主机未关联凭据或凭据已删除，请在系统设置中重新关联"
             return True
+        try:
+            self.secret_runtime = await load_secret_runtime(s, self.ticket.credential_refs or [])
+        except Exception as exc:  # noqa: BLE001 密钥缺失/解密失败按可见步骤失败归档
+            self.cred_error = str(exc) or "脚本密钥凭据不可用"
         return True
 
     # ---------- 状态迁移辅助 ----------
@@ -282,12 +288,12 @@ class PipelineRunner:
         else:
             status, exit_code, summary = await ssh_runner.run_shell_on_job_host(
                 job_host=jh, credential=self.credential, script=script,
-                env=self.cred_env or None, timeout=tstep.timeout,
+                env=self.cred_env or None, secret_runtime=self.secret_runtime, timeout=tstep.timeout,
                 step_order=step.step_order, log=self.log, control=self.control,
             )
         step.status = status
         step.exit_code = exit_code
-        step.error_summary = summary
+        step.error_summary = self.secret_runtime.redact(summary) if self.secret_runtime else summary
         step.finished_at = datetime.now()
         await s.commit()
         await self._publish_step(step)

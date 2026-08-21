@@ -8,6 +8,7 @@ import { listJobHosts, type JobHost } from '@/api/jobHost'
 import { listRoleOptions } from '@/api/system'
 import { receiverOptions, typeOptions } from './meta'
 import CodeEditor from '@/components/CodeEditor.vue'
+import { useUserStore } from '@/stores/user'
 
 const props = defineProps<{
   open: boolean
@@ -15,6 +16,8 @@ const props = defineProps<{
   copyFromId?: number | null
 }>()
 const emit = defineEmits<{ 'update:open': [boolean]; saved: [] }>()
+const userStore = useUserStore()
+const canReadSecret = userStore.hasPerm('secret:read')
 
 type HostOption = Pick<JobHost, 'id' | 'name' | 'enabled'>
 const loading = ref(false)
@@ -23,6 +26,7 @@ const activeTab = ref('base')
 const hosts = ref<HostOption[]>([])
 const processes = ref<api.ProcessTemplateItem[]>([])
 const roles = ref<{ id: number; name: string }[]>([])
+const scriptCredentials = ref<api.CredentialItem[]>([])
 const form = reactive<api.TicketTemplateForm>(emptyForm())
 const generatorScript = computed({ get: () => form.generator_script || '', set: (value: string) => (form.generator_script = value) })
 
@@ -30,7 +34,7 @@ function emptyForm(): api.TicketTemplateForm {
   return {
     name: '', type: 'daily_ops', description: '', job_host_id: undefined as unknown as number,
     process_template_id: undefined as unknown as number, params_schema: [], generator_script: '', generator_timeout: 60, allow_withdraw: true,
-    notify_rules: [], visible_role_ids: [], status: 'enabled',
+    credential_refs: [], notify_rules: [], visible_role_ids: [], status: 'enabled',
   }
 }
 
@@ -47,6 +51,10 @@ const processSelectOptions = computed(() => processes.value.map((process) => ({
   label: `${process.name}${process.status === 'disabled' ? '（已停用）' : ''}`,
   value: process.id,
   disabled: process.status === 'disabled' && process.id !== form.process_template_id,
+})))
+const scriptCredentialOptions = computed(() => scriptCredentials.value.map((credential) => ({
+  label: `${credential.name}（${credential.auth_type === 'api_token' ? 'API Token' : credential.auth_type === 'username_password' ? '用户名密码' : '文本密钥文件'}）`,
+  value: credential.id,
 })))
 
 function resetForm(): void {
@@ -67,6 +75,14 @@ async function load(): Promise<void> {
     hosts.value = hostData.items.map((host) => ({ id: host.id, name: host.name, enabled: host.enabled }))
     processes.value = processData.items
     roles.value = roleData.items
+    if (canReadSecret) {
+      const [tokens, accounts, files] = await Promise.all([
+        api.listCredentials({ page: 1, page_size: 100, auth_type: 'api_token' }),
+        api.listCredentials({ page: 1, page_size: 100, auth_type: 'username_password' }),
+        api.listCredentials({ page: 1, page_size: 100, auth_type: 'secret_file' }),
+      ])
+      scriptCredentials.value = [...tokens.items, ...accounts.items, ...files.items]
+    }
 
     const sourceId = props.templateId ?? props.copyFromId
     if (!sourceId) return
@@ -80,6 +96,7 @@ async function load(): Promise<void> {
       params_schema: (data.params_schema || []).map((p) => ({ ...emptyParam(), ...p, options: [...(p.options || [])] })),
       generator_script: data.generator_script || '',
       generator_timeout: data.generator_timeout || 60,
+      credential_refs: (data.credential_refs || []).map((ref) => ({ alias: ref.alias, credential_id: ref.credential_id, credential_name: ref.credential_name })),
       allow_withdraw: data.allow_withdraw,
       notify_rules: (data.notify_rules || []).map((rule) => ({
         event: rule.event, receivers: [...rule.receivers], channels: [...rule.channels],
@@ -96,6 +113,8 @@ function addParam(): void { form.params_schema.push(emptyParam()) }
 function removeParam(index: number): void { form.params_schema.splice(index, 1) }
 function addOption(param: api.TicketParam): void { param.options.push('') }
 function removeOption(param: api.TicketParam, index: number): void { param.options.splice(index, 1) }
+function addCredentialRef(): void { form.credential_refs.push({ alias: '', credential_id: undefined as unknown as number }) }
+function removeCredentialRef(index: number): void { form.credential_refs.splice(index, 1) }
 
 watch(() => [props.open, props.templateId, props.copyFromId], ([open]) => {
   if (open) void load()
@@ -124,6 +143,16 @@ function validate(): string | null {
   }
   if (form.generator_script && !form.params_schema.some((p) => p.source === 'generated')) return '配置生成脚本时至少需要一个动态参数'
   if (form.params_schema.some((p) => p.source === 'generated') && !form.generator_script) return '配置动态参数时必须填写生成脚本'
+  const aliases = new Set<string>()
+  const credentialIds = new Set<number>()
+  for (const ref of form.credential_refs) {
+    if (!/^[A-Z][A-Z0-9_]{0,31}$/.test(ref.alias)) return '脚本密钥别名仅支持大写字母、数字和下划线'
+    if (!ref.credential_id) return '请选择脚本密钥凭据'
+    if (aliases.has(ref.alias)) return `脚本密钥别名“${ref.alias}”重复`
+    if (credentialIds.has(ref.credential_id)) return '同一脚本密钥不能重复绑定'
+    aliases.add(ref.alias)
+    credentialIds.add(ref.credential_id)
+  }
   if (props.copyFromId && !props.templateId) {
     const process = processes.value.find((item) => item.id === form.process_template_id)
     if (process?.status === 'disabled') return '停用流程模板不能用于复制创建工单模板'
@@ -137,7 +166,7 @@ async function save(): Promise<void> {
   if (error) return message.warning(error)
   saving.value = true
   try {
-    const payload = { ...form, description: form.description || undefined, generator_script: form.generator_script || undefined, params_schema: form.params_schema.map((p) => ({ ...p, label: p.label || undefined, default: p.default || undefined, description: p.description || undefined })) }
+    const payload = { ...form, description: form.description || undefined, generator_script: form.generator_script || undefined, credential_refs: form.credential_refs.map((ref) => ({ alias: ref.alias, credential_id: ref.credential_id })), params_schema: form.params_schema.map((p) => ({ ...p, label: p.label || undefined, default: p.default || undefined, description: p.description || undefined })) }
     if (props.templateId) await api.updateTemplate(props.templateId, payload)
     else await api.createTemplate(payload)
     message.success('工单模板已保存')
@@ -171,6 +200,15 @@ async function save(): Promise<void> {
               <a-form-item label="流程模板" required class="form-col"><a-select v-model:value="form.process_template_id" show-search option-filter-prop="label" :options="processSelectOptions" /></a-form-item>
             </div>
             <a-form-item label="说明"><a-textarea v-model:value="form.description" :rows="3" /></a-form-item>
+            <template v-if="canReadSecret">
+              <a-divider orientation="left">脚本密钥引用</a-divider>
+              <div v-for="(ref, index) in form.credential_refs" :key="index" class="secret-ref-row">
+                <a-input v-model:value="ref.alias" placeholder="别名，如 DEPLOY_TOKEN" />
+                <a-select v-model:value="ref.credential_id" show-search option-filter-prop="label" :options="scriptCredentialOptions" placeholder="选择脚本密钥" />
+                <a-button size="small" danger aria-label="删除脚本密钥引用" @click="removeCredentialRef(index)"><DeleteOutlined /></a-button>
+              </div>
+              <a-button size="small" class="op-btn-green" @click="addCredentialRef"><PlusOutlined />添加脚本密钥</a-button>
+            </template>
             <a-form-item><a-checkbox v-model:checked="form.allow_withdraw">允许创建人终止待处理工单</a-checkbox></a-form-item>
           </a-form>
         </a-tab-pane>
@@ -209,6 +247,6 @@ async function save(): Promise<void> {
 </template>
 
 <style scoped>
-.form-row { display: flex; gap: 16px; }.form-col { flex: 1; }.form-col-sm { width: 150px; }.full-w { width: 100%; }.section-title { font-weight: 600; margin: 4px 0 12px; }.label-tip { font-size: 12px; color: var(--text-3); margin-top: 6px; }.param-alert { margin-bottom: 14px; }.param-block { padding: 14px 0 12px; border-bottom: 1px solid var(--border); }.param-row { display: grid; grid-template-columns: 150px 150px 160px 120px minmax(56px, auto) 36px; align-items: center; gap: 8px; margin-bottom: 8px; }.param-row > * { min-width: 0; width: 100%; }.param-detail { grid-template-columns: minmax(340px, 1fr) minmax(180px, 260px) auto; }.param-detail .op-btn-green { width: auto; white-space: nowrap; justify-self: start; }.option-list { display: flex; flex-wrap: wrap; gap: 6px; }.option-list :deep(.ant-tag) { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; }.option-list :deep(.ant-input) { width: 120px; }.notify-row { display: grid; grid-template-columns: 150px minmax(260px, 1fr) 150px 36px; align-items: center; gap: 8px; margin-bottom: 8px; }.notify-row > * { min-width: 0; width: 100%; }.notify-row .ant-btn { width: 36px; }
+.form-row { display: flex; gap: 16px; }.form-col { flex: 1; }.form-col-sm { width: 150px; }.full-w { width: 100%; }.section-title { font-weight: 600; margin: 4px 0 12px; }.label-tip { font-size: 12px; color: var(--text-3); margin-top: 6px; }.param-alert { margin-bottom: 14px; }.param-block { padding: 14px 0 12px; border-bottom: 1px solid var(--border); }.param-row { display: grid; grid-template-columns: 150px 150px 160px 120px minmax(56px, auto) 36px; align-items: center; gap: 8px; margin-bottom: 8px; }.param-row > * { min-width: 0; width: 100%; }.param-detail { grid-template-columns: minmax(340px, 1fr) minmax(180px, 260px) auto; }.param-detail .op-btn-green { width: auto; white-space: nowrap; justify-self: start; }.option-list { display: flex; flex-wrap: wrap; gap: 6px; }.option-list :deep(.ant-tag) { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; }.option-list :deep(.ant-input) { width: 120px; }.secret-ref-row { display: grid; grid-template-columns: minmax(180px, 0.7fr) minmax(260px, 1fr) 36px; align-items: center; gap: 8px; margin-bottom: 8px; }.secret-ref-row > * { min-width: 0; width: 100%; }.secret-ref-row .ant-btn { width: 36px; }.notify-row { display: grid; grid-template-columns: 150px minmax(260px, 1fr) 150px 36px; align-items: center; gap: 8px; margin-bottom: 8px; }.notify-row > * { min-width: 0; width: 100%; }.notify-row .ant-btn { width: 36px; }
 @media (max-width: 760px) { .form-row { flex-direction: column; gap: 0; }.form-col-sm { width: 100%; }.param-row { grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) 36px; }.param-row > .param-source, .param-row > .param-type, .param-row > .ant-checkbox-wrapper { grid-column: span 1; }.param-detail { grid-template-columns: minmax(220px, 1fr) minmax(160px, 0.75fr) auto; }.notify-row { grid-template-columns: 1fr 36px; }.notify-row .rule-event, .notify-row .rule-receivers, .notify-row .rule-channels { grid-column: 1; }.notify-row .ant-btn { grid-column: 2; grid-row: 1 / span 3; } }
 </style>

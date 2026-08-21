@@ -3,28 +3,53 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+CredentialType = Literal["password", "private_key", "api_token", "username_password", "secret_file"]
+_SSH_CREDENTIAL_TYPES = {"password", "private_key"}
 
 
 class CredentialCreateRequest(BaseModel):
-    """创建 SSH 凭据；明文只在写入时出现。"""
+    """创建凭据；密文仅在请求内出现，类型决定字段约束。"""
 
     name: str = Field(min_length=1, max_length=64)
-    login_user: str = Field(min_length=1, max_length=64)
-    auth_type: Literal["password", "private_key"]
+    login_user: str | None = Field(default=None, max_length=64)
+    auth_type: CredentialType
     secret: str = Field(min_length=1)
     passphrase: str | None = None
+    file_name: str | None = Field(default=None, max_length=128)
     description: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "CredentialCreateRequest":
+        if self.auth_type in _SSH_CREDENTIAL_TYPES | {"username_password"} and not self.login_user:
+            raise ValueError("该凭据类型必须填写登录用户")
+        if self.auth_type != "private_key" and self.passphrase:
+            raise ValueError("仅 SSH 私钥支持私钥口令")
+        if self.auth_type == "secret_file":
+            if not self.file_name or "/" in self.file_name or "\\" in self.file_name:
+                raise ValueError("文本密钥文件名不合法")
+            try:
+                size = len(self.secret.encode("utf-8"))
+            except UnicodeEncodeError as exc:
+                raise ValueError("文本密钥文件必须是 UTF-8 文本") from exc
+            if size > 128 * 1024:
+                raise ValueError("文本密钥文件不能超过 128 KiB")
+        elif self.file_name:
+            raise ValueError("仅文本密钥文件支持文件名")
+        return self
 
 
 class CredentialUpdateRequest(BaseModel):
-    """更新 SSH 凭据；secret 为空表示保留原密文。"""
+    """更新凭据；类型固定，secret 为空表示保留原密文。"""
 
     name: str = Field(min_length=1, max_length=64)
-    login_user: str = Field(min_length=1, max_length=64)
-    auth_type: Literal["password", "private_key"]
+    login_user: str | None = Field(default=None, max_length=64)
+    auth_type: CredentialType | None = None
     secret: str = ""
     passphrase: str | None = None
+    file_name: str | None = Field(default=None, max_length=128)
     description: str | None = Field(default=None, max_length=255)
 
 

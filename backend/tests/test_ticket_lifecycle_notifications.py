@@ -39,12 +39,16 @@ async def test_generator_renders_fixed_values_before_remote_execution(monkeypatc
 
     connection = _Connection()
 
+    class _Host:
+        ip = "10.0.0.10"
+        ssh_port = 22
+
     async def fake_open_connection(*args):
         return connection
 
     monkeypatch.setattr(parameter_prepare_service, "open_connection", fake_open_connection)
     await parameter_prepare_service._run_generator(
-        object(), object(), "SERVICE={{ SERVICE_NAME }}", 60, {"SERVICE_NAME": "mt-web"},
+        _Host(), object(), "SERVICE={{ SERVICE_NAME }}", 60, {"SERVICE_NAME": "mt-web"},
     )
 
     assert connection.script == "SERVICE=mt-web"

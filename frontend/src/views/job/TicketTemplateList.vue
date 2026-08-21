@@ -205,6 +205,7 @@ onMounted(load)
             <a-descriptions-item label="说明">{{ detail.description || '-' }}</a-descriptions-item>
             <a-descriptions-item label="作业主机">{{ hostMap[detail.job_host_id] || detail.job_host_id }}</a-descriptions-item>
             <a-descriptions-item label="流程模板">{{ detail.process_template?.name || processMap[detail.process_template_id] || '-' }}<span v-if="detail.process_template" class="inline-muted">（{{ detail.process_template.status === 'enabled' ? '启用' : '停用' }}）</span></a-descriptions-item>
+            <a-descriptions-item v-if="detail.credential_refs?.length" label="脚本密钥"><a-space wrap><a-tag v-for="ref in detail.credential_refs" :key="ref.alias" color="purple">{{ ref.alias }} → {{ ref.credential_name }}</a-tag></a-space></a-descriptions-item>
             <a-descriptions-item label="可见角色"><template v-if="detail.visible_role_ids?.length"><a-space wrap><a-tag v-for="roleId in detail.visible_role_ids" :key="roleId" color="blue">{{ roleMap[roleId] || roleId }}</a-tag></a-space></template><span v-else>全部角色</span></a-descriptions-item>
             <a-descriptions-item label="允许终止">{{ detail.allow_withdraw ? '是' : '否' }}</a-descriptions-item>
             <a-descriptions-item label="创建时间">{{ detail.created_at ? new Date(detail.created_at).toLocaleString() : '-' }}</a-descriptions-item>

@@ -8,9 +8,10 @@ import type { ExecStrategy } from './ticket'
 export interface CredentialItem {
   id: number
   name: string
-  login_user: string
-  auth_type: 'password' | 'private_key'
+  login_user: string | null
+  auth_type: 'password' | 'private_key' | 'api_token' | 'username_password' | 'secret_file'
   has_passphrase: boolean
+  file_name: string | null
   description: string | null
   created_at: string | null
   updated_at: string | null
@@ -19,10 +20,11 @@ export interface CredentialItem {
 /** 凭据表单：secret 编辑时留空 = 不变更密文 */
 export interface CredentialForm {
   name: string
-  login_user: string
-  auth_type: 'password' | 'private_key'
+  login_user?: string | null
+  auth_type: CredentialItem['auth_type']
   secret: string
   passphrase?: string
+  file_name?: string
   description?: string
 }
 
@@ -103,10 +105,17 @@ export interface TicketTemplateForm {
   params_schema: TicketParam[]
   generator_script?: string | null
   generator_timeout?: number | null
+  credential_refs: CredentialRef[]
   allow_withdraw: boolean
   notify_rules: NotifyRule[]
   visible_role_ids: number[]
   status?: TemplateStatus
+}
+
+export interface CredentialRef {
+  alias: string
+  credential_id: number
+  credential_name?: string | null
 }
 
 export function defaultExecStrategy(): ExecStrategy {
@@ -155,6 +164,7 @@ export interface TemplateItem {
   params_schema: TicketParam[]
   generator_script?: string | null
   generator_timeout?: number | null
+  credential_refs?: CredentialRef[]
   allow_withdraw: boolean
   notify_rules: NotifyRule[]
   visible_role_ids: number[]

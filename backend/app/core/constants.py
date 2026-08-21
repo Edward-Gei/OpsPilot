@@ -55,6 +55,9 @@ class TemplateStatus(str, Enum):
 class CredentialAuthType(str, Enum):
     PASSWORD = "password"
     PRIVATE_KEY = "private_key"
+    API_TOKEN = "api_token"
+    USERNAME_PASSWORD = "username_password"
+    SECRET_FILE = "secret_file"
 
 
 class TicketStatus(str, Enum):
@@ -140,6 +143,9 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("credential:read", "凭据查看", "job"),
     ("credential:write", "凭据管理", "job"),
     ("credential:delete", "凭据删除", "job"),
+    ("secret:read", "脚本密钥查看", "job"),
+    ("secret:write", "脚本密钥管理", "job"),
+    ("secret:delete", "脚本密钥删除", "job"),
     ("template:read", "模板查看", "job"),
     ("template:write", "模板管理", "job"),
     ("template:delete", "模板删除", "job"),
@@ -173,6 +179,7 @@ BUILTIN_ROLES: dict[str, dict] = {
         "permissions": [
             "cmdb:read", "cmdb:write", "cmdb:import",
             "credential:read",
+            "secret:read",
             "job_host:read",
             "template:read", "template:write",
             "ticket:read", "ticket:write",

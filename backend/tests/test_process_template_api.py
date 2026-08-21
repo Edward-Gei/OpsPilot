@@ -53,7 +53,7 @@ async def test_process_template_lifecycle_and_reference_guard(client, seed):
                              json=updated)).json()["code"] == 0
 
 
-async def test_ticket_template_has_no_credential_or_embedded_rules(client, seed):
+async def test_ticket_template_keeps_script_secret_refs_out_of_process_definition(client, seed):
     admin, _, host_id = await _env(client)
     process = await client.post("/api/v1/process-templates", headers=admin,
                                 json=_process_payload())
@@ -65,7 +65,52 @@ async def test_ticket_template_has_no_credential_or_embedded_rules(client, seed)
     assert tpl.json()["code"] == 0
     detail = (await client.get(f"/api/v1/templates/{tpl.json()['data']['id']}", headers=admin)).json()["data"]
     assert detail["process_template_id"] == process_id
-    assert "credential_refs" not in detail and "steps" not in detail and "approval_nodes" not in detail
+    assert detail["credential_refs"] == [] and "steps" not in detail and "approval_nodes" not in detail
+
+
+async def test_ticket_template_binds_script_secrets_with_unique_aliases(client, seed):
+    """脚本密钥归属工单模板，拒绝 SSH 凭据和非法/重复别名。"""
+    admin, ops, host_id = await _env(client)
+    script_cred = await client.post("/api/v1/credentials", headers=admin, json={
+        "name": "发布令牌", "auth_type": "api_token", "secret": "deploy-token",
+    })
+    process = await client.post("/api/v1/process-templates", headers=admin, json=_process_payload())
+    process_id = process.json()["data"]["id"]
+    payload = {
+        "name": "带密钥发布入口", "type": "release", "job_host_id": host_id,
+        "process_template_id": process_id, "params_schema": [], "notify_rules": [],
+        "visible_role_ids": [],
+        "credential_refs": [{"alias": "DEPLOY_TOKEN", "credential_id": script_cred.json()["data"]["id"]}],
+    }
+    created = await client.post("/api/v1/templates", headers=ops, json=payload)
+    assert created.json()["code"] == 0, created.json()
+    detail = (await client.get(f"/api/v1/templates/{created.json()['data']['id']}", headers=ops)).json()["data"]
+    assert detail["credential_refs"] == [{"alias": "DEPLOY_TOKEN", "credential_id": script_cred.json()["data"]["id"], "credential_name": "发布令牌"}]
+
+    ssh_cred = await client.post("/api/v1/credentials", headers=admin, json={
+        "name": "错误 SSH 引用", "login_user": "root", "auth_type": "password", "secret": "x",
+    })
+    payload["name"] = "SSH 引用入口"
+    payload["credential_refs"] = [{"alias": "SSH_LOGIN", "credential_id": ssh_cred.json()["data"]["id"]}]
+    assert (await client.post("/api/v1/templates", headers=ops, json=payload)).json()["code"] == 40001
+
+    payload["name"] = "重复别名入口"
+    payload["credential_refs"] = [
+        {"alias": "DEPLOY_TOKEN", "credential_id": script_cred.json()["data"]["id"]},
+        {"alias": "DEPLOY_TOKEN", "credential_id": script_cred.json()["data"]["id"]},
+    ]
+    assert (await client.post("/api/v1/templates", headers=ops, json=payload)).json()["code"] == 40001
+
+    payload["name"] = "重复凭据入口"
+    payload["credential_refs"] = [
+        {"alias": "DEPLOY_TOKEN", "credential_id": script_cred.json()["data"]["id"]},
+        {"alias": "BACKUP_TOKEN", "credential_id": script_cred.json()["data"]["id"]},
+    ]
+    assert (await client.post("/api/v1/templates", headers=ops, json=payload)).json()["code"] == 40001
+
+    payload["name"] = "非法别名入口"
+    payload["credential_refs"] = [{"alias": "deploy-token", "credential_id": script_cred.json()["data"]["id"]}]
+    assert (await client.post("/api/v1/templates", headers=ops, json=payload)).json()["code"] == 40001
 
 
 async def test_ops_can_load_template_reference_options(client):

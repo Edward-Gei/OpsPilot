@@ -214,6 +214,23 @@ class TestUsableTemplatesAndForm:
 class TestSubmit:
     """提交：五重快照 / 参数校验 / 免审直跑 / 提交守卫。"""
 
+    async def test_submit_snapshots_script_secret_references(self, client):
+        """工单仅固化别名、凭据 ID 和名称，不固化可变的密钥值。"""
+        env = await _base_env(client)
+        secret = await client.post("/api/v1/credentials", headers=env["admin_h"], json={
+            "name": "发布令牌", "auth_type": "api_token", "secret": "deploy-token",
+        })
+        assert secret.json()["code"] == 0
+        tpl_id = await _create_template(client, env, credential_refs=[{
+            "alias": "DEPLOY_TOKEN", "credential_id": secret.json()["data"]["id"],
+        }])
+
+        ticket = await _submit(client, env["ops_h"], tpl_id)
+        detail = (await client.get(f"/api/v1/tickets/{ticket['id']}", headers=env["ops_h"])).json()["data"]
+        assert detail["credential_refs"] == [{
+            "alias": "DEPLOY_TOKEN", "credential_id": secret.json()["data"]["id"], "credential_name": "发布令牌",
+        }]
+
     async def test_submit_snapshot_and_single_node_approve(self, client, db_factory, seed, fake_redis):
         """单步骤审批全链路：提交固化快照 → 待办可见 → 通过 → queued + 入队 + 通知落库。"""
         env = await _base_env(client)
@@ -303,7 +320,8 @@ class TestSubmit:
     async def test_submit_prepared_fixed_param(self, client):
         """提交向导携带 prepare_id 时，预生成的 fixed 参数应直接采用默认值。"""
         env = await _base_env(client)
-        step = _step(env, params_schema=[{"name": "GIT_REPO", "default": "ops/repo", "fixed": True}])
+        step = _step(env, content="echo {{ GIT_REPO }}",
+                     params_schema=[{"name": "GIT_REPO", "default": "ops/repo", "fixed": True}])
         tpl_id = await _create_template(client, env, steps=[step])
 
         prepared = await client.post("/api/v1/tickets/prepare", headers=env["ops_h"],

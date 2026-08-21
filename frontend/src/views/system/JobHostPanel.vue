@@ -86,10 +86,13 @@ const editForm = reactive({
 // 凭据选项：凭据管理中的凭据（登录认证随凭据走，主机侧只选不填）
 const credOptions = ref<{ label: string; value: number }[]>([])
 async function loadCredOptions() {
-  const data = await jobApi.listCredentials({ page: 1, page_size: 100 })
-  credOptions.value = data.items.map((c) => ({
+  const [passwords, privateKeys] = await Promise.all([
+    jobApi.listCredentials({ page: 1, page_size: 100, auth_type: 'password' }),
+    jobApi.listCredentials({ page: 1, page_size: 100, auth_type: 'private_key' }),
+  ])
+  credOptions.value = [...passwords.items, ...privateKeys.items].map((c) => ({
     value: c.id,
-    label: `${c.name}（${c.login_user} · ${c.auth_type === 'password' ? '密码' : '私钥'}）`,
+    label: `${c.name}（${c.login_user || '—'} · ${c.auth_type === 'password' ? 'SSH 密码' : 'SSH 私钥'}）`,
   }))
 }
 

@@ -15,6 +15,7 @@ from app.core.response import Errors
 from app.engine.ssh_runner import open_connection
 from app.models.cmdb import JobHost
 from app.models.job import Credential, TicketTemplate
+from app.services.credential_service import SSH_CREDENTIAL_TYPES
 
 # 连通性测试整体超时（秒）：建连 + 执行 echo ok
 _TEST_TIMEOUT = 10
@@ -71,9 +72,12 @@ async def _ensure_ip_port_unique(
 
 
 async def _ensure_credential_exists(session: AsyncSession, credential_id: int) -> None:
-    """关联凭据存在性校验（40401）。"""
-    if await session.get(Credential, credential_id) is None:
+    """作业主机只能关联 SSH 登录凭据，脚本密钥不具备主机认证语义。"""
+    credential = await session.get(Credential, credential_id)
+    if credential is None:
         raise Errors.not_found("关联凭据不存在")
+    if credential.auth_type not in SSH_CREDENTIAL_TYPES:
+        raise Errors.param("作业主机只能关联 SSH 凭据")
 
 
 async def credential_names(

@@ -33,6 +33,7 @@ class Ticket(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="approving")
     interrupt_reason: Mapped[str | None] = mapped_column(String(32))
     exec_strategy_snap: Mapped[dict | None] = mapped_column(JSON)
+    credential_refs: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     flow_snap: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     allow_withdraw_snap: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     current_step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

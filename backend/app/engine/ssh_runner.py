@@ -18,6 +18,7 @@ from app.core.constants import CredentialAuthType, ExecutionStatus, HostExecStat
 from app.core.security import decrypt_text
 from app.engine.control import ControlState
 from app.engine.logs import LogChannel
+from app.engine.secret_runtime import SecretRuntime, cleanup_secret_files, materialize_secret_files
 
 logger = logging.getLogger("opspilot.engine.ssh")
 
@@ -60,10 +61,12 @@ def _env_prelude(env: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
-async def _stream_output(stream, log: LogChannel, step_order: int, prefix: str = "") -> None:
+async def _stream_output(stream, log: LogChannel, step_order: int, prefix: str = "",
+                         redactor=None) -> None:
     """逐行读取远端输出写入日志通道（stdout/stderr 各起一个协程）。"""
     async for line in stream:
-        log.write(step_order, f"{prefix}{line.rstrip()}" if prefix else line.rstrip())
+        text = f"{prefix}{line.rstrip()}" if prefix else line.rstrip()
+        log.write(step_order, redactor(text) if redactor else text)
 
 
 async def run_shell_on_host(
@@ -141,6 +144,7 @@ async def run_shell_on_job_host(
     step_order: int,
     log: LogChannel,
     control: ControlState,
+    secret_runtime: SecretRuntime | None = None,
 ) -> tuple[str, int | None, str | None]:
     """SSH→作业主机执行 Shell 脚本，返回 (ExecutionStatus值, 退出码, 失败摘要)。
 
@@ -152,19 +156,23 @@ async def run_shell_on_job_host(
     run_shell_on_host 的 HostExecStatus.TIMEOUT 语义对齐）。
     """
     conn: asyncssh.SSHClientConnection | None = None
+    remote_secret_dir: str | None = None
     try:
         conn = await open_connection(job_host.ip, job_host.ssh_port, credential)
         control.register_conn(conn)
+        secret_dir, secret_env = await materialize_secret_files(conn, secret_runtime) if secret_runtime else (None, {})
+        remote_secret_dir = secret_dir
+        command_env = {**(env or {}), **secret_env}
         async with conn.create_process("bash -s") as process:
-            if env:
-                process.stdin.write(_env_prelude(env) + "\n")
+            if command_env:
+                process.stdin.write(_env_prelude(command_env) + "\n")
             process.stdin.write(script + "\n")
             process.stdin.write_eof()
             # stdout/stderr 并发流式收集；整体受步骤超时约束
             await asyncio.wait_for(
                 asyncio.gather(
-                    _stream_output(process.stdout, log, step_order),
-                    _stream_output(process.stderr, log, step_order),
+                    _stream_output(process.stdout, log, step_order, redactor=secret_runtime.redact if secret_runtime else None),
+                    _stream_output(process.stderr, log, step_order, redactor=secret_runtime.redact if secret_runtime else None),
                     process.wait(),
                 ),
                 timeout=timeout,
@@ -185,7 +193,7 @@ async def run_shell_on_job_host(
     except RuntimeError as exc:
         # 凭据解密失败等可识别运行时错误（decrypt_text）：按步骤失败归档，
         # 避免裸异常击穿引擎被误判为系统崩溃（system_crash）
-        summary = str(exc)[:500] or "运行时错误"
+        summary = (secret_runtime.redact(str(exc)) if secret_runtime else str(exc))[:500] or "运行时错误"
         log.write(step_order, f"[opspilot] {summary}")
         return ExecutionStatus.FAILED.value, None, summary
     except (asyncssh.Error, OSError) as exc:
@@ -194,9 +202,12 @@ async def run_shell_on_job_host(
             log.write(step_order, "[opspilot] 会话已被强制中止")
             return ExecutionStatus.TERMINATED.value, None, "强制中止"
         summary = f"SSH 异常: {exc}" if str(exc) else f"SSH 异常: {type(exc).__name__}"
+        if secret_runtime:
+            summary = secret_runtime.redact(summary)
         log.write(step_order, f"[opspilot] {summary}")
         return ExecutionStatus.FAILED.value, None, summary[:500]
     finally:
         if conn is not None:
             control.unregister_conn(conn)
+            await cleanup_secret_files(conn, remote_secret_dir)
             conn.close()

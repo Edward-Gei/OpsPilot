@@ -14,15 +14,29 @@ import { makeResizable, onResizeColumn } from '@/utils/table'
 import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
-const canWrite = userStore.hasPerm('credential:write')
-const canDelete = userStore.hasPerm('credential:delete')
+const canCredentialWrite = userStore.hasPerm('credential:write')
+const canSecretWrite = userStore.hasPerm('secret:write')
+const canCredentialDelete = userStore.hasPerm('credential:delete')
+const canSecretDelete = userStore.hasPerm('secret:delete')
+const canWrite = canCredentialWrite || canSecretWrite
+const canDelete = canCredentialDelete || canSecretDelete
 
 // 认证方式彩色标签（与 M1/M2 列表标签风格一致）
 const authText: Record<string, { text: string; color: string }> = {
-  password: { text: '密码', color: 'geekblue' },
-  private_key: { text: '私钥', color: 'purple' },
+  password: { text: 'SSH 密码', color: 'geekblue' },
+  private_key: { text: 'SSH 私钥', color: 'purple' },
+  api_token: { text: 'API Token', color: 'cyan' },
+  username_password: { text: '用户名密码', color: 'blue' },
+  secret_file: { text: '文本密钥文件', color: 'green' },
 }
 const authOptions = Object.entries(authText).map(([value, v]) => ({ label: v.text, value }))
+const editableAuthOptions = computed(() => authOptions.filter((item) =>
+  ['password', 'private_key'].includes(item.value) ? canCredentialWrite : canSecretWrite,
+))
+const isSshCredential = (type: string) => type === 'password' || type === 'private_key'
+const needsLoginUser = (type: string) => type === 'password' || type === 'private_key' || type === 'username_password'
+const canEditRow = (row: jobApi.CredentialItem) => isSshCredential(row.auth_type) ? canCredentialWrite : canSecretWrite
+const canDeleteRow = (row: jobApi.CredentialItem) => isSshCredential(row.auth_type) ? canCredentialDelete : canSecretDelete
 
 // ---------- 列表 ----------
 const loading = ref(false)
@@ -39,8 +53,9 @@ const query = reactive({
 const columns = ref(makeResizable([
   { title: '凭据名', dataIndex: 'name', key: 'name', width: 150, ellipsis: true },
   { title: '登录用户', dataIndex: 'login_user', key: 'login_user', width: 120, ellipsis: true },
-  { title: '认证方式', key: 'auth_type', width: 100 },
+  { title: '凭据类型', key: 'auth_type', width: 120 },
   { title: '私钥口令', key: 'has_passphrase', width: 95 },
+  { title: '文件名', key: 'file_name', width: 150, ellipsis: true },
   { title: '说明', key: 'description', width: 200, ellipsis: true },
   { title: '更新时间', key: 'updated', width: 155 },
   { title: '操作', key: 'action', width: canWrite || canDelete ? 150 : 60, fixed: 'right' as const },
@@ -67,11 +82,12 @@ async function loadList() {
 // ---------- 批量删除（多选；被进行中工单引用的失败不影响其余） ----------
 const selectedKeys = ref<number[]>([])
 const rowSelection = computed(() =>
-  canWrite
+  canDelete
     ? {
         fixed: true, // 选择框列固定左侧
         selectedRowKeys: selectedKeys.value,
         onChange: (keys: (string | number)[]) => (selectedKeys.value = keys as number[]),
+        getCheckboxProps: (row: jobApi.CredentialItem) => ({ disabled: !canDeleteRow(row) }),
       }
     : undefined,
 )
@@ -95,17 +111,20 @@ async function onBatchDelete() {
 }
 
 // ---------- 横幅统计（全局口径，不受筛选影响，page_size=1 只取 total） ----------
-const stats = reactive({ all: 0, password: 0, privateKey: 0 })
+const stats = reactive({ all: 0, ssh: 0, secrets: 0 })
 
 async function loadStats() {
-  const [all, pwd, key] = await Promise.all([
+  const [all, pwd, key, token, account, file] = await Promise.all([
     jobApi.listCredentials({ page: 1, page_size: 1 }),
     jobApi.listCredentials({ page: 1, page_size: 1, auth_type: 'password' }),
     jobApi.listCredentials({ page: 1, page_size: 1, auth_type: 'private_key' }),
+    jobApi.listCredentials({ page: 1, page_size: 1, auth_type: 'api_token' }),
+    jobApi.listCredentials({ page: 1, page_size: 1, auth_type: 'username_password' }),
+    jobApi.listCredentials({ page: 1, page_size: 1, auth_type: 'secret_file' }),
   ])
   stats.all = all.total
-  stats.password = pwd.total
-  stats.privateKey = key.total
+  stats.ssh = pwd.total + key.total
+  stats.secrets = token.total + account.total + file.total
 }
 
 /** 列表 + 统计一起刷新（变更操作后调用） */
@@ -132,20 +151,23 @@ const editing = ref<jobApi.CredentialItem | null>(null) // null=创建
 const editForm = reactive({
   name: '',
   login_user: '',
-  auth_type: 'password' as 'password' | 'private_key',
+  auth_type: 'password' as jobApi.CredentialItem['auth_type'],
   secret: '',
   passphrase: '',
+  file_name: '',
   description: '',
 })
 
 function openCreate() {
   editing.value = null
+  const authType = editableAuthOptions.value[0]?.value as jobApi.CredentialItem['auth_type'] | undefined
   Object.assign(editForm, {
     name: '',
     login_user: '',
-    auth_type: 'password',
+    auth_type: authType || 'password',
     secret: '',
     passphrase: '',
+    file_name: '',
     description: '',
   })
   editVisible.value = true
@@ -156,10 +178,11 @@ function openEdit(row: jobApi.CredentialItem) {
   editing.value = row
   Object.assign(editForm, {
     name: row.name,
-    login_user: row.login_user,
+    login_user: row.login_user || '',
     auth_type: row.auth_type,
     secret: '',
     passphrase: '',
+    file_name: row.file_name || '',
     description: row.description || '',
   })
   editVisible.value = true
@@ -170,26 +193,27 @@ function openEdit(row: jobApi.CredentialItem) {
  * 创建必填密文；编辑 secret 留空 = 不变更密文（但变更认证方式时后端强制要求重填，前端同步拦截）
  */
 async function onSubmitEdit() {
-  if (!editForm.name || !editForm.login_user) {
-    message.warning('请填写凭据名和登录用户')
+  if (!editForm.name || (needsLoginUser(editForm.auth_type) && !editForm.login_user)) {
+    message.warning(needsLoginUser(editForm.auth_type) ? '请填写凭据名和登录用户' : '请填写凭据名')
     return
   }
   if (!editing.value && !editForm.secret) {
     message.warning('请填写密文内容')
     return
   }
-  if (editing.value && editForm.auth_type !== editing.value.auth_type && !editForm.secret) {
-    message.warning('变更认证方式时必须重新填写密文内容')
+  if (editForm.auth_type === 'secret_file' && !editForm.file_name) {
+    message.warning('请填写文本密钥文件名')
     return
   }
   editLoading.value = true
   try {
     const payload: jobApi.CredentialForm = {
       name: editForm.name,
-      login_user: editForm.login_user,
+      login_user: editForm.login_user || null,
       auth_type: editForm.auth_type,
       secret: editForm.secret,
       passphrase: editForm.passphrase || undefined,
+      file_name: editForm.file_name || undefined,
       description: editForm.description || undefined,
     }
     if (editing.value) {
@@ -231,12 +255,12 @@ onMounted(() => {
       <div class="op-hero-icon"><KeyOutlined /></div>
       <div>
         <div class="op-hero-title">凭据管理</div>
-        <div class="op-hero-sub">目标主机登录凭据（密文加密存储，任何接口不回显）</div>
+        <div class="op-hero-sub">SSH 登录凭据与脚本密钥集中管理（密文加密存储，任何接口不回显）</div>
       </div>
       <div class="op-hero-extra">
         <div class="op-hero-stat"><b>{{ stats.all }}</b><span>总凭据</span></div>
-        <div class="op-hero-stat"><b>{{ stats.password }}</b><span>密码认证</span></div>
-        <div class="op-hero-stat"><b>{{ stats.privateKey }}</b><span>私钥认证</span></div>
+        <div class="op-hero-stat"><b>{{ stats.ssh }}</b><span>SSH 凭据</span></div>
+        <div class="op-hero-stat"><b>{{ stats.secrets }}</b><span>脚本密钥</span></div>
       </div>
     </div>
 
@@ -253,7 +277,7 @@ onMounted(() => {
       </a-input>
       <a-select
         v-model:value="query.auth_type"
-        placeholder="认证方式"
+        placeholder="凭据类型"
         class="auth-sel"
         allow-clear
         :options="authOptions"
@@ -305,14 +329,15 @@ onMounted(() => {
           <a-tag v-if="record.has_passphrase" color="cyan">有</a-tag>
           <template v-else>—</template>
         </template>
+        <template v-else-if="column.key === 'file_name'">{{ record.file_name || '—' }}</template>
         <template v-else-if="column.key === 'description'">{{ record.description || '—' }}</template>
         <template v-else-if="column.key === 'updated'">
           {{ record.updated_at ? new Date(record.updated_at).toLocaleString() : '—' }}
         </template>
         <template v-else-if="column.key === 'action'">
-          <a-space v-if="canWrite || canDelete">
-            <a-button v-if="canWrite" size="small" class="op-btn-blue" @click="openEdit(record as jobApi.CredentialItem)"><EditOutlined />编辑</a-button>
-            <a-popconfirm v-if="canDelete" title="确认删除该凭据？" @confirm="onDelete(record as jobApi.CredentialItem)">
+          <a-space v-if="canEditRow(record as jobApi.CredentialItem) || canDeleteRow(record as jobApi.CredentialItem)">
+            <a-button v-if="canEditRow(record as jobApi.CredentialItem)" size="small" class="op-btn-blue" @click="openEdit(record as jobApi.CredentialItem)"><EditOutlined />编辑</a-button>
+            <a-popconfirm v-if="canDeleteRow(record as jobApi.CredentialItem)" title="确认删除该凭据？" @confirm="onDelete(record as jobApi.CredentialItem)">
               <a-button size="small" danger><DeleteOutlined />删除</a-button>
             </a-popconfirm>
           </a-space>
@@ -334,17 +359,17 @@ onMounted(() => {
           <a-form-item label="凭据名" required class="form-col">
             <a-input v-model:value="editForm.name" placeholder="如 生产root" />
           </a-form-item>
-          <a-form-item label="登录用户" required class="form-col">
+          <a-form-item v-if="needsLoginUser(editForm.auth_type)" label="登录用户" required class="form-col">
             <a-input v-model:value="editForm.login_user" placeholder="如 root" />
           </a-form-item>
         </div>
-        <a-form-item label="认证方式" required>
-          <a-select v-model:value="editForm.auth_type" :options="authOptions" />
+        <a-form-item label="凭据类型" required>
+          <a-select v-model:value="editForm.auth_type" :options="editableAuthOptions" :disabled="Boolean(editing)" />
         </a-form-item>
-        <a-form-item :label="editForm.auth_type === 'password' ? '登录密码' : '私钥内容'" :required="!editing">
+        <a-form-item :label="editForm.auth_type === 'password' || editForm.auth_type === 'username_password' ? '密码' : editForm.auth_type === 'api_token' ? 'API Token' : editForm.auth_type === 'secret_file' ? '文本密钥文件内容' : 'SSH 私钥内容'" :required="!editing">
           <!-- 密码用掩码输入框，私钥用多行文本 -->
           <a-input-password
-            v-if="editForm.auth_type === 'password'"
+            v-if="editForm.auth_type === 'password' || editForm.auth_type === 'username_password' || editForm.auth_type === 'api_token'"
             v-model:value="editForm.secret"
             :placeholder="editing ? '留空表示不修改' : '请输入登录密码'"
           />
@@ -352,12 +377,15 @@ onMounted(() => {
             v-else
             v-model:value="editForm.secret"
             :rows="6"
-            :placeholder="editing ? '留空表示不修改' : '-----BEGIN OPENSSH PRIVATE KEY-----'"
+            :placeholder="editing ? '留空表示不修改' : editForm.auth_type === 'secret_file' ? '请输入 UTF-8 文本内容（最大 128 KiB）' : '-----BEGIN OPENSSH PRIVATE KEY-----'"
             class="secret-textarea"
           />
           <div v-if="editing" class="form-tip">
-            出于安全考虑不回显已保存的密文；变更认证方式时必须重新填写
+            出于安全考虑不回显已保存的密文；凭据类型创建后不可修改
           </div>
+        </a-form-item>
+        <a-form-item v-if="editForm.auth_type === 'secret_file'" label="文件名" required>
+          <a-input v-model:value="editForm.file_name" placeholder="如 kubeconfig" />
         </a-form-item>
         <a-form-item v-if="editForm.auth_type === 'private_key'" label="私钥口令（可选）">
           <a-input-password

@@ -20,7 +20,7 @@ from app.engine import todo_events
 from app.models.auth import User
 from app.models.cmdb import JobHost
 from app.schemas.ticket import ApproveRequest, TicketCreateRequest, TicketPrepareRequest
-from app.services import parameter_prepare_service, ticket_service
+from app.services import parameter_prepare_service, rbac_service, template_service, ticket_service
 
 router = APIRouter(prefix="/tickets", tags=["工单"])
 logger = logging.getLogger("opspilot.api.tickets")
@@ -213,7 +213,7 @@ async def poll_todo_events(
 async def get_ticket(
     ticket_id: int,
     session: DbSession,
-    _: User = Depends(require_perm("ticket:read")),
+    actor: User = Depends(require_perm("ticket:read")),
 ) -> dict:
     """详情（只读）：基本信息、参数、步骤前审批记录和 execution 概要。"""
     bundle = await ticket_service.get_ticket_bundle(session, ticket_id)
@@ -261,6 +261,8 @@ async def get_ticket(
             "created_at": execution.created_at.isoformat() if execution.created_at else None,
         } if execution else None,
     })
+    if "secret:read" in await rbac_service.get_user_perms(session, actor.id):
+        data["credential_refs"] = await template_service.credential_ref_metadata(session, t.credential_refs or [])
     return ok(data)
 
 

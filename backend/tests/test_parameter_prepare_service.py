@@ -60,3 +60,45 @@ async def test_generator_sends_rendered_script_with_shell_safe_parameters(monkey
     export_command, bash_command = connection.command.split("; ", 1)
     assert bash_command == "bash -s"
     assert json.loads(shlex.split(export_command)[1].split("=", 1)[1]) == params
+
+
+@pytest.mark.asyncio
+async def test_generator_rejects_output_that_contains_a_script_secret(monkeypatch):
+    """动态参数返回密钥时必须拒绝，且密钥只通过 stdin export 注入。"""
+    from app.core.response import BizError, Errors
+    from app.engine.secret_runtime import SecretRuntime
+
+    class _Result:
+        exit_status = 0
+        stdout = "deploy-token"
+
+    class _Connection:
+        command = None
+        script = None
+
+        async def run(self, command, input):
+            self.command = command
+            self.script = input
+            return _Result()
+
+        def close(self):
+            pass
+
+    class _Host:
+        ip = "10.0.0.10"
+        ssh_port = 22
+
+    connection = _Connection()
+
+    async def fake_open_connection(*args):
+        return connection
+
+    monkeypatch.setattr(parameter_prepare_service, "open_connection", fake_open_connection)
+    runtime = SecretRuntime(env={"SECRET_DEPLOY_TOKEN": "deploy-token"}, files=[], _values=("deploy-token",))
+
+    with pytest.raises(BizError) as exc_info:
+        await parameter_prepare_service._run_generator(_Host(), object(), "echo ignored", 60, {}, runtime)
+
+    assert exc_info.value.code == Errors.BIZ_REJECTED
+    assert connection.command == "bash -s"
+    assert "export SECRET_DEPLOY_TOKEN='deploy-token'" in connection.script

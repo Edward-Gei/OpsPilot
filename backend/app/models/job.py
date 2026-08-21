@@ -12,16 +12,17 @@ MTEXT = MEDIUMTEXT().with_variant(Text(), "sqlite")
 
 
 class Credential(Base):
-    """独立管理 SSH 登录凭据；模板只引用作业主机，不直接引用凭据。"""
+    """统一管理 SSH 登录凭据与脚本运行期密钥，密文始终不经接口返回。"""
 
     __tablename__ = "credential"
 
     id: Mapped[int] = pk_column()
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    login_user: Mapped[str] = mapped_column(String(64), nullable=False)
-    auth_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    login_user: Mapped[str | None] = mapped_column(String(64))
+    auth_type: Mapped[str] = mapped_column(String(32), nullable=False)
     secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
     passphrase_enc: Mapped[str | None] = mapped_column(Text)
+    file_name: Mapped[str | None] = mapped_column(String(128))
     description: Mapped[str | None] = mapped_column(String(255))
     created_by: Mapped[int | None] = mapped_column(UBIGINT)
     created_at: Mapped[datetime] = created_at_column()
@@ -47,6 +48,7 @@ class TicketTemplate(Base):
     params_schema: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     generator_script: Mapped[str | None] = mapped_column(MTEXT)
     generator_timeout: Mapped[int | None] = mapped_column(Integer)
+    credential_refs: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     allow_withdraw: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     notify_rules: Mapped[list | None] = mapped_column(JSON)
     visible_role_ids: Mapped[list | None] = mapped_column(JSON)

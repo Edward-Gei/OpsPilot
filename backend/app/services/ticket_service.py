@@ -275,6 +275,7 @@ async def create_ticket(session: AsyncSession, *, creator: User, template_id: in
         job_host_snap={"id": host.id, "name": host.name, "ip": host.ip, "ssh_port": host.ssh_port, "workdir": host.workdir} if host else {},
         process_template_id_snap=process.id, process_name_snap=process.name,
         status=TicketStatus.APPROVING.value, exec_strategy_snap=process.exec_strategy or {},
+        credential_refs=await template_service.credential_ref_snapshot(session, tpl.credential_refs or []),
         flow_snap=flow, allow_withdraw_snap=tpl.allow_withdraw, creator_id=creator.id, submitted_at=datetime.now(),
     )
     session.add(ticket)

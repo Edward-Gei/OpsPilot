@@ -1,15 +1,19 @@
 """工单模板与流程模板服务：全量更新、启停和引用保护。"""
 
+import re
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.response import Errors
 from app.models.auth import Role
 from app.models.cmdb import JobHost
-from app.models.job import ProcessStep, ProcessTemplate, TicketTemplate
+from app.models.job import Credential, ProcessStep, ProcessTemplate, TicketTemplate
 from app.models.ticket import Ticket
+from app.services.credential_service import is_script_secret
 
 ACTIVE_TICKET_STATUSES = ("approving", "queued", "running", "paused")
+_CREDENTIAL_ALIAS_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,31}$")
 
 
 async def _unique(session: AsyncSession, model, name: str, exclude_id: int | None = None) -> None:
@@ -166,7 +170,60 @@ async def _validate_ticket_refs(session: AsyncSession, data: dict, *, update_id:
         found = set((await session.execute(select(Role.id).where(Role.id.in_(role_ids)))).scalars())
         if role_ids - found:
             raise Errors.param(f"可见角色不存在: {sorted(role_ids - found)}")
+    await validate_script_secret_refs(session, data.get("credential_refs") or [])
     return process
+
+
+async def validate_script_secret_refs(session: AsyncSession, refs: list[dict]) -> list[Credential]:
+    """校验模板只引用唯一的脚本密钥，防止 SSH 登录凭据进入脚本环境。"""
+    aliases = [item.get("alias") for item in refs]
+    if any(not isinstance(alias, str) or not _CREDENTIAL_ALIAS_RE.fullmatch(alias) for alias in aliases):
+        raise Errors.param("脚本密钥别名仅支持大写字母、数字和下划线")
+    if len(aliases) != len(set(aliases)):
+        raise Errors.param("脚本密钥别名不能重复")
+    credential_ids = [item.get("credential_id") for item in refs]
+    if any(not isinstance(credential_id, int) for credential_id in credential_ids):
+        raise Errors.param("脚本密钥凭据 ID 不合法")
+    if len(credential_ids) != len(set(credential_ids)):
+        raise Errors.param("同一凭据不能重复绑定")
+    if not credential_ids:
+        return []
+    rows = list((await session.execute(select(Credential).where(Credential.id.in_(credential_ids)))).scalars())
+    by_id = {row.id: row for row in rows}
+    missing = set(credential_ids) - set(by_id)
+    if missing:
+        raise Errors.not_found(f"脚本密钥凭据不存在: {sorted(missing)}")
+    invalid = [credential_id for credential_id in credential_ids if not is_script_secret(by_id[credential_id])]
+    if invalid:
+        raise Errors.param("工单模板只能绑定脚本密钥凭据")
+    return rows
+
+
+async def credential_ref_metadata(session: AsyncSession, refs: list[dict]) -> list[dict]:
+    """为已授权的模板/工单读取安全引用元数据，不读取任何密文。"""
+    credential_ids = [item.get("credential_id") for item in refs if isinstance(item.get("credential_id"), int)]
+    if not credential_ids:
+        return []
+    rows = await session.execute(select(Credential.id, Credential.name).where(Credential.id.in_(credential_ids)))
+    names = dict(rows.all())
+    return [
+        {
+            "alias": item.get("alias"), "credential_id": item["credential_id"],
+            "credential_name": item.get("credential_name") or names.get(item["credential_id"]),
+        }
+        for item in refs if item.get("credential_id") in names or item.get("credential_name")
+    ]
+
+
+async def credential_ref_snapshot(session: AsyncSession, refs: list[dict]) -> list[dict]:
+    """提单时固化引用名称，运行期仍按 ID 使用最新密文。"""
+    credentials = await validate_script_secret_refs(session, refs)
+    names = {credential.id: credential.name for credential in credentials}
+    return [
+        {"alias": item["alias"], "credential_id": item["credential_id"],
+         "credential_name": names[item["credential_id"]]}
+        for item in refs
+    ]
 
 
 async def create_template(session: AsyncSession, *, created_by: int, data: dict) -> TicketTemplate:

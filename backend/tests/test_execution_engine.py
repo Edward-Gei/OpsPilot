@@ -117,7 +117,7 @@ def _fake_job_host_runner(failed_steps: dict[int, str] | None = None):
     failed_steps = failed_steps or {}
 
     async def _run(*, job_host, credential, script, env=None, timeout,
-                   step_order, log, control):
+                   step_order, log, control, secret_runtime=None):
         log.write(step_order, f"[fake] step {step_order} on {job_host.ip}: {script.splitlines()[-1]}")
         if step_order in failed_steps:
             return "failed", 1, failed_steps[step_order]
@@ -238,6 +238,33 @@ class TestPipelineScheduler:
         tail = await events.fetch_events_since(eid, 0)
         assert tail[-1]["data"]["status"] == "failed"
 
+    async def test_shell_secret_runtime_is_loaded_and_redacted(self, client, db_factory, fake_redis,
+                                                                monkeypatch, engine_setup):
+        """Shell 步骤按工单快照加载密钥，日志和错误摘要均不能落明文。"""
+        env = await _engine_env(client)
+        secret = await client.post("/api/v1/credentials", headers=env["admin_h"], json={
+            "name": "执行令牌", "auth_type": "api_token", "secret": "deploy-token",
+        })
+        eid = await _submitted_execution_id(client, env, db_factory, credential_refs=[{
+            "alias": "DEPLOY", "credential_id": secret.json()["data"]["id"],
+        }])
+        captured = {}
+
+        async def fake_runner(*, secret_runtime, step_order, log, **kwargs):
+            captured["env"] = secret_runtime.env
+            log.write(step_order, secret_runtime.redact("output deploy-token"))
+            return "failed", 1, "deploy-token"
+
+        monkeypatch.setattr(pipeline.ssh_runner, "run_shell_on_job_host", fake_runner)
+        await pipeline.run_execution(eid)
+
+        assert captured["env"] == {"SECRET_DEPLOY_TOKEN": "deploy-token"}
+        async with db_factory() as session:
+            step = (await session.execute(select(ExecutionStep))).scalar_one()
+            assert step.error_summary == "***"
+        with open(os.path.join(str(engine_setup), str(eid), "step_1.log"), encoding="utf-8") as log_file:
+            assert log_file.read() == "output ***\n"
+
     async def test_abort_before_start(self, client, db_factory, fake_redis,
                                       monkeypatch, engine_setup):
         """queued 阶段下发 abort：检查点①直接终止，步骤未派发保持 pending，信号键清理。"""
@@ -281,3 +308,32 @@ def test_build_cred_env():
                            passphrase_enc=None)
     env = build_cred_env("mysql", cred)
     assert env == {"CRED_MYSQL_USER": "root", "CRED_MYSQL_SECRET": "s3cret"}
+
+
+def test_script_secret_runtime_builds_env_files_and_redacts_exact_values():
+    """脚本密钥按类型生成约定变量，所有注入值在日志中精确脱敏。"""
+    from types import SimpleNamespace
+
+    from app.core.security import encrypt_text
+    from app.engine.secret_runtime import build_secret_runtime
+
+    credentials = {
+        1: SimpleNamespace(auth_type="api_token", secret_enc=encrypt_text("deploy-token"), login_user=None),
+        2: SimpleNamespace(auth_type="username_password", secret_enc=encrypt_text("registry-password"), login_user="robot"),
+        3: SimpleNamespace(auth_type="secret_file", secret_enc=encrypt_text("apiVersion: v1\n"), file_name="kubeconfig", login_user=None),
+    }
+    runtime = build_secret_runtime([
+        {"alias": "DEPLOY", "credential_id": 1},
+        {"alias": "REGISTRY", "credential_id": 2},
+        {"alias": "KUBE", "credential_id": 3},
+    ], credentials)
+
+    assert runtime.env == {
+        "SECRET_DEPLOY_TOKEN": "deploy-token",
+        "SECRET_REGISTRY_USERNAME": "robot",
+        "SECRET_REGISTRY_PASSWORD": "registry-password",
+    }
+    assert [(item.env_key, item.file_name, item.content) for item in runtime.files] == [
+        ("SECRET_KUBE_FILE", "kubeconfig", "apiVersion: v1\n"),
+    ]
+    assert runtime.redact("deploy-token registry-password apiVersion: v1\n") == "*** *** ***"
