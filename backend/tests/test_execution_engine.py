@@ -258,7 +258,7 @@ class TestPipelineScheduler:
         monkeypatch.setattr(pipeline.ssh_runner, "run_shell_on_job_host", fake_runner)
         await pipeline.run_execution(eid)
 
-        assert captured["env"] == {"SECRET_DEPLOY_TOKEN": "deploy-token"}
+        assert captured["env"] == {"SECRET_DEPLOY": "deploy-token"}
         async with db_factory() as session:
             step = (await session.execute(select(ExecutionStep))).scalar_one()
             assert step.error_summary == "***"
@@ -323,17 +323,17 @@ def test_script_secret_runtime_builds_env_files_and_redacts_exact_values():
         3: SimpleNamespace(auth_type="secret_file", secret_enc=encrypt_text("apiVersion: v1\n"), file_name="kubeconfig", login_user=None),
     }
     runtime = build_secret_runtime([
-        {"alias": "DEPLOY", "credential_id": 1},
+        {"alias": "GITSRE_TOKEN", "credential_id": 1},
         {"alias": "REGISTRY", "credential_id": 2},
         {"alias": "KUBE", "credential_id": 3},
     ], credentials)
 
     assert runtime.env == {
-        "SECRET_DEPLOY_TOKEN": "deploy-token",
+        "SECRET_GITSRE_TOKEN": "deploy-token",
         "SECRET_REGISTRY_USERNAME": "robot",
         "SECRET_REGISTRY_PASSWORD": "registry-password",
     }
     assert [(item.env_key, item.file_name, item.content) for item in runtime.files] == [
-        ("SECRET_KUBE_FILE", "kubeconfig", "apiVersion: v1\n"),
+        ("SECRET_KUBE", "kubeconfig", "apiVersion: v1\n"),
     ]
     assert runtime.redact("deploy-token registry-password apiVersion: v1\n") == "*** *** ***"

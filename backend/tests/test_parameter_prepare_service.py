@@ -94,11 +94,11 @@ async def test_generator_rejects_output_that_contains_a_script_secret(monkeypatc
         return connection
 
     monkeypatch.setattr(parameter_prepare_service, "open_connection", fake_open_connection)
-    runtime = SecretRuntime(env={"SECRET_DEPLOY_TOKEN": "deploy-token"}, files=[], _values=("deploy-token",))
+    runtime = SecretRuntime(env={"SECRET_DEPLOY": "deploy-token"}, files=[], _values=("deploy-token",))
 
     with pytest.raises(BizError) as exc_info:
         await parameter_prepare_service._run_generator(_Host(), object(), "echo ignored", 60, {}, runtime)
 
     assert exc_info.value.code == Errors.BIZ_REJECTED
     assert connection.command == "bash -s"
-    assert "export SECRET_DEPLOY_TOKEN='deploy-token'" in connection.script
+    assert "export SECRET_DEPLOY='deploy-token'" in connection.script

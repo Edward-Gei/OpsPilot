@@ -62,7 +62,7 @@ def build_secret_runtime(refs: list[dict], credentials: Mapping[int, Credential]
         prefix = f"SECRET_{alias}"
         secret = decrypt_text(credential.secret_enc)
         if credential.auth_type == CredentialAuthType.API_TOKEN.value:
-            env[f"{prefix}_TOKEN"] = secret
+            env[prefix] = secret
             values.append(secret)
         elif credential.auth_type == CredentialAuthType.USERNAME_PASSWORD.value:
             if not credential.login_user:
@@ -73,7 +73,7 @@ def build_secret_runtime(refs: list[dict], credentials: Mapping[int, Credential]
         elif credential.auth_type == CredentialAuthType.SECRET_FILE.value:
             if not credential.file_name:
                 raise Errors.rejected("文本密钥文件配置不完整")
-            files.append(SecretFile(f"{prefix}_FILE", credential.file_name, secret))
+            files.append(SecretFile(prefix, credential.file_name, secret))
             values.append(secret)
         else:
             raise Errors.rejected("脚本密钥凭据类型不支持")
