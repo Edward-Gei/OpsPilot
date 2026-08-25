@@ -91,12 +91,12 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/cmdb/apps` | `cmdb:read` | 应用分页、部署方式和项目类型筛选 |
+| GET | `/cmdb/apps` | `cmdb:read` | 应用分页、部署方式、项目类型、所属业务线和服务级别筛选 |
 | POST | `/cmdb/apps` | `cmdb:write` | 创建应用和主机关联 |
 | GET | `/cmdb/apps/{id}` | `cmdb:read` | 应用详情 |
 | PUT | `/cmdb/apps/{id}` | `cmdb:write` | 编辑应用和主机关联 |
 | DELETE | `/cmdb/apps/{id}` | `cmdb:delete` | 删除应用 |
-| GET | `/cmdb/apps/export` | `cmdb:read` | 按当前筛选导出应用 |
+| GET | `/cmdb/apps/export` | `cmdb:read` | 按当前筛选导出完整用户可见应用台账 |
 
 ## 5. 凭据和作业主机
 

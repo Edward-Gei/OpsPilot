@@ -65,6 +65,15 @@ def _app_brief(a, stats: dict | None = None) -> dict:
         "language": a.language,
         "deploy_type": a.deploy_type,
         "project_type": a.project_type,
+        "business_line": a.business_line,
+        "system_name": a.system_name,
+        "service_level": a.service_level,
+        "ops_owner": a.ops_owner,
+        "dev_owner": a.dev_owner,
+        "repo_url": a.repo_url,
+        "service_port": a.service_port,
+        "cpu_quota": a.cpu_quota,
+        "mem_quota": a.mem_quota,
         "host_count": stats.get("host_count", 0),
         "host_ips": stats.get("host_ips", []),
         "created_at": a.created_at.isoformat() if a.created_at else None,
@@ -239,10 +248,13 @@ async def export_apps(
     language: str | None = None,
     deploy_type: str | None = None,
     project_type: Literal["frontend", "backend"] | None = None,
+    business_line: Literal["mitrade", "tradingkey"] | None = None,
+    service_level: Literal["核心服务", "一般服务"] | None = None,
 ) -> Response:
     """导出与列表相同筛选语义的全量应用。"""
     apps, host_stats = await cmdb_service.iter_apps_filtered(
         session, keyword=keyword, language=language, deploy_type=deploy_type, project_type=project_type,
+        business_line=business_line, service_level=service_level,
     )
     audit.log(module="cmdb", action="app.export", actor_id=actor.id, actor_name=actor.username,
               source_ip=get_client_ip(request), target_type="app", detail={"count": len(apps)})
@@ -258,6 +270,8 @@ async def list_apps(
     language: str | None = None,
     deploy_type: str | None = None,
     project_type: Literal["frontend", "backend"] | None = None,
+    business_line: Literal["mitrade", "tradingkey"] | None = None,
+    service_level: Literal["核心服务", "一般服务"] | None = None,
     sort_by: Literal["language", "created_at"] | None = None,
     sort_order: Literal["asc", "desc"] | None = None,
 ) -> dict:
@@ -265,6 +279,7 @@ async def list_apps(
     apps, total, host_stats = await cmdb_service.list_apps(
         session, page=page, page_size=page_size, keyword=keyword,
         language=language, deploy_type=deploy_type, project_type=project_type,
+        business_line=business_line, service_level=service_level,
         sort_by=sort_by, sort_order=sort_order,
     )
     return ok({

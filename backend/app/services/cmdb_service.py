@@ -172,12 +172,15 @@ async def list_apps(
     language: str | None = None,
     deploy_type: str | None = None,
     project_type: str | None = None,
+    business_line: str | None = None,
+    service_level: str | None = None,
     sort_by: str | None = None,
     sort_order: str | None = None,
 ) -> tuple[list[Application], int, dict[int, dict]]:
     """分页查应用；返回 (列表, 总数, {app_id: 关联主机数+IP 清单})。"""
     query = _app_filter_query(
         keyword=keyword, language=language, deploy_type=deploy_type, project_type=project_type,
+        business_line=business_line, service_level=service_level,
     )
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
     order_by = (Application.id.desc(),)
@@ -205,6 +208,8 @@ def _app_filter_query(
     language: str | None = None,
     deploy_type: str | None = None,
     project_type: str | None = None,
+    business_line: str | None = None,
+    service_level: str | None = None,
 ):
     """应用列表与导出共用筛选语义。"""
     query = select(Application)
@@ -216,6 +221,10 @@ def _app_filter_query(
         query = query.where(Application.deploy_type == deploy_type)
     if project_type:
         query = query.where(Application.project_type == project_type)
+    if business_line:
+        query = query.where(Application.business_line == business_line)
+    if service_level:
+        query = query.where(Application.service_level == service_level)
     return query
 
 
