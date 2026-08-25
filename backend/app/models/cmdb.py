@@ -55,6 +55,21 @@ class Application(Base):
     project_type: Mapped[str] = mapped_column(
         String(16), nullable=False, default="frontend", server_default="frontend", comment="frontend/backend"
     )
+    business_line: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="mitrade", server_default="mitrade",
+        comment="所属业务线：mitrade/tradingkey",
+    )
+    system_name: Mapped[str | None] = mapped_column(String(128), comment="所属系统")
+    service_level: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="核心服务", server_default="核心服务",
+        comment="服务级别：核心服务/一般服务",
+    )
+    ops_owner: Mapped[str | None] = mapped_column(String(64), comment="运维负责人")
+    dev_owner: Mapped[str | None] = mapped_column(String(64), comment="开发负责人")
+    repo_url: Mapped[str | None] = mapped_column(String(255), comment="代码仓库地址")
+    service_port: Mapped[str | None] = mapped_column(String(64), comment="服务端口")
+    cpu_quota: Mapped[str | None] = mapped_column(String(64), comment="CPU 配额")
+    mem_quota: Mapped[str | None] = mapped_column(String(64), comment="MEM 配额")
     created_by: Mapped[int | None] = mapped_column(UBIGINT)
     created_at: Mapped[datetime] = created_at_column()
     updated_at: Mapped[datetime] = updated_at_column()

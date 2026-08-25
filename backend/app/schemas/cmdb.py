@@ -46,4 +46,13 @@ class AppUpsertRequest(BaseModel):
     language: str | None = Field(default=None, max_length=32)
     deploy_type: Literal["shell", "docker", "k8s"]
     project_type: Literal["frontend", "backend"] = "frontend"
+    business_line: Literal["mitrade", "tradingkey"] = "mitrade"
+    system_name: str | None = Field(default=None, max_length=128)
+    service_level: Literal["核心服务", "一般服务"] = "核心服务"
+    ops_owner: str | None = Field(default=None, max_length=64)
+    dev_owner: str | None = Field(default=None, max_length=64)
+    repo_url: str | None = Field(default=None, max_length=255)
+    service_port: str | None = Field(default=None, max_length=64)
+    cpu_quota: str | None = Field(default=None, max_length=64)
+    mem_quota: str | None = Field(default=None, max_length=64)
     host_ids: list[int] = Field(default_factory=list)

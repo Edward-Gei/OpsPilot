@@ -400,6 +400,79 @@ class TestAppCrud:
         )
         assert resp.json()["code"] == 40001
 
+    async def test_app_business_metadata_crud_defaults_and_filters(self, client):
+        """应用台账字段支持创建、更新、默认值、详情回显和组合筛选。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        created = await client.post(
+            "/api/v1/cmdb/apps",
+            json={
+                "name": "订单台账", "language": "Java", "deploy_type": "docker",
+                "project_type": "backend", "business_line": "tradingkey",
+                "system_name": "订单系统", "service_level": "一般服务",
+                "ops_owner": "运维甲", "dev_owner": "开发甲",
+                "repo_url": "https://git.example.com/order", "service_port": "8080",
+                "cpu_quota": "2 Core", "mem_quota": "4 GiB", "host_ids": [],
+            },
+            headers=headers,
+        )
+        assert created.json()["code"] == 0
+        app_id = created.json()["data"]["id"]
+
+        detail = (await client.get(f"/api/v1/cmdb/apps/{app_id}", headers=headers)).json()["data"]
+        assert {key: detail[key] for key in (
+            "business_line", "system_name", "service_level", "ops_owner", "dev_owner",
+            "repo_url", "service_port", "cpu_quota", "mem_quota",
+        )} == {
+            "business_line": "tradingkey", "system_name": "订单系统", "service_level": "一般服务",
+            "ops_owner": "运维甲", "dev_owner": "开发甲", "repo_url": "https://git.example.com/order",
+            "service_port": "8080", "cpu_quota": "2 Core", "mem_quota": "4 GiB",
+        }
+
+        defaulted = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "默认台账", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+        default_detail = (await client.get(
+            f"/api/v1/cmdb/apps/{defaulted.json()['data']['id']}", headers=headers,
+        )).json()["data"]
+        assert (default_detail["business_line"], default_detail["service_level"]) == ("mitrade", "核心服务")
+        assert all(default_detail[field] is None for field in (
+            "system_name", "ops_owner", "dev_owner", "repo_url", "service_port", "cpu_quota", "mem_quota",
+        ))
+
+        updated = await client.put(
+            f"/api/v1/cmdb/apps/{app_id}",
+            json={
+                "name": "订单台账", "language": "Go", "deploy_type": "k8s", "project_type": "backend",
+                "business_line": "tradingkey", "system_name": "订单系统", "service_level": "核心服务",
+                "ops_owner": "运维乙", "dev_owner": "开发乙", "repo_url": "https://git.example.com/order-v2",
+                "service_port": "9090", "cpu_quota": "4 Core", "mem_quota": "8 GiB", "host_ids": [],
+            },
+            headers=headers,
+        )
+        assert updated.json()["code"] == 0
+        detail = (await client.get(f"/api/v1/cmdb/apps/{app_id}", headers=headers)).json()["data"]
+        assert (detail["service_level"], detail["ops_owner"], detail["service_port"]) == ("核心服务", "运维乙", "9090")
+
+        filtered = await client.get(
+            "/api/v1/cmdb/apps",
+            params={"business_line": "tradingkey", "service_level": "核心服务"},
+            headers=headers,
+        )
+        assert [item["id"] for item in filtered.json()["data"]["items"]] == [app_id]
+
+    async def test_app_business_metadata_rejects_invalid_enums(self, client):
+        """业务线和服务级别拒绝未定义的枚举值。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        for field, value in (("business_line", "other"), ("service_level", "重要服务")):
+            resp = await client.post(
+                "/api/v1/cmdb/apps",
+                json={"name": f"非法{field}", "deploy_type": "shell", field: value, "host_ids": []},
+                headers=headers,
+            )
+            assert resp.json()["code"] == 40001
+
     async def test_app_only_prod_hosts(self, client):
         """应用仅可关联生产环境主机：非生产主机 -> 40001。"""
         tokens = await login_for_tokens(client, "ops1")
@@ -530,6 +603,41 @@ class TestHostExcel:
 
 
 class TestAppExcel:
+    async def test_export_with_business_metadata_filters_and_columns(self, client):
+        """应用导出按新增筛选取数，并包含全部新增台账列。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        await client.post(
+            "/api/v1/cmdb/apps",
+            json={
+                "name": "交易台账", "deploy_type": "docker", "business_line": "tradingkey",
+                "system_name": "交易系统", "service_level": "一般服务", "ops_owner": "运维甲",
+                "dev_owner": "开发甲", "repo_url": "https://git.example.com/trade", "service_port": "8080",
+                "cpu_quota": "2 Core", "mem_quota": "4 GiB", "host_ids": [],
+            },
+            headers=headers,
+        )
+        await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "默认导出", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+
+        resp = await client.get(
+            "/api/v1/cmdb/apps/export",
+            params={"business_line": "tradingkey", "service_level": "一般服务"},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        ws = load_workbook(BytesIO(resp.content)).active
+        headers_row = [cell.value for cell in ws[1]]
+        assert {
+            "关联主机数", "主机 IP", "所属业务线", "所属系统", "服务级别", "运维负责人",
+            "开发负责人", "代码仓库地址", "服务端口", "CPU 配额", "MEM 配额",
+        } <= set(headers_row)
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        assert len(rows) == 1
+        assert rows[0][headers_row.index("代码仓库地址")] == "https://git.example.com/trade"
+
     async def test_export_with_project_type_filter(self, client):
         """应用导出按项目类型筛选，并包含项目类型列。"""
         headers = auth_header(await login_for_tokens(client, "ops1"))

@@ -25,6 +25,8 @@ export interface HostItem {
 }
 
 export type AppProjectType = 'frontend' | 'backend'
+export type AppBusinessLine = 'mitrade' | 'tradingkey'
+export type AppServiceLevel = '核心服务' | '一般服务'
 
 export interface AppItem {
   id: number
@@ -33,6 +35,15 @@ export interface AppItem {
   language: string | null
   deploy_type: string
   project_type: AppProjectType
+  business_line: AppBusinessLine
+  system_name: string | null
+  service_level: AppServiceLevel
+  ops_owner: string | null
+  dev_owner: string | null
+  repo_url: string | null
+  service_port: string | null
+  cpu_quota: string | null
+  mem_quota: string | null
   host_count: number
   // 关联主机 IP 清单（列表多行展示）
   host_ips: string[]
@@ -156,6 +167,8 @@ export interface AppQuery {
   language?: string
   deploy_type?: string
   project_type?: AppProjectType
+  business_line?: AppBusinessLine
+  service_level?: AppServiceLevel
   sort_by?: 'language' | 'created_at'
   sort_order?: 'asc' | 'desc'
 }
@@ -179,6 +192,15 @@ export function createApp(data: {
   language?: string
   deploy_type: string
   project_type: AppProjectType
+  business_line: AppBusinessLine
+  system_name?: string
+  service_level: AppServiceLevel
+  ops_owner?: string
+  dev_owner?: string
+  repo_url?: string
+  service_port?: string
+  cpu_quota?: string
+  mem_quota?: string
   host_ids: number[]
 }) {
   return request<{ id: number }>({ url: '/cmdb/apps', method: 'post', data })
@@ -192,6 +214,15 @@ export function updateApp(
     language?: string
     deploy_type: string
     project_type: AppProjectType
+    business_line: AppBusinessLine
+    system_name?: string
+    service_level: AppServiceLevel
+    ops_owner?: string
+    dev_owner?: string
+    repo_url?: string
+    service_port?: string
+    cpu_quota?: string
+    mem_quota?: string
     host_ids: number[]
   },
 ) {
