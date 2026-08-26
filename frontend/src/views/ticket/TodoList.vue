@@ -20,7 +20,7 @@ const columns = ref(makeResizable([
   { title: '作业主机', key: 'job_host', width: 150, ellipsis: true },
   { title: '提交人', dataIndex: 'creator_name', key: 'creator_name', width: 110, ellipsis: true },
   { title: '提交时间', key: 'submitted', width: 155 },
-  { title: '操作', key: 'action', width: 90, fixed: 'right' as const },
+  { title: '操作', key: 'action', width: 98, fixed: 'right' as const },
 ]))
 
 /** 拉取待我审批列表（后端按角色与当前步骤过滤） */

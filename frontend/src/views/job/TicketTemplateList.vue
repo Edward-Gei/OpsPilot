@@ -55,7 +55,7 @@ const columns = ref(makeResizable([
   { title: '可见角色', key: 'visible_roles', width: 180, ellipsis: true },
   { title: '状态', key: 'status', width: 90 },
   { title: '更新时间', key: 'updated', width: 160 },
-  { title: '操作', key: 'action', width: 210, fixed: 'right' as const },
+  { title: '操作', key: 'action', width: canWrite && canDelete ? 244 : canWrite || canDelete ? 171 : 98, fixed: 'right' as const },
 ]))
 
 async function load() {

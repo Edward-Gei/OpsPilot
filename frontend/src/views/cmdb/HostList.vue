@@ -79,7 +79,7 @@ const columns = ref(makeResizable([
   { title: '状态', key: 'status', width: 90 },
   { title: 'SSH 端口', dataIndex: 'ssh_port', key: 'ssh_port', width: 90 },
   { title: '创建时间', dataIndex: 'created_at', key: 'created', width: 155, sorter: true },
-  { title: '操作', key: 'action', width: canWrite || canDelete ? 190 : 90, fixed: 'right' as const },
+  { title: '操作', key: 'action', width: canDelete ? 244 : canWrite ? 171 : 98, fixed: 'right' as const },
 ]))
 
 /** 拉取主机列表（携带全部筛选条件） */

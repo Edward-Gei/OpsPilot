@@ -46,7 +46,7 @@ const columns = ref(makeResizable([
   { title: '发起人', dataIndex: 'creator_name', key: 'creator_name', width: 110, ellipsis: true },
   { title: '开始时间', key: 'started', width: 155 },
   { title: '结束时间', key: 'finished', width: 155 },
-  { title: '操作', key: 'action', width: 90, fixed: 'right' as const },
+  { title: '操作', key: 'action', width: 98, fixed: 'right' as const },
 ]))
 
 /** 拉取执行记录（工单号模糊筛选） */

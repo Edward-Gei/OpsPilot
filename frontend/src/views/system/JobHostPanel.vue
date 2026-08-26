@@ -40,7 +40,7 @@ const columns = ref(makeResizable([
   { title: '工作目录', dataIndex: 'workdir', key: 'workdir', width: 190, ellipsis: true },
   { title: '启用状态', key: 'enabled', width: 95 },
   { title: '最近测试', key: 'last_check', width: 180 },
-  { title: '操作', key: 'action', width: canWrite || canDelete ? 200 : 60, fixed: 'right' as const },
+  { title: '操作', key: 'action', width: canWrite && canDelete ? 228 : canWrite ? 154 : canDelete ? 81 : 60, fixed: 'right' as const },
 ]))
 
 /** 拉取作业主机列表（响应仅含 credential_name，无任何密文字段） */

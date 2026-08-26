@@ -50,7 +50,7 @@ const columns = ref(makeResizable([
   { title: '创建时间', key: 'created', width: 165 },
   { title: '最近登录', key: 'last_login', width: 165 },
   ...(canWrite || canMfa
-    ? [{ title: '操作', key: 'action', width: 300, fixed: 'right' as const }]
+    ? [{ title: '操作', key: 'action', width: canWrite && canMfa ? 380 : canWrite ? 276 : 110, fixed: 'right' as const }]
     : []),
 ]))
 

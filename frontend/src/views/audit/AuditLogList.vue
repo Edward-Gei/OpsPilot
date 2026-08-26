@@ -135,7 +135,7 @@ const columns = ref(makeResizable([
   { title: '动作', dataIndex: 'action', key: 'action', width: 170, ellipsis: true },
   { title: '对象', key: 'target', width: 220, ellipsis: true },
   { title: '结果', key: 'result', width: 90 },
-  { title: '操作', key: 'op', width: 80, fixed: 'right' as const },
+  { title: '操作', key: 'op', width: 98, fixed: 'right' as const },
 ]))
 
 // ---------- 详情抽屉 ----------

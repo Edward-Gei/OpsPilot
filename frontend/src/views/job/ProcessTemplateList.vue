@@ -42,7 +42,7 @@ const columns = computed(() => makeResizable([
   { title: '执行策略', key: 'strategy', width: 220, ellipsis: true },
   { title: '状态', key: 'status', width: 90 },
   { title: '更新时间', key: 'updated', width: 160 },
-  { title: '操作', key: 'action', width: 235, fixed: 'right' as const },
+  { title: '操作', key: 'action', width: canWrite && canDelete ? 244 : canWrite || canDelete ? 171 : 98, fixed: 'right' as const },
 ]))
 async function load() {
   loading.value = true

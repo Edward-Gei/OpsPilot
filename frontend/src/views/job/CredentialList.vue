@@ -58,7 +58,7 @@ const columns = ref(makeResizable([
   { title: '文件名', key: 'file_name', width: 150, ellipsis: true },
   { title: '说明', key: 'description', width: 200, ellipsis: true },
   { title: '更新时间', key: 'updated', width: 155 },
-  { title: '操作', key: 'action', width: canWrite || canDelete ? 150 : 60, fixed: 'right' as const },
+  { title: '操作', key: 'action', width: canWrite && canDelete ? 171 : canWrite || canDelete ? 98 : 60, fixed: 'right' as const },
 ]))
 
 /** 拉取凭据列表（响应仅含 has_passphrase 布尔，无任何密文字段） */
