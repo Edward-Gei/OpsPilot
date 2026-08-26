@@ -79,7 +79,7 @@ const columns = ref(makeResizable([
   { title: 'MEM 配额', dataIndex: 'mem_quota', key: 'mem_quota', width: 100, ellipsis: true },
   { title: '说明', key: 'description', width: 180, ellipsis: true },
   { title: '创建时间', dataIndex: 'created_at', key: 'created', width: 155, sorter: true },
-  { title: '操作', key: 'action', width: canWrite || canDelete ? 190 : 90, fixed: 'right' as const },
+  { title: '操作', key: 'action', width: canDelete ? 244 : canWrite ? 171 : 98, fixed: 'right' as const },
 ]))
 
 /** 拉取应用列表（items 含关联主机数） */
