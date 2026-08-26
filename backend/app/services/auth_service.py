@@ -385,6 +385,8 @@ async def mfa_bind(
     audit.log(module="auth", action="mfa.bind", result="success",
               actor_id=user.id, actor_name=user.username, source_ip=ip)
     if issue_tokens:
+        # 后续首次改密会抛出 40105，先提交已验证的 MFA 绑定，避免请求回滚丢失状态。
+        await session.commit()
         return await _issue_or_challenge(session, user, ip, mfa_passed=True)
     return None
 
