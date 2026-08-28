@@ -233,7 +233,7 @@ body {
 }
 .op-desc-table .ant-descriptions-item-content .ant-tag {
   display: inline-flex;
-  align-items: flex-start;
+  align-items: center;
   min-width: 0;
   max-width: 100%;
   height: auto;
