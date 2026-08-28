@@ -1,7 +1,9 @@
 """执行记录路由（04-API §7，只读）：权限 execution:read。
 
 执行域为只读查询；控制操作（中止/暂停/恢复/强制中止）在工单控制面
-（tickets.py，权限 execution:control）。/events 为 WS 断线后的长轮询降级通道。
+（tickets.py，权限 execution:control）。/events 为前端实时状态的长轮询主通道
+（WS 已弃用，见 app/api/ws_deprecated.py），日志实时刷新由 /logs 按 offset
+定时增量拉取实现。
 """
 import asyncio
 
@@ -28,16 +30,15 @@ async def list_executions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     ticket_no: str | None = None,
-    app_id: int | None = None,
     creator_id: int | None = None,
     status: str | None = None,
     start: str | None = None,
     end: str | None = None,
 ) -> dict:
-    """分页；筛选：ticket_no/app/creator/status/时间范围。"""
+    """分页；筛选：ticket_no/creator/status/时间范围。"""
     items, total = await execution_service.list_executions(
         session, page=page, page_size=page_size, ticket_no=ticket_no,
-        app_id=app_id, creator_id=creator_id, status=status, start=start, end=end,
+        creator_id=creator_id, status=status, start=start, end=end,
     )
     return ok({"items": items, "total": total, "page": page, "page_size": page_size})
 
@@ -48,26 +49,8 @@ async def get_execution(
     session: DbSession,
     _: User = Depends(require_perm("execution:read")),
 ) -> dict:
-    """汇总 + 步骤列表（状态/批次/统计）。"""
+    """汇总 + 步骤列表（状态/退出码/耗时）。"""
     return ok(await execution_service.get_execution_detail(session, execution_id))
-
-
-@router.get("/{execution_id}/hosts", summary="主机明细")
-async def list_execution_hosts(
-    execution_id: int,
-    session: DbSession,
-    _: User = Depends(require_perm("execution:read")),
-    step_order: int | None = None,
-    status: str | None = None,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(200, ge=1, le=500),
-) -> dict:
-    """?step_order=&status= 主机明细分页（步骤×主机矩阵数据源）。"""
-    items, total = await execution_service.list_hosts(
-        session, execution_id, step_order=step_order, status=status,
-        page=page, page_size=page_size,
-    )
-    return ok({"items": items, "total": total, "page": page, "page_size": page_size})
 
 
 @router.get("/{execution_id}/logs", summary="历史日志")
@@ -76,14 +59,13 @@ async def get_execution_logs(
     session: DbSession,
     _: User = Depends(require_perm("execution:read")),
     step_order: int = Query(..., ge=1),
-    ip: str = Query(..., description="目标主机 IP；Ansible 步骤固定传 ansible"),
     offset: int = Query(0, ge=0, description="起始行号（0 起）"),
     limit: int = Query(500, ge=1, le=2000),
 ) -> dict:
     """读日志文件（历史回看，按行偏移增量拉取）。"""
     await execution_service.get_execution_or_404(session, execution_id)
     lines, next_offset, eof = read_log_lines(
-        execution_id, step_order, ip, offset=offset, limit=limit
+        execution_id, step_order, offset=offset, limit=limit
     )
     return ok({"lines": lines, "next_offset": next_offset, "eof": eof})
 
@@ -95,12 +77,12 @@ async def poll_execution_events(
     _: User = Depends(require_perm("execution:read")),
     since_seq: int = Query(0, ge=0),
 ) -> dict:
-    """长轮询降级通道：有新事件立即返回，否则挂起至 30s 超时返回空列表。
+    """前端实时状态主通道：有新事件立即返回，否则挂起至 30s 超时返回空列表。
 
     终态执行不挂起（不会再有新事件），直接返回增量后结束轮询。
     """
     execution = await execution_service.get_execution_or_404(session, execution_id)
-    finished = execution.status in ("success", "failed", "terminated", "interrupted")
+    finished = execution.status in ("success", "failed", "terminated", "interrupted", "rejected", "cancelled")
     # 挂起等待只读 Redis：先归还数据库连接，避免大量长轮询占满连接池拖垮全部 API
     await session.close()
     deadline = asyncio.get_running_loop().time() + _POLL_TIMEOUT

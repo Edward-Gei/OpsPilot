@@ -1,408 +1,215 @@
-"""工单业务服务（V2）：提交五重快照 / 7 态状态机 / 节点审批推进（03-数据库设计 §5）。
+"""工单服务：参数校验、流程快照、步骤前审批和执行队列。"""
 
-工单中心只能使用模板：提交时仅传 {template_id, params}，标题使用模板名；
-五重快照——主机清单（应用全部关联主机）、步骤脚本内容、审批节点、执行策略、
-模板版本；此后 CMDB/模板变更不影响已提交工单。无草稿态，提交即生效。
-
-M5 执行链：末节点通过/免审提交 → 工单置 queued、预建 Execution/Step/Host 子表
-（全 pending）并 XADD ops:exec:queue，由 worker 认领推进；控制面 abort/pause/
-resume/force-abort 走 ops:ctrl 信号（engine.control）。M6 前通知只落 record。
-"""
 from datetime import datetime
 
+from jinja2 import Environment, meta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import redis as redis_mod
-from app.core.constants import NotifyEvent, TicketStatus
+from app.core.constants import ExecutionStatus, HostExecStatus, NotifyEvent, TicketStatus
 from app.core.response import BizError, Errors
 from app.engine import control as exec_ctrl
 from app.models.auth import Role, User, UserRole
-from app.models.execution import Execution, ExecutionStep, ExecutionStepHost
+from app.models.cmdb import JobHost
+from app.models.execution import Execution, ExecutionStep
 from app.models.job import TicketTemplate
-from app.models.ticket import Ticket, TicketApproval, TicketHost, TicketStep
-from app.services import cmdb_service, notify_service, template_service
+from app.models.ticket import Ticket, TicketApproval, TicketStep
+from app.services import notify_service, parameter_prepare_service, template_service
 
-
-# ---------- 基础查询 ----------
 
 async def get_ticket_or_404(session: AsyncSession, ticket_id: int) -> Ticket:
-    """按 ID 取工单，不存在抛 40401。"""
+    """按 ID 获取工单。"""
     ticket = await session.get(Ticket, ticket_id)
     if ticket is None:
         raise Errors.not_found("工单不存在")
     return ticket
 
 
-def _ensure_creator(ticket: Ticket, actor: User) -> None:
-    """对象级校验：仅创建人可撤回（40302，04-API §6）。"""
-    if ticket.creator_id != actor.id:
-        raise BizError(Errors.OBJECT_DENIED, "仅工单创建人可执行该操作", 403)
-
-
-async def _next_ticket_no(session: AsyncSession) -> str:
-    """生成当日递增工单号：T20260727-0001（03 §5.1）。"""
-    prefix = f"T{datetime.now().strftime('%Y%m%d')}-"
-    last = (
-        await session.execute(
-            select(Ticket.ticket_no)
-            .where(Ticket.ticket_no.like(f"{prefix}%"))
-            .order_by(Ticket.ticket_no.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    seq = int(last.rsplit("-", 1)[1]) + 1 if last else 1
-    return f"{prefix}{seq:04d}"
-
-
 async def _my_role_ids(session: AsyncSession, user_id: int) -> set[int]:
-    """用户角色 id 集合（模板可见范围/审批归属校验共用）。"""
-    return set(
-        (await session.execute(select(UserRole.role_id).where(UserRole.user_id == user_id))).scalars()
-    )
+    return set((await session.execute(select(UserRole.role_id).where(UserRole.user_id == user_id))).scalars())
 
 
 async def _role_members(session: AsyncSession, role_id: int) -> list[str]:
-    """角色全部成员用户名（通知收件人解析用）。"""
-    return list(
-        (
-            await session.execute(
-                select(User.username).join(UserRole, UserRole.user_id == User.id)
-                .where(UserRole.role_id == role_id)
-            )
-        ).scalars()
-    )
+    return list((await session.execute(
+        select(User.username).join(UserRole, UserRole.user_id == User.id).where(UserRole.role_id == role_id)
+    )).scalars())
 
 
-# ---------- 可用模板与提交表单 ----------
+async def _role_name_map(session: AsyncSession, role_ids: set[int]) -> dict[int, str]:
+    """批量解析审批角色名称，让步骤预览和历史快照使用同一展示口径。"""
+    if not role_ids:
+        return {}
+    rows = await session.execute(select(Role.id, Role.name).where(Role.id.in_(role_ids)))
+    return {role_id: name for role_id, name in rows}
+
 
 async def list_visible_templates(session: AsyncSession, *, user_id: int) -> list[TicketTemplate]:
-    """可提交模板列表：enabled + visible_role_ids 过滤（空=所有 ticket:write 角色）。"""
-    my_roles = await _my_role_ids(session, user_id)
-    rows = await session.execute(
-        select(TicketTemplate).where(TicketTemplate.status == "enabled").order_by(TicketTemplate.id.desc())
-    )
-    return [
-        t for t in rows.scalars()
-        if not t.visible_role_ids or set(t.visible_role_ids) & my_roles
-    ]
+    roles = await _my_role_ids(session, user_id)
+    rows = (await session.execute(select(TicketTemplate).where(TicketTemplate.status == "enabled").order_by(TicketTemplate.id.desc()))).scalars()
+    return [t for t in rows if not t.visible_role_ids or roles.intersection(t.visible_role_ids)]
 
 
-async def _ensure_template_usable(
-    session: AsyncSession, template_id: int, *, user_id: int
-) -> TicketTemplate:
-    """提交前校验：模板存在、enabled、在我的可见范围内。"""
+async def _ensure_template_usable(session: AsyncSession, template_id: int, *, user_id: int) -> TicketTemplate:
     tpl = await template_service.get_template_or_404(session, template_id)
     if tpl.status != "enabled":
-        raise Errors.conflict("模板已禁用，不可提交工单")
+        raise Errors.conflict("工单模板已停用，不能提交")
     if tpl.visible_role_ids and not (set(tpl.visible_role_ids) & await _my_role_ids(session, user_id)):
-        raise BizError(Errors.OBJECT_DENIED, "模板不在你的可提交范围内", 403)
+        raise BizError(Errors.OBJECT_DENIED, "模板不在你的可见范围内", 403)
+    process = await template_service.get_process_or_404(session, tpl.process_template_id)
+    if process.status != "enabled":
+        raise Errors.conflict("流程模板已停用，不能提交")
     return tpl
 
 
-def _merge_params_schema(steps) -> dict[str, dict]:
-    """各步骤 params_schema 汇总：同名合并（首现定义为准；任一步骤必填即必填、
-    任一步骤固定即固定）；返回 {name: 参数定义}（TPL-03）。"""
-    merged: dict[str, dict] = {}
-    for step in steps:
-        for p in step.params_schema or []:
-            name = p["name"]
-            if name in merged:
-                if p.get("required"):
-                    merged[name]["required"] = True
-                if p.get("fixed"):
-                    merged[name]["fixed"] = True
-            else:
-                merged[name] = dict(p)
-    return merged
-
-
-async def _flow_preview(session: AsyncSession, tpl: TicketTemplate) -> list[dict]:
-    """审批节点预览/快照：[{node, role_id, role_name, approve_mode}]；免审为 []。"""
-    if not tpl.approval_enabled:
-        return []
-    nodes = await template_service.get_template_nodes(session, tpl.id)
-    role_ids = {n.role_id for n in nodes}
-    names = dict(
-        (await session.execute(select(Role.id, Role.name).where(Role.id.in_(role_ids)))).all()
-    ) if role_ids else {}
-    return [
-        {"node": n.node_order, "role_id": n.role_id,
-         "role_name": names.get(n.role_id, str(n.role_id)), "approve_mode": n.approve_mode}
-        for n in nodes
-    ]
-
-
-async def get_template_form(session: AsyncSession, template_id: int, *, user_id: int) -> dict:
-    """提交表单描述：汇总参数（排除 fixed）+ 主机/步骤/审批节点/策略只读预览（04 §6）。"""
-    tpl = await _ensure_template_usable(session, template_id, user_id=user_id)
-    steps = await template_service.get_template_steps(session, template_id)
-    app = await cmdb_service.get_app_or_404(session, tpl.app_id)
-    hosts = await cmdb_service.get_app_hosts(session, tpl.app_id)
-    merged = _merge_params_schema(steps)
-    return {
-        "template": {
-            "id": tpl.id, "name": tpl.name, "type": tpl.type, "description": tpl.description,
-            "current_version": tpl.current_version, "approval_enabled": tpl.approval_enabled,
-            "allow_withdraw": tpl.allow_withdraw,
-        },
-        # 固定值参数提交人不可见不可改（TPL-03）
-        "params": [p for p in merged.values() if not p.get("fixed")],
-        "app": {"id": app.id, "name": app.name},
-        "hosts": [
-            {"host_id": h.id, "hostname": h.hostname, "ip": h.ip,
-             "environment": h.environment, "ssh_port": h.ssh_port}
-            for h in hosts
-        ],
-        "steps": [
-            {"step_order": s.step_order, "name": s.name, "script_type": s.script_type,
-             "credential_id": s.credential_id, "timeout": s.timeout}
-            for s in steps
-        ],
-        "flow": await _flow_preview(session, tpl),
-        "exec_strategy": tpl.exec_strategy or {},
-    }
-
-
-def _validate_submit_params(values: dict, merged: dict[str, dict]) -> dict:
-    """校验提交参数：未定义/固定值键拒绝、必填非空、缺省补默认值；返回汇总生效值。"""
-    visible = {n: p for n, p in merged.items() if not p.get("fixed")}
-    unknown = set(values) - set(visible)
+def _validate_params(values: dict, schema: list[dict]) -> dict:
+    """合并固定值和用户输入，并校验文本/枚举/必填约束。"""
+    definitions = {p["name"]: p for p in schema}
+    unknown = set(values) - set(definitions)
     if unknown:
-        raise Errors.param(f"参数未在模板中定义或为固定值: {sorted(unknown)}")
-    result: dict = {}
-    for name, p in visible.items():
-        value = values.get(name)
-        if value is None or value == "":
-            value = p.get("default")
-        if p.get("required") and (value is None or value == ""):
+        raise Errors.param(f"参数未定义: {sorted(unknown)}")
+    result = {}
+    for name, definition in definitions.items():
+        if definition["source"] == "fixed":
+            if name in values:
+                raise Errors.param(f"固定参数 {name} 不允许由提交人覆盖")
+            result[name] = definition.get("default")
+            continue
+        value = values.get(name, definition.get("default"))
+        if definition["source"] == "generated":
+            # 动态参数在 prepare 阶段注入；直接创建时必须显式提供已生成值。
+            value = values.get(name, value)
+        if definition.get("required") and (value is None or value == ""):
             raise Errors.param(f"必填参数 {name} 未填写")
-        result[name] = value if value is not None else ""
+        if definition.get("input_type") == "enum" and definition.get("source") != "generated" and value not in definition.get("options", []):
+            raise Errors.param(f"参数 {name} 不是有效枚举值")
+        result[name] = "" if value is None else value
     return result
 
 
-# ---------- 提交（五重快照固化） ----------
-
-async def create_ticket(
-    session: AsyncSession, *, creator: User, template_id: int, params: dict,
-) -> Ticket:
-    """提交工单：只填参数，标题=模板名；服务端固化五重快照后进入审批或直接执行。
-
-    快照顺序：模板版本 → 应用与主机清单（应用全部关联主机，≥1）→ 步骤内容与参数
-    （固定值+提交人填写合并）→ 审批节点 → 执行策略。
-    """
-    tpl = await _ensure_template_usable(session, template_id, user_id=creator.id)
-    steps_tpl = await template_service.get_template_steps(session, template_id)
-    if not steps_tpl:
-        raise Errors.conflict("模板未配置任何步骤，无法提交")
-    app = await cmdb_service.get_app_or_404(session, tpl.app_id)
-    hosts = await cmdb_service.get_app_hosts(session, tpl.app_id)
-    if not hosts:
-        raise Errors.param("模板目标应用未关联任何主机，无法提交")
-
-    merged = _merge_params_schema(steps_tpl)
-    user_params = _validate_submit_params(params or {}, merged)
-    flow_snap = await _flow_preview(session, tpl)
-    if tpl.approval_enabled and not flow_snap:
-        raise Errors.conflict("模板审批配置异常：已开启审批但无审批节点")
-
-    ticket = Ticket(
-        ticket_no=await _next_ticket_no(session),
-        template_id=tpl.id,
-        template_version_snap=tpl.current_version,
-        title=tpl.name,
-        type=tpl.type,
-        params=user_params,
-        app_id=app.id,
-        app_name_snap=app.name,
-        status=TicketStatus.APPROVING.value,
-        exec_strategy_snap=tpl.exec_strategy or {},
-        flow_snap=flow_snap,
-        allow_withdraw_snap=tpl.allow_withdraw,
-        creator_id=creator.id,
-        submitted_at=datetime.now(),
-    )
-    session.add(ticket)
-    await session.flush()
-
-    # 快照：主机清单（应用当前全部关联主机，不可增删）
-    for host in hosts:
-        session.add(TicketHost(
-            ticket_id=ticket.id, host_id=host.id, hostname=host.hostname,
-            ip=host.ip, environment=host.environment, ssh_port=host.ssh_port,
-        ))
-    # 快照：步骤内容 + 生效参数（固定值取默认值，其余取提交人汇总参数）
-    for s in steps_tpl:
-        step_params = {
-            p["name"]: (p.get("default") or "") if p.get("fixed") else user_params.get(p["name"], "")
-            for p in (s.params_schema or [])
-        }
-        session.add(TicketStep(
-            ticket_id=ticket.id, step_order=s.step_order, step_name_snap=s.name,
-            script_type_snap=s.script_type, content_snap=s.content, params=step_params,
-            credential_id=s.credential_id, timeout=s.timeout,
-        ))
-    await session.flush()
-
-    if flow_snap:
-        # 审批开：进入 approving 并通知第 1 节点审批角色成员（FLOW-06）
-        ticket.current_node = 1
-        await _notify_pending_approval(session, ticket)
-    else:
-        # 免审：直接创建执行并入队（03 §5.1 状态机）
-        await _start_execution(session, ticket, triggered_by="no_approval")
-    await session.flush()
-    return ticket
+def _script_variables(steps) -> set[str]:
+    """提取步骤脚本中的 Jinja 变量，提交前阻止未定义参数进入快照。"""
+    env = Environment()
+    variables: set[str] = set()
+    for step in steps:
+        ast = env.parse(step.content)
+        variables.update(meta.find_undeclared_variables(ast))
+    return variables
 
 
-async def _start_execution(session: AsyncSession, ticket: Ticket, *, triggered_by: str) -> Execution:
-    """执行入队（M5）：工单置 queued、预建执行三级子表（全 pending）并 XADD 队列。
+async def get_template_form(session: AsyncSession, template_id: int, *, user_id: int) -> dict:
+    tpl = await _ensure_template_usable(session, template_id, user_id=user_id)
+    process = await template_service.get_process_or_404(session, tpl.process_template_id)
+    steps = await template_service.get_process_steps(session, process.id)
+    host = await session.get(JobHost, tpl.job_host_id)
+    role_names = await _role_name_map(session, {s.approval_role_id for s in steps if s.approval_role_id})
+    return {
+        "template": {"id": tpl.id, "name": tpl.name, "type": tpl.type, "description": tpl.description,
+                     "process_template_id": process.id, "process_name": process.name,
+                     "allow_withdraw": tpl.allow_withdraw},
+        "params": [p for p in (tpl.params_schema or []) if p.get("source") != "fixed"],
+        "job_host": {"id": host.id, "name": host.name, "ip": host.ip, "ssh_port": host.ssh_port,
+                     "workdir": host.workdir} if host else None,
+        "steps": [{"step_order": s.step_order, "name": s.name, "script_type": s.script_type,
+                   "timeout": s.timeout, "approval_role_id": s.approval_role_id,
+                   "approval_role_name": role_names.get(s.approval_role_id) if s.approval_role_id else None}
+                  for s in steps],
+        "exec_strategy": process.exec_strategy or {},
+        "generator": {"enabled": bool(tpl.generator_script), "timeout": tpl.generator_timeout},
+    }
 
-    在 API 进程一次性生成 ExecutionStep / ExecutionStepHost 骨架（步骤 × 主机，
-    batch_no 先落默认 1，实际分批由调度器按策略修正），worker 认领后只做状态
-    推进，避免执行侧写入与查询竞态。"""
-    ticket.status = TicketStatus.QUEUED.value
-    ticket.current_node = 0
-    steps = list(
-        (
-            await session.execute(
-                select(TicketStep).where(TicketStep.ticket_id == ticket.id).order_by(TicketStep.step_order)
-            )
-        ).scalars()
-    )
-    hosts = list(
-        (
-            await session.execute(
-                select(TicketHost).where(TicketHost.ticket_id == ticket.id).order_by(TicketHost.id)
-            )
-        ).scalars()
-    )
-    execution = Execution(
-        ticket_id=ticket.id, status="queued",
-        total_steps=len(steps), total_hosts=len(hosts), triggered_by=triggered_by,
-    )
-    session.add(execution)
-    await session.flush()
-    for s in steps:
-        exec_step = ExecutionStep(
-            execution_id=execution.id, ticket_step_id=s.id, step_order=s.step_order,
+
+async def _next_ticket_no(session: AsyncSession) -> str:
+    prefix = f"T{datetime.now():%Y%m%d}-"
+    last = (await session.execute(select(Ticket.ticket_no).where(Ticket.ticket_no.like(f"{prefix}%")).order_by(Ticket.ticket_no.desc()).limit(1))).scalar_one_or_none()
+    return f"{prefix}{(int(last.rsplit('-', 1)[1]) + 1) if last else 1:04d}"
+
+
+async def _first_approval_step(session: AsyncSession, ticket: Ticket) -> int | None:
+    rows = (await session.execute(select(TicketStep).where(TicketStep.ticket_id == ticket.id).order_by(TicketStep.step_order))).scalars()
+    for row in rows:
+        if row.approval_role_id_snap:
+            return row.step_order
+    return None
+
+
+async def current_approval_user_ids(session: AsyncSession, ticket: Ticket) -> list[int]:
+    """解析当前审批步骤快照角色下的用户 ID，用于待办变更推送。"""
+    if not ticket.current_step:
+        return []
+    role_id = (await session.execute(
+        select(TicketStep.approval_role_id_snap).where(
+            TicketStep.ticket_id == ticket.id,
+            TicketStep.step_order == ticket.current_step,
         )
-        session.add(exec_step)
-        await session.flush()
-        session.add_all(
-            ExecutionStepHost(
-                execution_id=execution.id, execution_step_id=exec_step.id,
-                ticket_host_id=h.id, hostname=h.hostname, ip=h.ip,
-            )
-            for h in hosts
-        )
-    await session.flush()
-    # 消息体仅带 execution_id，worker 自行回查（02-技术架构 §4.1）
-    await redis_mod.redis_client.xadd(redis_mod.EXEC_QUEUE, {"execution_id": str(execution.id)})
-    return execution
+    )).scalar_one_or_none()
+    if not role_id:
+        return []
+    return list((await session.execute(
+        select(UserRole.user_id).where(UserRole.role_id == role_id)
+    )).scalars())
 
 
-# ---------- 执行控制面（M5-5：abort / pause / resume / force-abort） ----------
-
-# 各控制信号允许的工单状态（04-API §6：不匹配返回 40901）
-_CONTROL_ALLOWED: dict[str, tuple[str, ...]] = {
-    exec_ctrl.SIG_ABORT: (
-        TicketStatus.QUEUED.value, TicketStatus.RUNNING.value, TicketStatus.PAUSED.value,
-    ),
-    exec_ctrl.SIG_PAUSE: (TicketStatus.RUNNING.value,),
-    exec_ctrl.SIG_RESUME: (TicketStatus.PAUSED.value,),
-    exec_ctrl.SIG_FORCE_ABORT: (TicketStatus.RUNNING.value, TicketStatus.PAUSED.value),
-}
-
-
-async def _ensure_creator_or_admin(session: AsyncSession, ticket: Ticket, actor: User) -> None:
-    """控制面对象级校验：仅工单创建人或 admin 角色成员（40302）。"""
-    if ticket.creator_id == actor.id:
-        return
-    is_admin = (
-        await session.execute(
-            select(Role.id)
-            .join(UserRole, UserRole.role_id == Role.id)
-            .where(UserRole.user_id == actor.id, Role.code == "admin")
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if is_admin is None:
-        raise BizError(Errors.OBJECT_DENIED, "仅工单创建人或管理员可控制执行", 403)
-
-
-async def control_execution(
-    session: AsyncSession, ticket_id: int, *, actor: User, signal: str,
-) -> tuple[Ticket, Execution]:
-    """执行控制统一入口：状态校验后写 ops:ctrl 信号，由调度器检查点异步生效。
-
-    信号语义（02 §4.2）：pause 停止派发在跑跑完后停住；resume 从停住处继续；
-    abort 停止派发未派发置 skipped 工单归 interrupted(user_abort)；force_abort
-    在 abort 基础上由 watcher 强杀在跑 SSH 会话。接口本身不改工单状态——
-    状态迁移统一由 pipeline 落库，保证单一写入方。"""
-    ticket = await get_ticket_or_404(session, ticket_id)
-    await _ensure_creator_or_admin(session, ticket, actor)
-    allowed = _CONTROL_ALLOWED[signal]
-    if ticket.status not in allowed:
-        raise Errors.conflict(f"当前状态（{ticket.status}）不允许该控制操作")
-    execution = (
-        await session.execute(
-            select(Execution).where(Execution.ticket_id == ticket.id)
-            .order_by(Execution.id.desc()).limit(1)
-        )
-    ).scalar_one_or_none()
-    if execution is None:
-        raise Errors.conflict("工单尚未创建执行实例")
-    await exec_ctrl.send_signal(execution.id, signal)
-    return ticket, execution
-
-
-# ---------- 通知（按模板 notify_rules 发射，M6 前只落 record） ----------
-
-async def _resolve_receivers(session: AsyncSession, ticket: Ticket, exprs: list[str]) -> list[str]:
-    """接收人表达式解析为用户名列表：creator / approver_role（当前节点角色）/ role:<id>。"""
-    result: list[str] = []
-    for expr in exprs:
-        if expr == "creator":
+async def _resolve_receivers(session: AsyncSession, ticket: Ticket, expressions: list[str]) -> list[str]:
+    """解析通知规则收件人，保证角色成员和创建人都使用用户名发送。"""
+    receivers: list[str] = []
+    for expression in expressions:
+        if expression == "creator":
             creator = await session.get(User, ticket.creator_id)
-            result.append(creator.username if creator else str(ticket.creator_id))
-        elif expr == "approver_role":
-            node = next((n for n in (ticket.flow_snap or []) if n["node"] == ticket.current_node), None)
-            if node:
-                result.extend(await _role_members(session, node["role_id"]))
-        elif expr.startswith("role:"):
-            result.extend(await _role_members(session, int(expr.split(":", 1)[1])))
-    # 去重保序
-    return list(dict.fromkeys(result))
+            if creator:
+                receivers.append(creator.username)
+        elif expression == "approver_role":
+            step = (await session.execute(
+                select(TicketStep).where(
+                    TicketStep.ticket_id == ticket.id,
+                    TicketStep.step_order == ticket.current_step,
+                )
+            )).scalar_one_or_none()
+            if step and step.approval_role_id_snap:
+                receivers.extend(await _role_members(session, step.approval_role_id_snap))
+        elif expression.startswith("role:"):
+            try:
+                receivers.extend(await _role_members(session, int(expression.split(":", 1)[1])))
+            except ValueError:
+                continue
+    return list(dict.fromkeys(receivers))
 
 
 async def _emit_ticket_event(
-    session: AsyncSession, ticket: Ticket, event: NotifyEvent, *,
-    title: str, content: str, default_receivers: list[str],
+    session: AsyncSession,
+    ticket: Ticket,
+    event: NotifyEvent,
+    *,
+    title: str,
+    content: str,
+    default_receivers: list[str],
     variables: dict | None = None,
 ) -> None:
-    """按模板 notify_rules 发射事件：模板配了该事件规则用规则收件人，否则用默认收件人。
-
-    统一组装工单基础模板变量（工单号/标题/应用/创建人）后合并调用方额外变量，
-    供渠道消息模板（notify_channel.config）占位渲染。
-    """
-    tpl = await session.get(TicketTemplate, ticket.template_id)
+    """按工单模板规则发射事件，并补齐渠道模板需要的工单变量。"""
+    template = await session.get(TicketTemplate, ticket.template_id)
     rule = next(
-        (r for r in ((tpl.notify_rules if tpl else None) or []) if r.get("event") == event.value),
+        (item for item in ((template.notify_rules if template else None) or [])
+         if item.get("event") == event.value),
         None,
     )
     receivers = (
-        await _resolve_receivers(session, ticket, rule["receivers"])
-        if rule and rule.get("receivers") else default_receivers
+        await _resolve_receivers(session, ticket, rule.get("receivers", []))
+        if rule and rule.get("receivers")
+        else default_receivers
     )
     creator = await session.get(User, ticket.creator_id)
     await notify_service.emit(
-        session, event, receiver=",".join(receivers) or None,
-        title=title, content=content, ref_type="ticket", ref_id=ticket.id,
+        session,
+        event,
+        receiver=",".join(receivers) or None,
+        title=title,
+        content=content,
+        ref_type="ticket",
+        ref_id=ticket.id,
         variables={
             "ticket_no": ticket.ticket_no,
             "ticket_title": ticket.title,
-            "app_name": ticket.app_name_snap,
+            "job_host_name": (ticket.job_host_snap or {}).get("name", ""),
             "creator": creator.username if creator else str(ticket.creator_id),
             **(variables or {}),
         },
@@ -410,182 +217,274 @@ async def _emit_ticket_event(
 
 
 async def _notify_pending_approval(session: AsyncSession, ticket: Ticket) -> None:
-    """发射"待审批"通知：默认收件人为当前节点审批角色的全部成员（FLOW-06）。"""
-    node = next((n for n in (ticket.flow_snap or []) if n["node"] == ticket.current_node), None)
-    if node is None:
+    """工单进入审批步骤时通知该步骤角色的全部成员。"""
+    step = (await session.execute(
+        select(TicketStep).where(
+            TicketStep.ticket_id == ticket.id,
+            TicketStep.step_order == ticket.current_step,
+        )
+    )).scalar_one_or_none()
+    if step is None or not step.approval_role_id_snap:
         return
+    role = await session.get(Role, step.approval_role_id_snap)
+    role_name = role.name if role else str(step.approval_role_id_snap)
     await _emit_ticket_event(
-        session, ticket, NotifyEvent.TICKET_PENDING_APPROVAL,
-        title=f"工单 {ticket.ticket_no} 等待第 {ticket.current_node} 节点审批",
-        content=f"{ticket.title}（应用：{ticket.app_name_snap}）待 {node['role_name']} 审批",
-        default_receivers=await _role_members(session, node["role_id"]),
-        variables={"node": ticket.current_node, "role": node["role_name"]},
+        session,
+        ticket,
+        NotifyEvent.TICKET_PENDING_APPROVAL,
+        title=f"工单 {ticket.ticket_no} 等待第 {ticket.current_step} 步骤审批",
+        content=f"{ticket.title}（作业主机：{(ticket.job_host_snap or {}).get('name', '')}）待 {role_name} 审批",
+        default_receivers=await _role_members(session, step.approval_role_id_snap),
+        variables={"node": ticket.current_step, "role": role_name},
     )
 
 
-# ---------- 审批 / 撤回 ----------
+async def create_ticket(session: AsyncSession, *, creator: User, template_id: int, params: dict, prepare_id: str | None = None) -> Ticket:
+    tpl = await _ensure_template_usable(session, template_id, user_id=creator.id)
+    process = await template_service.get_process_or_404(session, tpl.process_template_id)
+    steps = await template_service.get_process_steps(session, process.id)
+    if not steps:
+        raise Errors.conflict("流程模板没有步骤，不能提交")
+    schema = tpl.params_schema or []
+    definitions = {item["name"]: item for item in schema}
+    missing = _script_variables(steps) - set(definitions)
+    if missing:
+        raise Errors.param(f"流程步骤引用了未定义参数: {sorted(missing)}")
+    prepared_values = {}
+    if prepare_id:
+        prepared_values = await parameter_prepare_service.consume_parameters(
+            session, token=prepare_id, template_id=template_id, params=params or {}
+        )
+    prepared_values = {
+        name: value for name, value in prepared_values.items()
+        if definitions.get(name, {}).get("source") != "fixed"
+    }
+    values = _validate_params({**(params or {}), **prepared_values}, schema)
+    submitted_values = {
+        name: value for name, value in values.items()
+        if next((item for item in schema if item["name"] == name), {}).get("source") != "fixed"
+    }
+    host = await session.get(JobHost, tpl.job_host_id)
+    flow = await template_service.process_snapshot(session, process.id)
+    flow["params_schema"] = schema
+    flow["generator"] = {"script": tpl.generator_script, "timeout": tpl.generator_timeout}
+    flow["params"] = values
+    ticket = Ticket(
+        ticket_no=await _next_ticket_no(session), template_id=tpl.id, title=tpl.name, type=tpl.type,
+        params=submitted_values, job_host_id=tpl.job_host_id,
+        job_host_snap={"id": host.id, "name": host.name, "ip": host.ip, "ssh_port": host.ssh_port, "workdir": host.workdir} if host else {},
+        process_template_id_snap=process.id, process_name_snap=process.name,
+        status=TicketStatus.APPROVING.value, exec_strategy_snap=process.exec_strategy or {},
+        credential_refs=await template_service.credential_ref_snapshot(session, tpl.credential_refs or []),
+        flow_snap=flow, allow_withdraw_snap=tpl.allow_withdraw, creator_id=creator.id, submitted_at=datetime.now(),
+    )
+    session.add(ticket)
+    await session.flush()
+    for step in steps:
+        session.add(TicketStep(
+            ticket_id=ticket.id, step_order=step.step_order, step_name_snap=step.name,
+            script_type_snap=step.script_type, content_snap=step.content, params=values,
+            timeout=step.timeout, approval_role_id_snap=step.approval_role_id,
+        ))
+    await session.flush()
+    first = await _first_approval_step(session, ticket)
+    if first is None or first > 1:
+        await _start_execution(session, ticket)
+    else:
+        ticket.current_step = first
+        await _notify_pending_approval(session, ticket)
+    await session.flush()
+    return ticket
 
-async def approve_ticket(
-    session: AsyncSession, ticket_id: int, *, actor: User, action: str, comment: str | None,
-) -> Ticket:
-    """审批通过/驳回：校验当前节点角色归属，节点间依次推进（FLOW-02/03/04）。
 
-    - 节点内或签：角色任一成员处理即定节点结果（V1 仅 any 生效）；可批自己创建的工单
-    - 通过：非末节点 → 推进 current_node；末节点 → 触发执行入队（打桩）
-    - 驳回：意见必填（40001），工单直接关闭为 rejected 终态
-    """
+async def _start_execution(session: AsyncSession, ticket: Ticket) -> Execution:
+    ticket.status = TicketStatus.QUEUED.value
+    ticket.current_step = 0
+    steps = list((await session.execute(select(TicketStep).where(TicketStep.ticket_id == ticket.id).order_by(TicketStep.step_order))).scalars())
+    execution = Execution(ticket_id=ticket.id, status="queued", total_steps=len(steps))
+    session.add(execution)
+    await session.flush()
+    for step in steps:
+        session.add(ExecutionStep(execution_id=execution.id, ticket_step_id=step.id, step_order=step.step_order))
+    await session.flush()
+    try:
+        await redis_mod.redis_client.xadd(redis_mod.EXEC_QUEUE, {"execution_id": str(execution.id)})
+    except Exception:
+        pass
+    return execution
+
+
+async def _ensure_creator_or_admin(session: AsyncSession, ticket: Ticket, actor: User) -> None:
+    if ticket.creator_id == actor.id:
+        return
+    is_admin = (await session.execute(select(Role.id).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == actor.id, Role.code == "admin").limit(1))).scalar_one_or_none()
+    if is_admin is None:
+        raise BizError(Errors.OBJECT_DENIED, "仅工单创建人或管理员可控制执行", 403)
+
+
+_CONTROL_ALLOWED = {
+    exec_ctrl.SIG_ABORT: ("queued", "running", "paused"),
+    exec_ctrl.SIG_PAUSE: ("running",), exec_ctrl.SIG_RESUME: ("paused",),
+    exec_ctrl.SIG_FORCE_ABORT: ("running", "paused"),
+}
+
+
+async def control_execution(session: AsyncSession, ticket_id: int, *, actor: User, signal: str):
     ticket = await get_ticket_or_404(session, ticket_id)
-    if ticket.status != TicketStatus.APPROVING.value:
-        raise Errors.conflict("工单不在待审批状态")
-    flow: list[dict] = ticket.flow_snap or []
-    node = next((n for n in flow if n["node"] == ticket.current_node), None)
-    if node is None:
-        raise Errors.conflict("工单审批节点快照异常")
-    if node["role_id"] not in await _my_role_ids(session, actor.id):
-        raise BizError(Errors.OBJECT_DENIED, f"当前节点需 {node['role_name']} 角色审批", 403)
+    await _ensure_creator_or_admin(session, ticket, actor)
+    if ticket.status not in _CONTROL_ALLOWED[signal]:
+        raise Errors.conflict(f"当前状态不允许 {signal}")
+    execution = (await session.execute(select(Execution).where(Execution.ticket_id == ticket.id).order_by(Execution.id.desc()).limit(1))).scalar_one_or_none()
+    if execution is None:
+        raise Errors.conflict("工单尚未创建执行实例")
+    await exec_ctrl.send_signal(execution.id, signal)
+    return ticket, execution
+
+
+async def _role_allowed(session: AsyncSession, user_id: int, role_id: int) -> bool:
+    return (await session.execute(select(UserRole.user_id).where(UserRole.user_id == user_id, UserRole.role_id == role_id).limit(1))).scalar_one_or_none() is not None
+
+
+async def approve_ticket(session: AsyncSession, ticket_id: int, *, actor: User, action: str, comment: str | None) -> Ticket:
+    ticket = await get_ticket_or_404(session, ticket_id)
+    if ticket.status != TicketStatus.APPROVING.value or not ticket.current_step:
+        raise Errors.conflict("工单当前不在待审批状态")
     if action == "reject" and not (comment or "").strip():
         raise Errors.param("驳回时必须填写审批意见")
-
-    session.add(TicketApproval(
-        ticket_id=ticket.id, node_order=ticket.current_node,
-        role_id=node["role_id"], approver_id=actor.id, action=action, comment=comment,
-    ))
-
+    step = (await session.execute(select(TicketStep).where(TicketStep.ticket_id == ticket.id, TicketStep.step_order == ticket.current_step))).scalar_one_or_none()
+    if step is None or not step.approval_role_id_snap or not await _role_allowed(session, actor.id, step.approval_role_id_snap):
+        raise BizError(Errors.OBJECT_DENIED, "你不属于当前步骤审批角色", 403)
+    existing = (await session.execute(select(TicketApproval.id).where(TicketApproval.ticket_id == ticket.id, TicketApproval.step_order == ticket.current_step, TicketApproval.action == "approve").limit(1))).scalar_one_or_none()
+    if existing:
+        raise Errors.conflict("当前步骤已审批")
+    session.add(TicketApproval(ticket_id=ticket.id, step_order=ticket.current_step, role_id=step.approval_role_id_snap, approver_id=actor.id, action=action, comment=comment))
     creator = await session.get(User, ticket.creator_id)
     creator_name = creator.username if creator else str(ticket.creator_id)
     if action == "reject":
-        # 任一节点驳回 → 工单关闭终态，通知创建人（FLOW-04）；先发射再清 current_node，
-        # 保证 approver_role 收件人表达式仍能解析到驳回节点角色
         ticket.status = TicketStatus.REJECTED.value
         ticket.finished_at = datetime.now()
+        execution = (await session.execute(
+            select(Execution).where(Execution.ticket_id == ticket.id)
+            .order_by(Execution.id.desc()).limit(1)
+        )).scalar_one_or_none()
+        # 审批接口只接受 approving 工单，因此暂停中的执行不会进入此分支。
+        if execution and execution.status in {
+            ExecutionStatus.QUEUED.value,
+            ExecutionStatus.RUNNING.value,
+        }:
+            execution.status = ExecutionStatus.REJECTED.value
+            execution.finished_at = datetime.now()
+            pending_steps = (await session.execute(
+                select(ExecutionStep).where(
+                    ExecutionStep.execution_id == execution.id,
+                    ExecutionStep.status == HostExecStatus.PENDING.value,
+                )
+            )).scalars()
+            for execution_step in pending_steps:
+                execution_step.status = HostExecStatus.SKIPPED.value
+                execution_step.finished_at = datetime.now()
         await _emit_ticket_event(
-            session, ticket, NotifyEvent.TICKET_REJECTED,
+            session,
+            ticket,
+            NotifyEvent.TICKET_REJECTED,
             title=f"工单 {ticket.ticket_no} 已被驳回",
-            content=f"{ticket.title}：{actor.username} 驳回，意见：{comment}",
+            content=f"{ticket.title}：{actor.username} 驳回，意见：{comment or ''}",
             default_receivers=[creator_name],
             variables={"approver": actor.username, "comment": comment or ""},
         )
-        ticket.current_node = 0
-    elif ticket.current_node < len(flow):
-        # 非末节点通过 → 推进下一节点并通知该节点审批角色成员
-        ticket.current_node += 1
-        await _notify_pending_approval(session, ticket)
+        ticket.current_step = 0
     else:
-        # 末节点通过 → 通知创建人并自动进入执行队列（FLOW-03，无手动触发环节）
-        await _emit_ticket_event(
-            session, ticket, NotifyEvent.TICKET_APPROVED,
-            title=f"工单 {ticket.ticket_no} 审批通过",
-            content=f"{ticket.title}：审批通过，已自动进入执行队列",
-            default_receivers=[creator_name],
-            variables={"approver": actor.username, "comment": comment or ""},
-        )
-        await _start_execution(session, ticket, triggered_by="auto_approve")
+        next_step = (await session.execute(select(TicketStep.step_order).where(TicketStep.ticket_id == ticket.id, TicketStep.step_order > ticket.current_step, TicketStep.approval_role_id_snap.is_not(None)).order_by(TicketStep.step_order).limit(1))).scalar_one_or_none()
+        ticket.current_step = next_step or 0
+        if next_step:
+            ticket.status = TicketStatus.APPROVING.value
+            await _notify_pending_approval(session, ticket)
+        else:
+            execution = (await session.execute(select(Execution).where(Execution.ticket_id == ticket.id).order_by(Execution.id.desc()).limit(1))).scalar_one_or_none()
+            if execution is None:
+                await _start_execution(session, ticket)
+            else:
+                execution.status = "queued"
+                ticket.status = TicketStatus.QUEUED.value
+                try:
+                    await redis_mod.redis_client.xadd(redis_mod.EXEC_QUEUE, {"execution_id": str(execution.id)})
+                except Exception:
+                    pass
+            await _emit_ticket_event(
+                session,
+                ticket,
+                NotifyEvent.TICKET_APPROVED,
+                title=f"工单 {ticket.ticket_no} 审批通过",
+                content=f"{ticket.title}：审批通过，已自动进入执行队列",
+                default_receivers=[creator_name],
+                variables={"approver": actor.username, "comment": comment or ""},
+            )
     await session.flush()
     return ticket
 
 
 async def cancel_ticket(session: AsyncSession, ticket_id: int, *, actor: User) -> Ticket:
-    """撤回工单：仅创建人、approving 状态、且模板允许撤回（TICKET-05）。"""
     ticket = await get_ticket_or_404(session, ticket_id)
-    _ensure_creator(ticket, actor)
-    if ticket.status != TicketStatus.APPROVING.value:
-        raise Errors.conflict("仅审批中状态可撤回")
+    if ticket.creator_id != actor.id:
+        raise BizError(Errors.OBJECT_DENIED, "仅创建人可终止工单", 403)
     if not ticket.allow_withdraw_snap:
-        raise Errors.rejected("该模板不允许撤回工单")
+        raise Errors.rejected("模板禁止撤回")
+    if ticket.status not in ("approving", "queued"):
+        raise Errors.conflict("当前状态不能终止")
     ticket.status = TicketStatus.CANCELLED.value
-    ticket.current_node = 0
     ticket.finished_at = datetime.now()
+    ticket.current_step = 0
+    execution = (await session.execute(
+        select(Execution).where(Execution.ticket_id == ticket.id)
+        .order_by(Execution.id.desc()).limit(1)
+    )).scalar_one_or_none()
+    if execution and execution.status == ExecutionStatus.QUEUED.value:
+        execution.status = ExecutionStatus.CANCELLED.value
+        execution.finished_at = datetime.now()
+        pending_steps = (await session.execute(
+            select(ExecutionStep).where(
+                ExecutionStep.execution_id == execution.id,
+                ExecutionStep.status == HostExecStatus.PENDING.value,
+            )
+        )).scalars()
+        for execution_step in pending_steps:
+            execution_step.status = HostExecStatus.SKIPPED.value
+            execution_step.finished_at = datetime.now()
     await session.flush()
     return ticket
 
 
-# ---------- 列表 / 待办 / 详情 ----------
-
-async def list_tickets(
-    session: AsyncSession, *, page: int, page_size: int,
-    status: str | None = None, creator_id: int | None = None, app_id: int | None = None,
-    keyword: str | None = None, start: str | None = None, end: str | None = None,
-) -> tuple[list[Ticket], int]:
-    """分页查工单（04 §6：status/creator/app/keyword/时间范围）。"""
+async def list_tickets(session: AsyncSession, *, page: int, page_size: int, status: str | None = None,
+                       creator_id: int | None = None, keyword: str | None = None, start: str | None = None, end: str | None = None):
     query = select(Ticket)
-    if status:
-        query = query.where(Ticket.status == status)
-    if creator_id:
-        query = query.where(Ticket.creator_id == creator_id)
-    if app_id:
-        query = query.where(Ticket.app_id == app_id)
-    if keyword:
-        like = f"%{keyword}%"
-        query = query.where(Ticket.title.like(like) | Ticket.ticket_no.like(like))
-    if start:
-        query = query.where(Ticket.created_at >= start)
-    if end:
-        # 只传日期时把上界补到当天末；括号必不可少，否则三元表达式会把裸字符串传入 where
-        query = query.where(Ticket.created_at <= (f"{end} 23:59:59" if len(end) == 10 else end))
+    if status: query = query.where(Ticket.status == status)
+    if creator_id: query = query.where(Ticket.creator_id == creator_id)
+    if keyword: query = query.where(Ticket.ticket_no.like(f"%{keyword}%") | Ticket.title.like(f"%{keyword}%"))
+    if start: query = query.where(Ticket.created_at >= start)
+    if end: query = query.where(Ticket.created_at <= (f"{end} 23:59:59" if len(end) == 10 else end))
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
-    rows = await session.execute(
-        query.order_by(Ticket.id.desc()).offset((page - 1) * page_size).limit(page_size)
-    )
+    rows = await session.execute(query.order_by(Ticket.id.desc()).offset((page - 1) * page_size).limit(page_size))
     return list(rows.scalars()), total
 
 
-async def todo_tickets(
-    session: AsyncSession, *, user_id: int, page: int, page_size: int,
-) -> tuple[list[Ticket], int]:
-    """待我审批：当前节点角色 ∩ 我的角色（FLOW-06）。
-
-    flow_snap 为 JSON 快照无法下推 SQL，先取全部审批中工单再内存过滤
-    （V1 进行中工单量级有限，可接受）。
-    """
-    my_roles = await _my_role_ids(session, user_id)
-    rows = await session.execute(
-        select(Ticket).where(Ticket.status == TicketStatus.APPROVING.value).order_by(Ticket.id.desc())
-    )
-    matched = [
-        t for t in rows.scalars()
-        if any(
-            n["node"] == t.current_node and n["role_id"] in my_roles
-            for n in (t.flow_snap or [])
-        )
-    ]
-    return matched[(page - 1) * page_size: page * page_size], len(matched)
+async def todo_tickets(session: AsyncSession, *, user_id: int, page: int, page_size: int):
+    roles = await _my_role_ids(session, user_id)
+    rows = list((await session.execute(select(Ticket).where(Ticket.status == "approving").order_by(Ticket.id.desc()))).scalars())
+    result = []
+    for ticket in rows:
+        step = (await session.execute(select(TicketStep).where(TicketStep.ticket_id == ticket.id, TicketStep.step_order == ticket.current_step))).scalar_one_or_none()
+        if step and step.approval_role_id_snap in roles:
+            result.append(ticket)
+    total = len(result)
+    return result[(page - 1) * page_size: page * page_size], total
 
 
 async def get_ticket_bundle(session: AsyncSession, ticket_id: int) -> dict:
-    """详情数据装配（只读）：主机快照 + 步骤快照 + 审批时间线 + 执行概要。"""
     ticket = await get_ticket_or_404(session, ticket_id)
-    hosts = [
-        {"host_id": h.host_id, "hostname": h.hostname, "ip": h.ip,
-         "environment": h.environment, "ssh_port": h.ssh_port}
-        for h in (
-            await session.execute(
-                select(TicketHost).where(TicketHost.ticket_id == ticket_id).order_by(TicketHost.id)
-            )
-        ).scalars()
-    ]
-    steps = list(
-        (
-            await session.execute(
-                select(TicketStep).where(TicketStep.ticket_id == ticket_id).order_by(TicketStep.step_order)
-            )
-        ).scalars()
-    )
-    # 审批时间线：附审批人显示名（只 INSERT 表，按时间正序）
-    approvals = (
-        await session.execute(
-            select(TicketApproval, User.display_name, User.username)
-            .join(User, User.id == TicketApproval.approver_id, isouter=True)
-            .where(TicketApproval.ticket_id == ticket_id)
-            .order_by(TicketApproval.id)
-        )
-    ).all()
-    execution = (
-        await session.execute(
-            select(Execution).where(Execution.ticket_id == ticket_id).order_by(Execution.id.desc()).limit(1)
-        )
-    ).scalar_one_or_none()
     creator = await session.get(User, ticket.creator_id)
-    return {
-        "ticket": ticket, "hosts": hosts, "steps": steps,
-        "approvals": approvals, "execution": execution, "creator": creator,
-    }
+    steps = list((await session.execute(select(TicketStep).where(TicketStep.ticket_id == ticket.id).order_by(TicketStep.step_order))).scalars())
+    approvals = list((await session.execute(select(TicketApproval, User.display_name, User.username).join(User, User.id == TicketApproval.approver_id, isouter=True).where(TicketApproval.ticket_id == ticket.id).order_by(TicketApproval.id))).all())
+    execution = (await session.execute(select(Execution).where(Execution.ticket_id == ticket.id).order_by(Execution.id.desc()).limit(1))).scalar_one_or_none()
+    role_names = await _role_name_map(session, {s.approval_role_id_snap for s in steps if s.approval_role_id_snap})
+    return {"ticket": ticket, "creator": creator, "steps": steps, "approvals": approvals, "execution": execution,
+            "job_host": ticket.job_host_snap, "approval_role_names": role_names}

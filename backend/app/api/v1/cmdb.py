@@ -3,6 +3,7 @@
 路由顺序约束：suggest / import-template / import / export 等静态路径
 必须声明在 /{host_id} 之前，否则会被路径参数吞掉。
 """
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request, UploadFile
@@ -13,7 +14,7 @@ from app.core.deps import DbSession, get_client_ip, require_perm
 from app.core.response import Errors, ok
 from app.models.auth import User
 from app.schemas.cmdb import AppUpsertRequest, HostUpsertRequest
-from app.services import cmdb_service, host_excel
+from app.services import app_excel, cmdb_service, host_excel
 
 router = APIRouter(prefix="/cmdb", tags=["CMDB"])
 
@@ -35,6 +36,10 @@ def _host_brief(h) -> dict:
         "id": h.id,
         "hostname": h.hostname,
         "ip": h.ip,
+        "project": h.project,
+        "public_ip": h.public_ip,
+        "ri": h.ri,
+        "host_series": h.host_series,
         "platform": h.platform,
         "region": h.region,
         "os": h.os,
@@ -51,7 +56,7 @@ def _host_brief(h) -> dict:
 
 
 def _app_brief(a, stats: dict | None = None) -> dict:
-    """应用列表/详情统一序列化；stats 为关联主机数 + 资源汇总（纯计算值）。"""
+    """应用列表/详情统一序列化；stats 为关联主机数和 IP 清单。"""
     stats = stats or {}
     return {
         "id": a.id,
@@ -59,42 +64,46 @@ def _app_brief(a, stats: dict | None = None) -> dict:
         "description": a.description,
         "language": a.language,
         "deploy_type": a.deploy_type,
+        "project_type": a.project_type,
+        "business_line": a.business_line,
+        "system_name": a.system_name,
+        "service_level": a.service_level,
+        "ops_owner": a.ops_owner,
+        "dev_owner": a.dev_owner,
+        "repo_url": a.repo_url,
+        "service_port": a.service_port,
+        "cpu_quota": a.cpu_quota,
+        "mem_quota": a.mem_quota,
         "host_count": stats.get("host_count", 0),
-        "cpu_total": stats.get("cpu_total", 0),
-        "memory_total": stats.get("memory_total", 0),
-        "disk_total": stats.get("disk_total", 0),
         "host_ips": stats.get("host_ips", []),
         "created_at": a.created_at.isoformat() if a.created_at else None,
     }
 
 
 def _hosts_stats(hosts: list) -> dict:
-    """由主机清单现算关联数、资源汇总与 IP 清单（详情接口复用）。"""
+    """由主机清单现算关联数与 IP 清单（详情接口复用）。"""
     return {
         "host_count": len(hosts),
-        "cpu_total": sum(h.cpu_cores or 0 for h in hosts),
-        "memory_total": sum(h.memory_gb or 0 for h in hosts),
-        "disk_total": sum(h.disk_gb or 0 for h in hosts),
         "host_ips": [h.ip for h in hosts],
     }
 
 
 # ---------- 主机（静态路径在前） ----------
 
-@router.get("/hosts/suggest", summary="平台/区域自动补全")
+@router.get("/hosts/suggest", summary="平台/区域/主机系列自动补全")
 async def suggest_hosts(
     session: DbSession,
     _: User = Depends(require_perm("cmdb:read")),
-    field: str = Query(..., description="platform | region"),
+    field: str = Query(..., description="platform | region | host_series"),
     q: str | None = None,
 ) -> dict:
-    """自由文本字段补全：返回已有去重值（HOST-03）。"""
+    """自由文本字段补全：返回已有去重值。"""
     return ok({"items": await cmdb_service.suggest_host_field(session, field, q)})
 
 
 @router.get("/hosts/import-template", summary="下载导入模板")
 async def download_import_template(
-    _: User = Depends(require_perm("cmdb:write")),
+    _: User = Depends(require_perm("cmdb:import")),
 ) -> Response:
     """xlsx 模板：含表头样式与环境/状态下拉校验。"""
     return _xlsx_response(host_excel.build_import_template(), "主机导入模板.xlsx")
@@ -105,7 +114,7 @@ async def import_hosts(
     file: UploadFile,
     request: Request,
     session: DbSession,
-    actor: User = Depends(require_perm("cmdb:write")),
+    actor: User = Depends(require_perm("cmdb:import")),
     upsert: bool = Query(False, description="存在（按 IP）即更新"),
 ) -> dict:
     """逐行校验 + 入库，返回成功数与失败行明细（HOST-06）。"""
@@ -154,11 +163,14 @@ async def list_hosts(
     region: str | None = None,
     environment: str | None = None,
     status: str | None = None,
+    sort_by: Literal["created_at"] | None = None,
+    sort_order: Literal["asc", "desc"] | None = None,
 ) -> dict:
     """分页查主机（keyword 模糊匹配主机名/IP）。"""
     hosts, total = await cmdb_service.list_hosts(
         session, page=page, page_size=page_size, keyword=keyword,
         platform=platform, region=region, environment=environment, status=status,
+        sort_by=sort_by, sort_order=sort_order,
     )
     return ok({"items": [_host_brief(h) for h in hosts], "total": total,
                "page": page, "page_size": page_size})
@@ -215,7 +227,7 @@ async def delete_host(
     host_id: int,
     request: Request,
     session: DbSession,
-    actor: User = Depends(require_perm("cmdb:write")),
+    actor: User = Depends(require_perm("cmdb:delete")),
 ) -> dict:
     """删除保护：被应用/进行中工单引用时 42201（HOST-10）。"""
     host = await cmdb_service.delete_host(session, host_id)
@@ -227,6 +239,27 @@ async def delete_host(
 
 # ---------- 应用 ----------
 
+@router.get("/apps/export", summary="导出应用（按当前筛选）")
+async def export_apps(
+    request: Request,
+    session: DbSession,
+    actor: User = Depends(require_perm("cmdb:read")),
+    keyword: str | None = None,
+    language: str | None = None,
+    deploy_type: str | None = None,
+    project_type: Literal["frontend", "backend"] | None = None,
+    business_line: Literal["mitrade", "tradingkey"] | None = None,
+    service_level: Literal["核心服务", "一般服务"] | None = None,
+) -> Response:
+    """导出与列表相同筛选语义的全量应用。"""
+    apps, host_stats = await cmdb_service.iter_apps_filtered(
+        session, keyword=keyword, language=language, deploy_type=deploy_type, project_type=project_type,
+        business_line=business_line, service_level=service_level,
+    )
+    audit.log(module="cmdb", action="app.export", actor_id=actor.id, actor_name=actor.username,
+              source_ip=get_client_ip(request), target_type="app", detail={"count": len(apps)})
+    return _xlsx_response(app_excel.export_apps(apps, host_stats), "应用列表.xlsx")
+
 @router.get("/apps", summary="应用列表")
 async def list_apps(
     session: DbSession,
@@ -236,11 +269,18 @@ async def list_apps(
     keyword: str | None = None,
     language: str | None = None,
     deploy_type: str | None = None,
+    project_type: Literal["frontend", "backend"] | None = None,
+    business_line: Literal["mitrade", "tradingkey"] | None = None,
+    service_level: Literal["核心服务", "一般服务"] | None = None,
+    sort_by: Literal["language", "created_at"] | None = None,
+    sort_order: Literal["asc", "desc"] | None = None,
 ) -> dict:
-    """分页查应用；items 含关联主机数与资源汇总。"""
+    """分页查应用；items 含关联主机数与 IP 清单。"""
     apps, total, host_stats = await cmdb_service.list_apps(
         session, page=page, page_size=page_size, keyword=keyword,
-        language=language, deploy_type=deploy_type,
+        language=language, deploy_type=deploy_type, project_type=project_type,
+        business_line=business_line, service_level=service_level,
+        sort_by=sort_by, sort_order=sort_order,
     )
     return ok({
         "items": [_app_brief(a, host_stats.get(a.id)) for a in apps],
@@ -305,7 +345,7 @@ async def delete_app(
     app_id: int,
     request: Request,
     session: DbSession,
-    actor: User = Depends(require_perm("cmdb:write")),
+    actor: User = Depends(require_perm("cmdb:delete")),
 ) -> dict:
     """删除保护：被进行中工单引用时 42201。"""
     app = await cmdb_service.delete_app(session, app_id)

@@ -1,12 +1,12 @@
 <script setup lang="ts">
-// 工单详情抽屉（V2）：基本信息 + 提交参数 + 审批时间线（节点制）+ 步骤/主机快照 + 执行概要
+// 工单详情抽屉（V2）：基本信息 + 提交参数 + 步骤前审批时间线 + 作业主机/步骤快照 + 执行概要
 // showApprove=true（待办审批页）时在审批中状态下展示 通过/驳回 操作区
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import * as ticketApi from '@/api/ticket'
 import { useUserStore } from '@/stores/user'
-import { execStatusMeta, triggeredByText } from '@/views/execution/meta'
+import { execStatusMeta } from '@/views/execution/meta'
 import { fmtTime, statusMeta } from './meta'
 
 const props = defineProps<{
@@ -44,7 +44,7 @@ watch(
 
 const awaiting = computed(() => detail.value?.status === 'approving')
 
-// 审批时间线：flow_snap 逐节点合并审批记录——已审绿/红、当前节点蓝、未到节点灰
+// 审批时间线：按步骤快照关联审批记录，避免依赖已废弃的节点模型。
 interface TimelineRow {
   color: string
   title: string
@@ -54,41 +54,43 @@ interface TimelineRow {
 const timeline = computed<TimelineRow[]>(() => {
   const d = detail.value
   if (!d) return []
-  return d.flow_snap.map((n) => {
-    const rec = d.approvals.find((a) => a.node_order === n.node)
-    if (rec) {
-      return {
-        color: rec.action === 'approve' ? 'green' : 'red',
-        title: `节点 ${n.node}（${n.role_name}）${rec.action === 'approve' ? '通过' : '驳回'} · ${rec.approver_name}`,
-        comment: rec.comment || undefined,
-        time: fmtTime(rec.created_at),
+  return d.steps
+    .filter((step) => step.approval_role_id)
+    .map((step) => {
+      const rec = d.approvals.find((a) => a.step_order === step.step_order)
+      const roleName = step.approval_role_name || `角色 #${step.approval_role_id}`
+      if (rec) {
+        return {
+          color: rec.action === 'approve' ? 'green' : 'red',
+          title: `第 ${step.step_order} 步 · ${step.step_name}：${rec.action === 'approve' ? '通过' : '驳回'} · ${rec.approver_name}`,
+          comment: rec.comment || undefined,
+          time: fmtTime(rec.created_at),
+        }
       }
-    }
-    if (awaiting.value && n.node === d.current_node) {
-      return { color: 'blue', title: `节点 ${n.node} 等待「${n.role_name}」审批` }
-    }
-    return { color: 'gray', title: `节点 ${n.node} ${n.role_name}` }
-  })
+      if (awaiting.value && step.step_order === d.current_step) {
+        return { color: 'blue', title: `第 ${step.step_order} 步 · ${step.step_name}：等待「${roleName}」审批` }
+      }
+      return { color: 'gray', title: `第 ${step.step_order} 步 · ${step.step_name}：等待「${roleName}」审批` }
+    })
 })
 
 /** 执行策略一行摘要（模板规则快照） */
 const strategyText = computed(() => {
   const s = detail.value?.exec_strategy
-  if (!s || s.concurrency === undefined) return '—'
+  if (!s || s.timeout === undefined) return '—'
   return [
-    `并发 ${s.concurrency}`,
-    s.batch_size ? `每批 ${s.batch_size} 台${s.batch_pause ? '（批间暂停）' : ''}` : '不分批',
     `超时 ${s.timeout}s`,
     s.fail_fast ? '失败即停' : '失败继续',
   ].join(' · ')
 })
 
-const hostColumns = [
-  { title: '主机名', dataIndex: 'hostname', key: 'hostname', ellipsis: true },
-  { title: 'IP', dataIndex: 'ip', key: 'ip', width: 140 },
-  { title: '环境', dataIndex: 'environment', key: 'environment', width: 80 },
-  { title: 'SSH 端口', dataIndex: 'ssh_port', key: 'ssh_port', width: 90 },
-]
+/** 作业主机一行摘要（提交时固化快照） */
+const jobHostText = computed(() => {
+  const d = detail.value
+  if (!d) return '—'
+  if (d.job_host) return `${d.job_host.name}（${d.job_host.ip}）`
+  return d.job_host_name || '—'
+})
 
 // ---------- 审批操作（待办页复用本抽屉） ----------
 const comment = ref('')
@@ -105,7 +107,7 @@ async function onApprove(action: 'approve' | 'reject') {
   try {
     const res = await ticketApi.approveTicket(detail.value.id, action, comment.value || undefined)
     if (action === 'reject') message.success('已驳回，工单关闭')
-    else message.success(res.status === 'queued' ? '已通过，工单进入执行队列' : '已通过，流转至下一审批节点')
+    else message.success(res.status === 'queued' ? '已通过，工单进入执行队列' : '已通过，流转至下一审批步骤')
     comment.value = ''
     emit('changed')
     await load()
@@ -115,7 +117,7 @@ async function onApprove(action: 'approve' | 'reject') {
     acting.value = ''
   }
 }
-/** 跳转执行详情页（矩阵 + 实时日志，需 execution:read） */
+/** 跳转执行详情页（步骤列表 + 实时日志，需 execution:read） */
 function openExecution() {
   if (!detail.value?.execution) return
   emit('update:open', false)
@@ -138,24 +140,31 @@ function openExecution() {
           <a-tag :color="statusMeta[detail.status]?.color">
             {{ statusMeta[detail.status]?.text || detail.status }}
           </a-tag>
-          <a-tag v-if="awaiting" color="blue">节点 {{ detail.current_node }}/{{ detail.total_nodes }}</a-tag>
         </div>
 
-        <a-descriptions bordered size="small" :column="2" class="d-desc">
-          <a-descriptions-item label="目标应用">{{ detail.app_name || '—' }}</a-descriptions-item>
-          <a-descriptions-item label="模板版本">v{{ detail.template_version }}</a-descriptions-item>
+        <a-descriptions bordered size="small" :column="{ xs: 1, sm: 2 }" class="d-desc op-desc-table">
+          <a-descriptions-item label="作业主机">{{ jobHostText }}</a-descriptions-item>
           <a-descriptions-item label="提交人">{{ detail.creator_name }}</a-descriptions-item>
           <a-descriptions-item label="提交时间">{{ fmtTime(detail.submitted_at) }}</a-descriptions-item>
           <a-descriptions-item label="完成时间">{{ fmtTime(detail.finished_at) }}</a-descriptions-item>
-          <a-descriptions-item label="执行策略">{{ strategyText }}</a-descriptions-item>
+          <a-descriptions-item label="执行策略" :span="2">{{ strategyText }}</a-descriptions-item>
           <a-descriptions-item v-if="Object.keys(detail.params).length" label="提交参数" :span="2">
-            <a-tag v-for="(v, k) in detail.params" :key="k" color="geekblue">{{ k }} = {{ v }}</a-tag>
+            <div class="d-params">
+              <a-tag v-for="(v, k) in detail.params" :key="k" color="geekblue">{{ k }} = {{ v }}</a-tag>
+            </div>
+          </a-descriptions-item>
+          <a-descriptions-item v-if="detail.credential_refs?.length" label="引用凭据" :span="2">
+            <div class="d-params">
+              <a-tag v-for="r in detail.credential_refs" :key="r.alias" color="purple">
+                {{ r.alias }} → {{ r.credential_name }}
+              </a-tag>
+            </div>
           </a-descriptions-item>
         </a-descriptions>
 
-        <!-- 审批时间线（免审工单无此块） -->
-        <template v-if="detail.flow_snap.length">
-          <div class="d-section">审批流（模板规则快照）</div>
+        <!-- 审批时间线（无步骤前审批的工单不展示） -->
+        <template v-if="timeline.length">
+          <div class="d-section">审批步骤</div>
           <a-timeline class="d-timeline">
             <a-timeline-item v-for="(row, i) in timeline" :key="i" :color="row.color">
               <div>{{ row.title }}</div>
@@ -165,7 +174,7 @@ function openExecution() {
           </a-timeline>
         </template>
 
-        <!-- 执行概要（M5：可跳执行详情页看矩阵与实时日志） -->
+        <!-- 执行概要（M5：可跳执行详情页看步骤列表与实时日志） -->
         <template v-if="detail.execution">
           <div class="d-section">
             执行概要
@@ -176,15 +185,13 @@ function openExecution() {
               @click="openExecution"
             >查看执行详情</a-button>
           </div>
-          <a-descriptions bordered size="small" :column="4" class="d-desc">
+          <a-descriptions bordered size="small" :column="{ xs: 1, sm: 2 }" class="d-desc op-desc-table">
             <a-descriptions-item label="状态">
               <a-tag :color="execStatusMeta[detail.execution.status as keyof typeof execStatusMeta]?.color">
                 {{ execStatusMeta[detail.execution.status as keyof typeof execStatusMeta]?.text || detail.execution.status }}
               </a-tag>
             </a-descriptions-item>
             <a-descriptions-item label="步骤数">{{ detail.execution.total_steps }}</a-descriptions-item>
-            <a-descriptions-item label="主机数">{{ detail.execution.total_hosts }}</a-descriptions-item>
-            <a-descriptions-item label="触发方式">{{ triggeredByText[detail.execution.triggered_by] || detail.execution.triggered_by }}</a-descriptions-item>
           </a-descriptions>
         </template>
 
@@ -194,7 +201,7 @@ function openExecution() {
           <a-collapse-panel
             v-for="s in detail.steps"
             :key="s.step_order"
-            :header="`第 ${s.step_order} 步 · ${s.step_name}（${s.script_type} · 超时 ${s.timeout}s）`"
+            :header="`第 ${s.step_order} 步 · ${s.step_name}（超时 ${s.timeout}s）`"
           >
             <div v-if="Object.keys(s.params).length" class="d-params">
               <a-tag v-for="(v, k) in s.params" :key="k" color="geekblue">{{ k }} = {{ v }}</a-tag>
@@ -202,17 +209,6 @@ function openExecution() {
             <pre class="d-content">{{ s.content_snap }}</pre>
           </a-collapse-panel>
         </a-collapse>
-
-        <!-- 主机清单：提交时固化快照 -->
-        <div class="d-section">目标主机（{{ detail.hosts.length }}，提交时固化）</div>
-        <a-table
-          :columns="hostColumns"
-          :data-source="detail.hosts"
-          row-key="host_id"
-          size="small"
-          bordered
-          :pagination="false"
-        />
 
         <!-- 审批操作区：仅待办页且工单处于审批中 -->
         <template v-if="showApprove && awaiting">
@@ -261,6 +257,10 @@ function openExecution() {
 }
 .d-timeline {
   padding: 6px 4px 0;
+  margin-bottom: 0;
+}
+.d-timeline + .d-section {
+  margin-top: 6px;
 }
 .d-tl-comment {
   font-size: 12px;

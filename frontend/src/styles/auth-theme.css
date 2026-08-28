@@ -1,0 +1,97 @@
+/* Public authentication pages share the same dark form surface. */
+html[data-theme='dark'] .login-page .form-side {
+  background: linear-gradient(145deg, #0b1120 0%, #111a2e 52%, #0e1b3a 100%);
+}
+
+html[data-theme='dark'] .login-page .form-card {
+  --auth-card: #111a2e;
+  --auth-input: #17213a;
+  --auth-input-hover: #1d2c4a;
+  --auth-text: #f8fafc;
+  --auth-label: #dbeafe;
+  --auth-muted: #a7b5c9;
+  --auth-border: #475569;
+  background: var(--auth-card);
+  border-color: rgba(96, 165, 250, 0.3);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.32), 0 4px 14px rgba(30, 64, 175, 0.16);
+}
+
+html[data-theme='dark'] .login-page .form-card h2 {
+  color: var(--auth-text);
+}
+
+html[data-theme='dark'] .login-page .form-card .sub,
+html[data-theme='dark'] .login-page .form-card .system-hint,
+html[data-theme='dark'] .login-page .form-card .result,
+html[data-theme='dark'] .login-page .form-card .capability-loading,
+html[data-theme='dark'] .login-page .form-card .state-block p,
+html[data-theme='dark'] .login-page .form-card .foot,
+html[data-theme='dark'] .login-page .form-card .divider {
+  color: var(--auth-muted);
+}
+
+html[data-theme='dark'] .login-page .form-card .ant-form-item-label > label {
+  color: var(--auth-label);
+}
+
+html[data-theme='dark'] .login-page .form-card .ant-input,
+html[data-theme='dark'] .login-page .form-card .ant-input-affix-wrapper {
+  border-color: var(--auth-border);
+  background: var(--auth-input);
+  color: var(--auth-text);
+  caret-color: #93c5fd;
+}
+
+html[data-theme='dark'] .login-page .form-card .ant-input-affix-wrapper .ant-input {
+  background: transparent;
+}
+
+html[data-theme='dark'] .login-page .form-card .ant-input::placeholder,
+html[data-theme='dark'] .login-page .form-card .ant-input-affix-wrapper .ant-input::placeholder {
+  color: #94a3b8;
+}
+
+html[data-theme='dark'] .login-page .form-card .ant-input-password-icon {
+  color: var(--auth-muted);
+}
+
+html[data-theme='dark'] .login-page .form-card .ant-input:hover,
+html[data-theme='dark'] .login-page .form-card .ant-input-affix-wrapper:hover,
+html[data-theme='dark'] .login-page .form-card .ant-input:focus,
+html[data-theme='dark'] .login-page .form-card .ant-input-affix-wrapper-focused {
+  border-color: #38bdf8;
+  background: var(--auth-input-hover);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
+}
+
+html[data-theme='dark'] .login-page .form-card .ant-input-affix-wrapper-focused .ant-input {
+  background: transparent;
+}
+
+html[data-theme='dark'] .login-page .form-card .ant-input:-webkit-autofill,
+html[data-theme='dark'] .login-page .form-card .ant-input-affix-wrapper input:-webkit-autofill {
+  -webkit-text-fill-color: var(--auth-text);
+  -webkit-box-shadow: 0 0 0 1000px var(--auth-input) inset;
+}
+
+html[data-theme='dark'] .login-page .form-card .sso {
+  color: var(--auth-label);
+  background: var(--auth-input);
+  border-color: var(--auth-border);
+}
+
+html[data-theme='dark'] .login-page .form-card .policy {
+  border-color: #36558a;
+  background: #16213a;
+  color: #bfdbfe;
+}
+
+html[data-theme='dark'] .login-page .form-card .state-icon {
+  background: #1e2b4a;
+  color: #93c5fd;
+}
+
+html[data-theme='dark'] .login-page .form-card .back,
+html[data-theme='dark'] .login-page .form-card .back-link {
+  color: #93c5fd;
+}

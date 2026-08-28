@@ -7,11 +7,13 @@ from app.api.v1.cmdb import router as cmdb_router
 from app.api.v1.credentials import router as credentials_router
 from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.executions import router as executions_router
+from app.api.v1.job_hosts import router as job_hosts_router
 from app.api.v1.notifications import router as notifications_router
 from app.api.v1.notify import router as notify_router
 from app.api.v1.roles import router as roles_router
 from app.api.v1.search import router as search_router
 from app.api.v1.templates import router as templates_router
+from app.api.v1.process_templates import router as process_templates_router
 from app.api.v1.system import router as system_router
 from app.api.v1.tickets import router as tickets_router
 from app.api.v1.tokens import router as tokens_router
@@ -25,7 +27,9 @@ api_router.include_router(users_router)
 api_router.include_router(roles_router)
 api_router.include_router(cmdb_router)
 api_router.include_router(credentials_router)
+api_router.include_router(job_hosts_router)
 api_router.include_router(templates_router)
+api_router.include_router(process_templates_router)
 api_router.include_router(tickets_router)
 api_router.include_router(executions_router)
 api_router.include_router(notify_router)

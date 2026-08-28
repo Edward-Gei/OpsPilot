@@ -10,6 +10,12 @@ export interface ApiResponse<T = unknown> {
   data: T
 }
 
+export interface RequestConfig extends AxiosRequestConfig {
+  silentCancel?: boolean
+  /** 后台轮询的传输错误由调用方退避重试，不显示全局提示。 */
+  silentTransportError?: boolean
+}
+
 /** 业务错误：携带后端业务码与 data 载荷（三态流程用） */
 export class ApiError extends Error {
   code: number
@@ -62,12 +68,6 @@ async function tryRefresh(): Promise<boolean> {
   return false
 }
 
-/** 主动刷新令牌对（WS 被 4401 拒后重连前调用）：复用 40102 的单飞 Promise */
-export function refreshTokenPair(): Promise<boolean> {
-  refreshing = refreshing ?? tryRefresh().finally(() => (refreshing = null))
-  return refreshing
-}
-
 /** 会话失效：清令牌并回登录页 */
 function forceLogin(): void {
   clearTokens()
@@ -81,9 +81,14 @@ http.interceptors.response.use(
   (response) => response,
   async (error: AxiosError<ApiResponse>) => {
     const body = error.response?.data
-    const config = error.config as (InternalAxiosRequestConfig & { _retried?: boolean }) | undefined
+    const config = error.config as (InternalAxiosRequestConfig & RequestConfig & { _retried?: boolean }) | undefined
+    if (axios.isCancel(error) && config?.silentCancel) {
+      return Promise.reject(error)
+    }
     if (!body || typeof body.code !== 'number') {
-      message.error(error.message || '网络异常，请稍后重试')
+      if (!config?.silentTransportError) {
+        message.error(error.message || '网络异常，请稍后重试')
+      }
       return Promise.reject(error)
     }
     // Access Token 过期：静默刷新后重放原请求（仅一次）
@@ -114,7 +119,7 @@ http.interceptors.response.use(
 )
 
 /** 通用请求：直接返回业务 data，调用方无需再解包 */
-export async function request<T>(config: AxiosRequestConfig): Promise<T> {
+export async function request<T>(config: RequestConfig): Promise<T> {
   const response = await http.request<ApiResponse<T>>(config)
   return response.data.data
 }

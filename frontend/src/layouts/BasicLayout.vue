@@ -11,6 +11,7 @@ import {
   BellOutlined,
   CloudServerOutlined,
   CodeOutlined,
+  DownOutlined,
   FileDoneOutlined,
   KeyOutlined,
   LogoutOutlined,
@@ -22,7 +23,7 @@ import {
   ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons-vue'
-import { todoTickets } from '@/api/ticket'
+import { pollTodoEvents, todoTickets } from '@/api/ticket'
 import {
   getUnreadCount,
   listNotifications,
@@ -40,26 +41,61 @@ const themeStore = useThemeStore()
 const userStore = useUserStore()
 
 interface MenuItem {
+  children?: MenuItem[]
   key: string
   label: string
   icon: Component
   path?: string // 可跳转路由
   perm?: string // 所需权限点（无权隐藏）
+  perms?: string[] // 任一权限满足即可显示
   milestone?: string // 未开放模块显示里程碑徽标
   count?: number // 待办计数角标（0 不显示）
 }
 
 // 待办审批角标：路由切换时刷新（审批/提交后进其他页能看到最新计数，FLOW-06）
 const todoCount = ref(0)
+let todoCountRequestSeq = 0
 
 /** 拉取待我审批总数（page_size=1 只取 total）；无审批权限不请求 */
 async function loadTodoCount() {
   if (!userStore.hasPerm('ticket:approve')) return
+  const requestSeq = ++todoCountRequestSeq
   try {
     const data = await todoTickets({ page: 1, page_size: 1 })
+    if (requestSeq !== todoCountRequestSeq || todoPollAbort?.signal.aborted) return
     todoCount.value = data.total
   } catch {
     /* 角标拉取失败静默，不影响布局 */
+  }
+}
+
+let todoPollAbort: AbortController | null = null
+let todoPolling = false
+let lastTodoSeq = 0
+
+/** 待办角标事件主通道：串行长轮询，异常后退避重试。 */
+async function startTodoEventPoll() {
+  if (!userStore.hasPerm('ticket:approve') || todoPolling) return
+  todoPolling = true
+  todoPollAbort = new AbortController()
+  try {
+    while (!todoPollAbort.signal.aborted) {
+      try {
+        const data = await pollTodoEvents(lastTodoSeq, todoPollAbort.signal)
+        if (todoPollAbort.signal.aborted) return
+        lastTodoSeq = data.last_seq // 服务端会在游标失效时回退，必须直接覆盖。
+        if (data.events.length) {
+          await loadTodoCount()
+          if (todoPollAbort.signal.aborted) return
+        }
+      } catch {
+        if (todoPollAbort.signal.aborted) return
+        await new Promise((resolve) => window.setTimeout(resolve, 3000))
+        if (todoPollAbort.signal.aborted) return
+      }
+    }
+  } finally {
+    todoPolling = false
   }
 }
 
@@ -73,9 +109,9 @@ const menuGroups = computed(() =>
         // M2 已开放：资源管理拆分为主机/应用两个入口，按 cmdb:read 权限显隐
         { key: 'cmdb-hosts', label: '主机管理', icon: CloudServerOutlined, path: '/cmdb/hosts', perm: 'cmdb:read' },
         { key: 'cmdb-apps', label: '应用管理', icon: AppstoreAddOutlined, path: '/cmdb/apps', perm: 'cmdb:read' },
-        // M3 已开放：作业中心拆分为模板/凭据两个入口（作业执行 M4 开放）
+        // M3 已开放：作业中心拆分为模板/凭据两个入口（作业主机配置已入系统设置）
         { key: 'job-templates', label: '模板管理', icon: CodeOutlined, path: '/job/templates', perm: 'template:read' },
-        { key: 'job-credentials', label: '凭据管理', icon: KeyOutlined, path: '/job/credentials', perm: 'credential:read' },
+        { key: 'job-credentials', label: '凭据管理', icon: KeyOutlined, path: '/job/credentials', perms: ['credential:read', 'secret:read'] },
         // M4 已开放：工单中心 + 待办审批（角标显示待我审批数）
         { key: 'ticket-list', label: '工单中心', icon: FileDoneOutlined, path: '/ticket/list', perm: 'ticket:read' },
         { key: 'ticket-todo', label: '待办审批', icon: AuditOutlined, path: '/ticket/todo', perm: 'ticket:approve', count: todoCount.value },
@@ -83,7 +119,7 @@ const menuGroups = computed(() =>
                 { key: 'execution-list', label: '执行中心', icon: ThunderboltOutlined, path: '/executions', perm: 'execution:read' },
         { key: 'audit-logs', label: '安全审计', icon: SafetyCertificateOutlined, path: '/audit', perm: 'audit:read' },
                 // M6 已开放：通知中心（渠道配置 + 事件映射 + 发送记录）
-                { key: 'notify', label: '通知中心', icon: BellOutlined, path: '/notify', perm: 'notify:config' },
+                { key: 'notify', label: '通知中心', icon: BellOutlined, path: '/notify', perm: 'notify:read' },
       ] as MenuItem[],
     },
     {
@@ -115,13 +151,14 @@ const menuGroups = computed(() =>
   ]
     .map((g) => ({
       ...g,
-      items: g.items.filter((it) => !it.perm || userStore.hasPerm(it.perm)),
+      items: g.items.filter((it) => (!it.perm || userStore.hasPerm(it.perm)) && (!it.perms || userStore.hasAnyPerm(it.perms))),
     }))
     .filter((g) => g.items.length > 0),
 )
 
 // 当前高亮菜单：跟随路由（详情页可用 meta.menuKey 指定归属菜单）
 const activeKey = computed(() => (route.meta.menuKey as string) || (route.name as string) || 'dashboard')
+const templateMenuOpen = ref(route.path.startsWith('/job/templates'))
 // 顶栏标题：跟随路由 meta
 const pageTitle = computed(() => (route.meta.title as string) || '工作台')
 
@@ -133,6 +170,10 @@ const roleNames = computed(() => me.value?.roles.map((r) => r.name).join(' / ') 
 
 // 菜单点击：未开放模块给出里程碑提示，不跳转
 function onMenuClick(item: MenuItem) {
+  if (item.key === 'job-templates') {
+    templateMenuOpen.value = !templateMenuOpen.value
+    return
+  }
   if (item.milestone) {
     message.info(`「${item.label}」将在 ${item.milestone} 里程碑开放`)
     return
@@ -141,7 +182,12 @@ function onMenuClick(item: MenuItem) {
 }
 
 onMounted(loadTodoCount)
-watch(() => route.path, loadTodoCount)
+onMounted(() => void startTodoEventPoll())
+onUnmounted(() => todoPollAbort?.abort())
+watch(() => route.path, (path) => {
+  loadTodoCount()
+  if (path.startsWith('/job/templates')) templateMenuOpen.value = true
+})
 
 // ===== 站内通知（NOTIFY-06）：铃铛角标 30s 轮询 + 下拉面板最近 20 条 =====
 const unreadCount = ref(0)
@@ -358,18 +404,39 @@ async function onLogout() {
       </div>
       <template v-for="group in menuGroups" :key="group.title">
         <div class="menu-group">{{ group.title }}</div>
-        <div
-          v-for="item in group.items"
-          :key="item.key"
-          class="menu-item"
-          :class="{ active: activeKey === item.key, locked: !!item.milestone }"
-          @click="onMenuClick(item)"
-        >
-          <component :is="item.icon" class="menu-icon" />
-          <span>{{ item.label }}</span>
-          <span v-if="item.milestone" class="badge">{{ item.milestone }}</span>
-          <span v-else-if="item.count" class="badge badge-count">{{ item.count }}</span>
-        </div>
+        <template v-for="item in group.items" :key="item.key">
+          <div
+            class="menu-item"
+            :class="{ active: activeKey === item.key || (item.key === 'job-templates' && route.path.startsWith('/job/templates')), locked: !!item.milestone }"
+            @click="onMenuClick(item)"
+          >
+            <component :is="item.icon" class="menu-icon" />
+            <span>{{ item.label }}</span>
+            <span v-if="item.milestone" class="badge">{{ item.milestone }}</span>
+            <span v-else-if="item.count" class="badge badge-count">{{ item.count }}</span>
+            <DownOutlined
+              v-if="item.key === 'job-templates'"
+              class="menu-caret"
+              :class="{ expanded: templateMenuOpen }"
+            />
+          </div>
+          <template v-if="item.key === 'job-templates' && templateMenuOpen">
+          <div class="menu-subitems">
+          <FileDoneOutlined class="menu-subicon" />
+          <div
+            class="menu-subitem"
+            :class="{ active: activeKey === 'job-template-tickets' }"
+            @click.stop="router.push('/job/templates/tickets')"
+          >工单模板</div>
+          <CodeOutlined class="menu-subicon" />
+          <div
+            class="menu-subitem"
+            :class="{ active: activeKey === 'job-template-processes' }"
+            @click.stop="router.push('/job/templates/processes')"
+          >流程模板</div>
+          </div>
+          </template>
+        </template>
       </template>
       <div class="sider-user">
         <a-avatar class="user-avatar" :size="34">{{ avatarChar }}</a-avatar>
@@ -637,6 +704,14 @@ async function onLogout() {
 .menu-icon {
   font-size: 16px;
 }
+.menu-caret {
+  margin-left: auto;
+  font-size: 12px;
+  transition: transform 0.15s ease;
+}
+.menu-caret.expanded {
+  transform: rotate(180deg);
+}
 .badge {
   margin-left: auto;
   font-size: 10px;
@@ -657,6 +732,36 @@ async function onLogout() {
 }
 .menu-item.active .badge-count {
   background: rgba(255, 255, 255, 0.25);
+}
+.menu-subitem {
+  margin: 1px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.menu-subitems {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  align-items: center;
+  margin-left: 28px;
+}
+.menu-subicon {
+  color: var(--text-3);
+  font-size: 14px;
+}
+.menu-subitem.active + .menu-subicon {
+  color: var(--primary);
+}
+.menu-subitem:hover {
+  background: var(--bg-hover);
+}
+.menu-subitem.active {
+  color: var(--primary);
+  background: var(--bg-hover);
+  font-weight: 600;
 }
 .sider-user {
   margin-top: auto;

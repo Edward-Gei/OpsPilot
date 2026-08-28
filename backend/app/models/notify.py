@@ -54,7 +54,7 @@ class NotificationRecord(Base):
     content: Mapped[str | None] = mapped_column(Text, comment="通知正文")
     ref_type: Mapped[str | None] = mapped_column(String(16), comment="关联对象类型 ticket/execution")
     ref_id: Mapped[int | None] = mapped_column(UBIGINT, comment="关联对象 ID")
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", comment="pending/success/failed")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", comment="pending/sending/success/failed（sending 为发送中的原子认领态，防并发扫描重复发送）")
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="已重试次数")
     next_retry_at: Mapped[datetime | None] = mapped_column(DT3, comment="下次重试时间")
     error: Mapped[str | None] = mapped_column(String(512), comment="最近失败原因")

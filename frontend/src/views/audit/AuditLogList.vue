@@ -5,6 +5,7 @@ import { message } from 'ant-design-vue'
 import {
   DownOutlined,
   ExportOutlined,
+  EyeOutlined,
   SafetyCertificateOutlined,
   SearchOutlined,
 } from '@ant-design/icons-vue'
@@ -134,7 +135,7 @@ const columns = ref(makeResizable([
   { title: '动作', dataIndex: 'action', key: 'action', width: 170, ellipsis: true },
   { title: '对象', key: 'target', width: 220, ellipsis: true },
   { title: '结果', key: 'result', width: 90 },
-  { title: '操作', key: 'op', width: 80, fixed: 'right' as const },
+  { title: '操作', key: 'op', width: 98, fixed: 'right' as const },
 ]))
 
 // ---------- 详情抽屉 ----------
@@ -276,6 +277,7 @@ onMounted(refreshAll)
         </template>
         <template v-else-if="column.key === 'op'">
           <a-button size="small" class="op-btn-blue" @click="openDetail(record as auditApi.AuditLogItem)">
+            <EyeOutlined />
             详情
           </a-button>
         </template>
@@ -284,7 +286,7 @@ onMounted(refreshAll)
 
     <!-- 详情抽屉：完整字段 + detail JSON 原文 -->
     <a-drawer v-model:open="detailOpen" title="审计详情" :width="520">
-      <a-descriptions v-if="detailRow" :column="1" bordered size="small">
+      <a-descriptions v-if="detailRow" :column="1" bordered size="small" class="op-desc-table">
         <a-descriptions-item label="时间">
           {{ detailRow.created_at ? new Date(detailRow.created_at).toLocaleString() : '—' }}
         </a-descriptions-item>

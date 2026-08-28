@@ -16,8 +16,8 @@ class ChannelSendError(Exception):
 class NotifyMessage:
     """一次发送的完整载荷（由分发器或测试接口组装）。
 
-    receivers 仅 Email 渠道使用（已解析的邮箱地址列表）；
-    Webhook/Teams 发往全局配置 URL，receivers 只随载荷透传供接收方展示。
+    Email 使用分发器解析后的邮箱地址；Webhook/Teams 使用原始用户名数组，
+    供模板中的 {receivers} 变量透传展示。
     """
 
     event: str

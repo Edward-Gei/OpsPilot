@@ -8,6 +8,15 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(min_length=1, max_length=128)
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=128)
+
+
 class RefreshRequest(BaseModel):
     """刷新令牌。"""
     refresh_token: str

@@ -1,4 +1,4 @@
-// 通知中心 API（04-API设计 §10，权限 notify:config）
+// 通知中心 API（04-API设计 §10，权限 notify:read / notify:write / notify:test）
 import { request } from './http'
 import type { PageResult } from './system'
 
@@ -10,6 +10,9 @@ export interface NotifyChannelItem {
   config: Record<string, unknown>
   secret: string | null
   updated_at: string | null
+  template_events: Array<{ key: string; label: string }>
+  template_defaults: Record<string, Record<string, string>>
+  template_variables: Array<{ key: string; label: string; type: string; group: string; events: string[] }>
 }
 
 /** 事件-渠道映射（六事件全量返回，含空映射） */
@@ -51,7 +54,7 @@ export function updateChannel(
 /** 发送测试消息：传当前表单值（保存前预测）；Email 渠道 receiver 直接给邮箱地址 */
 export function testChannel(
   type: string,
-  data: { config: Record<string, unknown>; secret?: string; receiver?: string },
+  data: { config: Record<string, unknown>; secret?: string; receiver?: string; event?: string },
 ) {
   return request<{ success: boolean; message: string }>({
     url: `/notify/channels/${type}/test`,

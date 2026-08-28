@@ -113,7 +113,7 @@ async function onBind() {
   <div v-if="me" class="profile">
     <!-- 账号资料 -->
     <a-card title="账号资料" class="card">
-      <a-descriptions :column="2" bordered size="middle">
+      <a-descriptions :column="2" bordered size="middle" class="op-desc-table">
         <a-descriptions-item label="用户名">{{ me.username }}</a-descriptions-item>
         <a-descriptions-item label="显示名">
           <a-input

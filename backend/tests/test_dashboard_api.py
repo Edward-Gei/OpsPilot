@@ -16,9 +16,9 @@ pytestmark = pytest.mark.asyncio
 def _ticket(no: str, status: str, creator_id: int, created_at: datetime) -> Ticket:
     """最小合法工单行（快照字段填充占位值）。"""
     return Ticket(
-        ticket_no=no, template_id=1, template_version_snap=1, title=f"工单{no}",
-        type="ops", app_id=1, app_name_snap="demo-app", status=status,
-        creator_id=creator_id, submitted_at=created_at, created_at=created_at,
+        ticket_no=no, template_id=1, title=f"工单{no}",
+        type="daily_ops", job_host_id=1, job_host_snap={"id": 1, "name": "demo-jh"},
+        status=status, creator_id=creator_id, submitted_at=created_at, created_at=created_at,
     )
 
 
@@ -42,10 +42,8 @@ async def _seed_biz(db_factory, seed) -> None:
         ])
         await session.flush()
         session.add_all([
-            Execution(ticket_id=1, status="success", total_steps=1, total_hosts=3,
-                      created_at=now),
-            Execution(ticket_id=2, status="running", total_steps=2, total_hosts=3,
-                      created_at=now),
+            Execution(ticket_id=1, status="success", total_steps=1, created_at=now),
+            Execution(ticket_id=2, status="running", total_steps=2, created_at=now),
             AuditLog(id=1, module="auth", action="login", result="success", created_at=now),
         ])
         await session.commit()
@@ -75,7 +73,7 @@ class TestSummary:
         e = data["execution"]
         assert e["active"] == {"queued": 0, "running": 1, "paused": 0}
         assert [r["ticket_no"] for r in e["recent"]] == ["T2", "T1"]
-        assert e["recent"][0]["app_name"] == "demo-app"
+        assert e["recent"][0]["job_host_name"] == "demo-jh"
         assert data["audit_today"] >= 1  # 种子 1 条 + 本次登录审计
 
     async def test_ops_sections_trimmed(self, client, db_factory, seed):

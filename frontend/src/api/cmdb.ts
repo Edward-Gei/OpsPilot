@@ -6,6 +6,10 @@ export interface HostItem {
   id: number
   hostname: string
   ip: string
+  project: 'mitrade' | 'tradingkey'
+  public_ip: string | null
+  ri: string | null
+  host_series: string | null
   platform: string | null
   region: string | null
   os: string | null
@@ -20,17 +24,27 @@ export interface HostItem {
   updated_at: string | null
 }
 
+export type AppProjectType = 'frontend' | 'backend'
+export type AppBusinessLine = 'mitrade' | 'tradingkey'
+export type AppServiceLevel = '核心服务' | '一般服务'
+
 export interface AppItem {
   id: number
   name: string
   description: string | null
   language: string | null
   deploy_type: string
+  project_type: AppProjectType
+  business_line: AppBusinessLine
+  system_name: string | null
+  service_level: AppServiceLevel
+  ops_owner: string | null
+  dev_owner: string | null
+  repo_url: string | null
+  service_port: string | null
+  cpu_quota: string | null
+  mem_quota: string | null
   host_count: number
-  // 关联主机资源汇总（后端聚合的纯计算值）
-  cpu_total: number
-  memory_total: number
-  disk_total: number
   // 关联主机 IP 清单（列表多行展示）
   host_ips: string[]
   created_at: string | null
@@ -54,11 +68,17 @@ export interface HostQuery {
   region?: string
   environment?: string
   status?: string
+  sort_by?: 'created_at'
+  sort_order?: 'asc' | 'desc'
 }
 
 export interface HostForm {
   hostname: string
   ip: string
+  project: 'mitrade' | 'tradingkey'
+  public_ip?: string
+  ri?: string
+  host_series?: string
   platform?: string
   region?: string
   os?: string
@@ -98,8 +118,8 @@ export function deleteHost(id: number) {
   return request<null>({ url: `/cmdb/hosts/${id}`, method: 'delete' })
 }
 
-/** 平台/区域自由文本自动补全 */
-export function suggestHostField(field: 'platform' | 'region', q?: string) {
+/** 平台/区域/主机系列自由文本自动补全 */
+export function suggestHostField(field: 'platform' | 'region' | 'host_series', q?: string) {
   return request<{ items: string[] }>({
     url: '/cmdb/hosts/suggest',
     method: 'get',
@@ -140,14 +160,26 @@ export function exportHosts(params: Omit<HostQuery, 'page' | 'page_size'>) {
 
 // ---------- 应用 ----------
 
-export function listApps(params: {
+export interface AppQuery {
   page?: number
   page_size?: number
   keyword?: string
   language?: string
   deploy_type?: string
-}) {
+  project_type?: AppProjectType
+  business_line?: AppBusinessLine
+  service_level?: AppServiceLevel
+  sort_by?: 'language' | 'created_at'
+  sort_order?: 'asc' | 'desc'
+}
+
+export function listApps(params: AppQuery) {
   return request<PageResult<AppItem>>({ url: '/cmdb/apps', method: 'get', params })
+}
+
+/** 按当前筛选导出应用 */
+export function exportApps(params: Omit<AppQuery, 'page' | 'page_size'>) {
+  return downloadXlsx('/cmdb/apps/export', '应用列表.xlsx', params)
 }
 
 export function getApp(id: number) {
@@ -159,6 +191,16 @@ export function createApp(data: {
   description?: string
   language?: string
   deploy_type: string
+  project_type: AppProjectType
+  business_line: AppBusinessLine
+  system_name?: string
+  service_level: AppServiceLevel
+  ops_owner?: string
+  dev_owner?: string
+  repo_url?: string
+  service_port?: string
+  cpu_quota?: string
+  mem_quota?: string
   host_ids: number[]
 }) {
   return request<{ id: number }>({ url: '/cmdb/apps', method: 'post', data })
@@ -166,7 +208,23 @@ export function createApp(data: {
 
 export function updateApp(
   id: number,
-  data: { name: string; description?: string; language?: string; deploy_type: string; host_ids: number[] },
+  data: {
+    name: string
+    description?: string
+    language?: string
+    deploy_type: string
+    project_type: AppProjectType
+    business_line: AppBusinessLine
+    system_name?: string
+    service_level: AppServiceLevel
+    ops_owner?: string
+    dev_owner?: string
+    repo_url?: string
+    service_port?: string
+    cpu_quota?: string
+    mem_quota?: string
+    host_ids: number[]
+  },
 ) {
   return request<null>({ url: `/cmdb/apps/${id}`, method: 'put', data })
 }

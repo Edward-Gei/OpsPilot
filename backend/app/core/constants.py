@@ -36,8 +36,7 @@ class DeployType(str, Enum):
 class TemplateType(str, Enum):
     """工单模板类型（V2：模板=规则定义，类型描述工单业务属性）。"""
     RELEASE = "release"
-    CHANGE = "change"
-    OPS = "ops"
+    DAILY_OPS = "daily_ops"
     OTHER = "other"
 
 
@@ -53,16 +52,12 @@ class TemplateStatus(str, Enum):
     DISABLED = "disabled"
 
 
-class ApproveMode(str, Enum):
-    """节点内审批方式：V1 仅 any（或签）生效，其余仅存配置。"""
-    ANY = "any"
-    ALL = "all"
-    SEQ = "seq"
-
-
 class CredentialAuthType(str, Enum):
     PASSWORD = "password"
     PRIVATE_KEY = "private_key"
+    API_TOKEN = "api_token"
+    USERNAME_PASSWORD = "username_password"
+    SECRET_FILE = "secret_file"
 
 
 class TicketStatus(str, Enum):
@@ -90,7 +85,8 @@ class InterruptReason(str, Enum):
 
 class ExecutionStatus(str, Enum):
     """执行实例状态：terminated=人为中止（映射工单 interrupted+user_abort）；
-    interrupted=系统崩溃/失联（映射工单 interrupted+system_crash/worker_lost）。"""
+    interrupted=系统崩溃/失联（映射工单 interrupted+system_crash/worker_lost）；
+    rejected=审批驳回后关闭执行实例；cancelled=工单撤回后关闭排队实例。"""
     QUEUED = "queued"
     RUNNING = "running"
     PAUSED = "paused"
@@ -98,6 +94,8 @@ class ExecutionStatus(str, Enum):
     FAILED = "failed"
     TERMINATED = "terminated"
     INTERRUPTED = "interrupted"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
 
 
 class HostExecStatus(str, Enum):
@@ -140,18 +138,31 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("role:write", "角色管理", "user"),
     ("cmdb:read", "CMDB查看", "cmdb"),
     ("cmdb:write", "CMDB管理", "cmdb"),
+    ("cmdb:delete", "CMDB删除", "cmdb"),
+    ("cmdb:import", "CMDB导入", "cmdb"),
     ("credential:read", "凭据查看", "job"),
     ("credential:write", "凭据管理", "job"),
+    ("credential:delete", "凭据删除", "job"),
+    ("secret:read", "脚本密钥查看", "job"),
+    ("secret:write", "脚本密钥管理", "job"),
+    ("secret:delete", "脚本密钥删除", "job"),
     ("template:read", "模板查看", "job"),
     ("template:write", "模板管理", "job"),
+    ("template:delete", "模板删除", "job"),
+    ("job_host:read", "作业主机查看", "job"),
+    ("job_host:write", "作业主机管理", "job"),
+    ("job_host:delete", "作业主机删除", "job"),
     ("ticket:read", "工单查看", "ticket"),
     ("ticket:write", "工单创建", "ticket"),
     ("ticket:approve", "工单审批", "ticket"),
     ("execution:read", "执行记录查看", "execution"),
     ("execution:control", "执行控制", "execution"),
+    ("execution:force_control", "执行强制中止", "execution"),
     ("audit:read", "审计查看", "audit"),
     ("audit:export", "审计导出", "audit"),
-    ("notify:config", "通知配置", "system"),
+    ("notify:read", "通知查看", "notify"),
+    ("notify:write", "通知配置", "notify"),
+    ("notify:test", "通知测试", "notify"),
     ("system:config", "系统配置", "system"),
 ]
 
@@ -166,8 +177,10 @@ BUILTIN_ROLES: dict[str, dict] = {
         "name": "运维",
         "description": "系统内置：CMDB/模板/工单/执行",
         "permissions": [
-            "cmdb:read", "cmdb:write",
+            "cmdb:read", "cmdb:write", "cmdb:import",
             "credential:read",
+            "secret:read",
+            "job_host:read",
             "template:read", "template:write",
             "ticket:read", "ticket:write",
             "execution:read", "execution:control",
@@ -197,7 +210,6 @@ SYSTEM_CONFIG_DEFAULTS: dict[str, dict] = {
     "oidc.config": {"value": None},
     "ldap.default_role": {"value": "ops"},
     "oidc.default_role": {"value": "ops"},
-    "ansible.job_host": {"value": None},  # {ip, port, credential_id, workdir}
     "exec.global_concurrency": {"value": 50},
 }
 

@@ -10,6 +10,10 @@ class HostUpsertRequest(BaseModel):
 
     hostname: str = Field(min_length=1, max_length=128)
     ip: str = Field(max_length=45)
+    project: Literal["mitrade", "tradingkey"] = "mitrade"
+    public_ip: str | None = Field(default=None, max_length=45)
+    ri: str | None = Field(default=None, max_length=64)
+    host_series: str | None = Field(default=None, max_length=64)
     platform: str | None = Field(default=None, max_length=64)
     region: str | None = Field(default=None, max_length=64)
     os: str | None = Field(default=None, max_length=64)
@@ -21,10 +25,12 @@ class HostUpsertRequest(BaseModel):
     ssh_port: int = Field(default=22, ge=1, le=65535)
     description: str | None = Field(default=None, max_length=255)
 
-    @field_validator("ip")
+    @field_validator("ip", "public_ip")
     @classmethod
-    def validate_ip(cls, v: str) -> str:
-        """IP 格式校验：兼容 IPv4/IPv6。"""
+    def validate_ip(cls, v: str | None) -> str | None:
+        """内外网 IP 格式校验：兼容 IPv4/IPv6。"""
+        if v is None:
+            return v
         try:
             ipaddress.ip_address(v)
         except ValueError as exc:
@@ -39,4 +45,14 @@ class AppUpsertRequest(BaseModel):
     description: str | None = Field(default=None, max_length=255)
     language: str | None = Field(default=None, max_length=32)
     deploy_type: Literal["shell", "docker", "k8s"]
+    project_type: Literal["frontend", "backend"] = "frontend"
+    business_line: Literal["mitrade", "tradingkey"] = "mitrade"
+    system_name: str | None = Field(default=None, max_length=128)
+    service_level: Literal["核心服务", "一般服务"] = "核心服务"
+    ops_owner: str | None = Field(default=None, max_length=64)
+    dev_owner: str | None = Field(default=None, max_length=64)
+    repo_url: str | None = Field(default=None, max_length=255)
+    service_port: str | None = Field(default=None, max_length=64)
+    cpu_quota: str | None = Field(default=None, max_length=64)
+    mem_quota: str | None = Field(default=None, max_length=64)
     host_ids: list[int] = Field(default_factory=list)

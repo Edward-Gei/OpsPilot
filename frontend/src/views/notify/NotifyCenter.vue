@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // 通知中心（M6-3）：渠道配置（测试按钮）+ 事件映射 + 发送记录列表
-// 权限 notify:config；敏感密钥读取时后端脱敏为 ******，原样提交不会覆盖真实值
+// 权限 notify:read / notify:write / notify:test；敏感密钥读取时后端脱敏为 ******，原样提交不会覆盖真实值
 import { computed, onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import {
   ApiOutlined,
   BellOutlined,
+  DownOutlined,
   MailOutlined,
   SendOutlined,
   WindowsOutlined,
@@ -13,6 +14,11 @@ import {
 import * as notifyApi from '@/api/notify'
 import type { NotifyRecordItem } from '@/api/notify'
 import ChannelTemplateFields from './ChannelTemplateFields.vue'
+import { useUserStore } from '@/stores/user'
+
+const userStore = useUserStore()
+const canWrite = userStore.hasPerm('notify:write')
+const canTest = userStore.hasPerm('notify:test')
 
 const loading = ref(false)
 const activeTab = ref('channels')
@@ -55,13 +61,20 @@ const channelForms = reactive<Record<string, { enabled: boolean; config: Record<
     enabled: false,
     config: {
       host: '', port: 465, username: '', from_addr: '', use_tls: true, starttls: false,
-      title_template: '', content_template: '',
+      templates: {},
     },
     secret: '',
   },
-  webhook: { enabled: false, config: { url: '', title_template: '', content_template: '' }, secret: '' },
-  teams: { enabled: false, config: { url: '', title_template: '', content_template: '' }, secret: '' },
+  webhook: { enabled: false, config: { url: '', templates: {} }, secret: '' },
+  teams: { enabled: false, config: { url: '', templates: {} }, secret: '' },
 })
+const channelMetadata = reactive<Record<string, { events: Array<{ key: string; label: string }>; defaults: Record<string, Record<string, string>>; variables: Array<{ key: string; label: string; type: string; group: string; events: string[] }> }>>({})
+const activeTemplateEvent = reactive<Record<string, string>>({ email: '', webhook: '', teams: '' })
+const channelSaveVersion = reactive<Record<string, number>>({ email: 0, webhook: 0, teams: 0 })
+const collapsedChannels = reactive<Record<string, boolean>>({ email: false, webhook: false, teams: false, more: false })
+function toggleChannel(type: string) {
+  collapsedChannels[type] = !collapsedChannels[type]
+}
 /** 预留渠道列表（不可启用，仅展示占位） */
 const reservedChannels = ref<string[]>([])
 
@@ -74,6 +87,12 @@ async function loadChannels() {
     if (!form) continue
     form.enabled = item.enabled
     Object.assign(form.config, item.config || {})
+    channelMetadata[item.type] = {
+      events: item.template_events,
+      defaults: item.template_defaults,
+      variables: item.template_variables,
+    }
+    activeTemplateEvent[item.type] = item.template_events?.[0]?.key || ''
     form.secret = item.secret ?? ''
   }
 }
@@ -101,6 +120,7 @@ async function onSaveChannel(type: string) {
       secret: form.secret,
     })
     message.success('已保存，即时生效')
+    channelSaveVersion[type] = (channelSaveVersion[type] || 0) + 1
   } catch {
     /* 错误提示由拦截器统一弹出 */
   } finally {
@@ -130,6 +150,7 @@ async function onTestChannel(type: string) {
     testResults[type] = await notifyApi.testChannel(type, {
       config: { ...form.config },
       secret: form.secret,
+      event: activeTemplateEvent[type] || channelMetadata[type]?.events?.[0]?.key,
       receiver: type === 'email' ? testReceiver.value : undefined,
     })
   } catch {
@@ -264,24 +285,28 @@ onMounted(async () => {
         <a-tab-pane key="channels" tab="渠道配置">
           <div class="blocks">
             <!-- Email -->
-            <a-card class="block">
-              <div class="block-head">
+            <a-card class="block collapsible-block">
+              <div class="block-head" :class="{ 'is-collapsed': collapsedChannels.email }" @click="toggleChannel('email')">
                 <div class="op-icon-grad" style="background: var(--grad-blue)"><MailOutlined /></div>
                 <div class="block-title">
                   <b>邮件 Email</b>
                   <span>SMTP 发送；收件人取工单相关用户的邮箱（未配置邮箱的用户跳过）</span>
                 </div>
-                <a-switch v-model:checked="channelForms.email.enabled" class="head-switch" />
+                <a-switch v-model:checked="channelForms.email.enabled" class="head-switch" :disabled="!canWrite" @click.stop />
                 <a-button
+                  v-if="canTest"
                   :loading="testingChannel === 'email'"
-                  @click="onTestChannel('email')"
+                  @click.stop="onTestChannel('email')"
                 >测试发送</a-button>
                 <a-button
+                  v-if="canWrite"
                   type="primary"
                   :loading="savingChannel === 'email'"
-                  @click="onSaveChannel('email')"
+                  @click.stop="onSaveChannel('email')"
                 >保存</a-button>
+                <DownOutlined class="collapse-icon" />
               </div>
+              <div v-show="!collapsedChannels.email" class="block-body">
               <template v-if="channelForms.email.enabled">
                 <div class="grid2">
                   <a-form-item label="SMTP 服务器" required>
@@ -324,7 +349,15 @@ onMounted(async () => {
                     <a-input v-model:value="testReceiver" placeholder="you@corp.com（仅测试用，不保存）" />
                   </a-form-item>
                 </div>
-                <ChannelTemplateFields :config="channelForms.email.config" />
+                <ChannelTemplateFields
+                  :config="channelForms.email.config"
+                  channel-type="email"
+                  :events="channelMetadata.email?.events || []"
+                  :defaults="channelMetadata.email?.defaults || {}"
+                  :variables="channelMetadata.email?.variables || []"
+                  :save-version="channelSaveVersion.email"
+                  @event-change="activeTemplateEvent.email = $event"
+                />
                 <a-alert
                   v-if="testResults.email"
                   :type="testResults.email.success ? 'success' : 'error'"
@@ -333,27 +366,32 @@ onMounted(async () => {
                 />
               </template>
               <div v-else class="disabled-tip">已停用：邮件事件将记为发送失败（渠道未启用）</div>
+              </div>
             </a-card>
 
             <!-- Webhook -->
-            <a-card class="block">
-              <div class="block-head">
+            <a-card class="block collapsible-block">
+              <div class="block-head" :class="{ 'is-collapsed': collapsedChannels.webhook }" @click="toggleChannel('webhook')">
                 <div class="op-icon-grad" style="background: var(--grad-purple)"><ApiOutlined /></div>
                 <div class="block-title">
                   <b>Webhook</b>
                   <span>JSON POST 到全局地址；配置签名密钥后附 HMAC-SHA256 签名头（X-Ops-Signature）</span>
                 </div>
-                <a-switch v-model:checked="channelForms.webhook.enabled" class="head-switch" />
+                <a-switch v-model:checked="channelForms.webhook.enabled" class="head-switch" :disabled="!canWrite" @click.stop />
                 <a-button
+                  v-if="canTest"
                   :loading="testingChannel === 'webhook'"
-                  @click="onTestChannel('webhook')"
+                  @click.stop="onTestChannel('webhook')"
                 >测试发送</a-button>
                 <a-button
+                  v-if="canWrite"
                   type="primary"
                   :loading="savingChannel === 'webhook'"
-                  @click="onSaveChannel('webhook')"
+                  @click.stop="onSaveChannel('webhook')"
                 >保存</a-button>
+                <DownOutlined class="collapse-icon" />
               </div>
+              <div v-show="!collapsedChannels.webhook" class="block-body">
               <template v-if="channelForms.webhook.enabled">
                 <div class="grid2">
                   <a-form-item label="Webhook URL" required>
@@ -366,7 +404,15 @@ onMounted(async () => {
                     />
                   </a-form-item>
                 </div>
-                <ChannelTemplateFields :config="channelForms.webhook.config" />
+                <ChannelTemplateFields
+                  :config="channelForms.webhook.config"
+                  channel-type="webhook"
+                  :events="channelMetadata.webhook?.events || []"
+                  :defaults="channelMetadata.webhook?.defaults || {}"
+                  :variables="channelMetadata.webhook?.variables || []"
+                  :save-version="channelSaveVersion.webhook"
+                  @event-change="activeTemplateEvent.webhook = $event"
+                />
                 <a-alert
                   v-if="testResults.webhook"
                   :type="testResults.webhook.success ? 'success' : 'error'"
@@ -375,27 +421,32 @@ onMounted(async () => {
                 />
               </template>
               <div v-else class="disabled-tip">已停用：Webhook 事件将记为发送失败（渠道未启用）</div>
+              </div>
             </a-card>
 
             <!-- Teams -->
-            <a-card class="block">
-              <div class="block-head">
+            <a-card class="block collapsible-block">
+              <div class="block-head" :class="{ 'is-collapsed': collapsedChannels.teams }" @click="toggleChannel('teams')">
                 <div class="op-icon-grad" style="background: var(--grad-green)"><WindowsOutlined /></div>
                 <div class="block-title">
                   <b>Microsoft Teams</b>
                   <span>MessageCard 卡片推送到频道 Incoming Webhook</span>
                 </div>
-                <a-switch v-model:checked="channelForms.teams.enabled" class="head-switch" />
+                <a-switch v-model:checked="channelForms.teams.enabled" class="head-switch" :disabled="!canWrite" @click.stop />
                 <a-button
+                  v-if="canTest"
                   :loading="testingChannel === 'teams'"
-                  @click="onTestChannel('teams')"
+                  @click.stop="onTestChannel('teams')"
                 >测试发送</a-button>
                 <a-button
+                  v-if="canWrite"
                   type="primary"
                   :loading="savingChannel === 'teams'"
-                  @click="onSaveChannel('teams')"
+                  @click.stop="onSaveChannel('teams')"
                 >保存</a-button>
+                <DownOutlined class="collapse-icon" />
               </div>
+              <div v-show="!collapsedChannels.teams" class="block-body">
               <template v-if="channelForms.teams.enabled">
                 <div class="grid2">
                   <a-form-item label="Incoming Webhook URL" required>
@@ -405,7 +456,15 @@ onMounted(async () => {
                     />
                   </a-form-item>
                 </div>
-                <ChannelTemplateFields :config="channelForms.teams.config" />
+                <ChannelTemplateFields
+                  :config="channelForms.teams.config"
+                  channel-type="teams"
+                  :events="channelMetadata.teams?.events || []"
+                  :defaults="channelMetadata.teams?.defaults || {}"
+                  :variables="channelMetadata.teams?.variables || []"
+                  :save-version="channelSaveVersion.teams"
+                  @event-change="activeTemplateEvent.teams = $event"
+                />
                 <a-alert
                   v-if="testResults.teams"
                   :type="testResults.teams.success ? 'success' : 'error'"
@@ -414,20 +473,24 @@ onMounted(async () => {
                 />
               </template>
               <div v-else class="disabled-tip">已停用：Teams 事件将记为发送失败（渠道未启用）</div>
+              </div>
             </a-card>
 
             <!-- 预留渠道占位 -->
-            <a-card class="block">
-              <div class="block-head">
+            <a-card class="block collapsible-block">
+              <div class="block-head" :class="{ 'is-collapsed': collapsedChannels.more }" @click="toggleChannel('more')">
                 <div class="op-icon-grad" style="background: var(--grad-orange)"><SendOutlined /></div>
                 <div class="block-title">
                   <b>更多渠道</b>
                   <span>接口已预留，后续版本开放配置</span>
                 </div>
+                <DownOutlined class="collapse-icon" />
               </div>
+              <div v-show="!collapsedChannels.more" class="block-body">
               <a-space :size="8" wrap>
                 <a-tag v-for="c in reservedChannels" :key="c">{{ channelText[c] || c }}（预留）</a-tag>
               </a-space>
+              </div>
             </a-card>
           </div>
         </a-tab-pane>
@@ -441,7 +504,7 @@ onMounted(async () => {
                 <b>事件-渠道映射</b>
                 <span>勾选每类事件经哪些渠道发送；保存为全量覆盖，未勾选即不发送</span>
               </div>
-              <a-button type="primary" :loading="savingMapping" @click="onSaveMappings">保存映射</a-button>
+              <a-button v-if="canWrite" type="primary" :loading="savingMapping" @click="onSaveMappings">保存映射</a-button>
             </div>
             <div class="map-table">
               <div class="map-row map-row--head">
@@ -563,19 +626,37 @@ onMounted(async () => {
 
 <style scoped>
 .blocks {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr;
   gap: 16px;
-  max-width: 960px;
+  width: 100%;
 }
 .block {
   border-radius: 14px;
+  min-width: 0;
 }
 .block-head {
   display: flex;
   align-items: center;
   gap: 12px;
   margin-bottom: 20px;
+}
+.collapsible-block .block-head {
+  cursor: pointer;
+  user-select: none;
+}
+.collapsible-block .block-head.is-collapsed {
+  margin-bottom: 0;
+}
+.collapse-icon {
+  color: var(--text-3);
+  transition: transform .2s ease;
+}
+.block-head.is-collapsed .collapse-icon {
+  transform: rotate(-90deg);
+}
+.block-body {
+  min-width: 0;
 }
 .block-title {
   flex: 1;

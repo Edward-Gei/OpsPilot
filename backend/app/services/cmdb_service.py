@@ -1,18 +1,15 @@
 """CMDB 业务服务：主机/应用 CRUD、自动补全、删除保护、多对多关联。
 
 删除保护规则（03-数据库设计 §3.3）：
-    删主机：被应用关联 或 被进行中工单的 ticket_host 引用 → 42201
-    删应用：被进行中工单引用 → 42201
+    删主机：被应用关联 → 42201；V2 范式下工单引用的是作业主机（job_host），
+    与 CMDB 主机已解耦，无工单侧删除保护
+    删应用：V2 模型中工单不再引用应用，无工单侧删除保护
 """
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.response import Errors
 from app.models.cmdb import AppHost, Application, Host
-from app.models.ticket import Ticket, TicketHost
-
-# 工单"进行中"状态集：终态之外的都算（引用即阻止删除）
-ACTIVE_TICKET_STATUSES = ("approving", "running")
 
 
 # ---------- 主机 ----------
@@ -35,15 +32,21 @@ async def list_hosts(
     region: str | None = None,
     environment: str | None = None,
     status: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
 ) -> tuple[list[Host], int]:
     """分页查主机；keyword 模糊匹配主机名/IP，其余精确筛选。"""
     query = _host_filter_query(
         keyword=keyword, platform=platform, region=region, environment=environment, status=status
     )
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
-    rows = await session.execute(
-        query.order_by(Host.id.desc()).offset((page - 1) * page_size).limit(page_size)
-    )
+    order_by = (Host.id.desc(),)
+    if sort_by == "created_at":
+        order_by = (
+            Host.created_at.asc() if sort_order == "asc" else Host.created_at.desc(),
+            Host.id.desc(),
+        )
+    rows = await session.execute(query.order_by(*order_by).offset((page - 1) * page_size).limit(page_size))
     return list(rows.scalars()), total
 
 
@@ -105,7 +108,10 @@ async def _ensure_ip_unique(session: AsyncSession, ip: str) -> None:
 
 
 async def delete_host(session: AsyncSession, host_id: int) -> Host:
-    """删除主机；删除保护：被应用关联或被进行中工单引用时拒绝（HOST-10）。"""
+    """删除主机；删除保护：被应用关联时拒绝（HOST-10）。
+
+    V2 范式下工单的 job_host_id 引用 job_host 表，与 CMDB host 属不同 ID 空间
+    且两者无外键关联，故不再做工单侧删除保护。"""
     host = await get_host_or_404(session, host_id)
     app_names = (
         await session.execute(
@@ -116,25 +122,20 @@ async def delete_host(session: AsyncSession, host_id: int) -> Host:
     ).scalars().all()
     if app_names:
         raise Errors.rejected(f"主机被应用引用，无法删除：{'、'.join(app_names[:5])}")
-    ticket_nos = (
-        await session.execute(
-            select(Ticket.ticket_no)
-            .join(TicketHost, TicketHost.ticket_id == Ticket.id)
-            .where(TicketHost.host_id == host_id, Ticket.status.in_(ACTIVE_TICKET_STATUSES))
-        )
-    ).scalars().all()
-    if ticket_nos:
-        raise Errors.rejected(f"主机被进行中工单引用，无法删除：{'、'.join(ticket_nos[:5])}")
     await session.delete(host)
     await session.flush()
     return host
 
 
 async def suggest_host_field(session: AsyncSession, field: str, q: str | None) -> list[str]:
-    """平台/区域自由文本自动补全：返回已有去重值（HOST-03）。"""
-    column = {"platform": Host.platform, "region": Host.region}.get(field)
+    """平台/区域/主机系列自由文本自动补全：返回已有去重值。"""
+    column = {
+        "platform": Host.platform,
+        "region": Host.region,
+        "host_series": Host.host_series,
+    }.get(field)
     if column is None:
-        raise Errors.param("field 仅支持 platform / region")
+        raise Errors.param("field 仅支持 platform / region / host_series")
     query = select(column).where(column.is_not(None)).distinct().order_by(column).limit(20)
     if q:
         query = query.where(column.like(f"%{q}%"))
@@ -170,8 +171,47 @@ async def list_apps(
     keyword: str | None = None,
     language: str | None = None,
     deploy_type: str | None = None,
+    project_type: str | None = None,
+    business_line: str | None = None,
+    service_level: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
 ) -> tuple[list[Application], int, dict[int, dict]]:
-    """分页查应用；返回 (列表, 总数, {app_id: 关联主机数+资源汇总})。"""
+    """分页查应用；返回 (列表, 总数, {app_id: 关联主机数+IP 清单})。"""
+    query = _app_filter_query(
+        keyword=keyword, language=language, deploy_type=deploy_type, project_type=project_type,
+        business_line=business_line, service_level=service_level,
+    )
+    total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
+    order_by = (Application.id.desc(),)
+    if sort_by == "language":
+        order_by = (
+            Application.language.asc() if sort_order == "asc" else Application.language.desc(),
+            Application.id.desc(),
+        )
+    elif sort_by == "created_at":
+        order_by = (
+            Application.created_at.asc() if sort_order == "asc" else Application.created_at.desc(),
+            Application.id.desc(),
+        )
+    rows = await session.execute(
+        query.order_by(*order_by).offset((page - 1) * page_size).limit(page_size)
+    )
+    apps = list(rows.scalars())
+    # 关联主机明细一次查出，Python 侧聚合主机数和 IP 清单（列表展示用）
+    return apps, total, await _app_host_stats(session, apps)
+
+
+def _app_filter_query(
+    *,
+    keyword: str | None = None,
+    language: str | None = None,
+    deploy_type: str | None = None,
+    project_type: str | None = None,
+    business_line: str | None = None,
+    service_level: str | None = None,
+):
+    """应用列表与导出共用筛选语义。"""
     query = select(Application)
     if keyword:
         query = query.where(Application.name.like(f"%{keyword}%"))
@@ -179,30 +219,37 @@ async def list_apps(
         query = query.where(Application.language == language)
     if deploy_type:
         query = query.where(Application.deploy_type == deploy_type)
-    total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
-    rows = await session.execute(
-        query.order_by(Application.id.desc()).offset((page - 1) * page_size).limit(page_size)
-    )
+    if project_type:
+        query = query.where(Application.project_type == project_type)
+    if business_line:
+        query = query.where(Application.business_line == business_line)
+    if service_level:
+        query = query.where(Application.service_level == service_level)
+    return query
+
+
+async def iter_apps_filtered(session: AsyncSession, **filters) -> tuple[list[Application], dict[int, dict]]:
+    """按筛选条件取全量应用，供导出使用。"""
+    rows = await session.execute(_app_filter_query(**filters).order_by(Application.id.asc()))
     apps = list(rows.scalars())
-    # 关联主机明细一次查出，Python 侧聚合：主机数 + 资源汇总 + IP 清单（列表展示用）
+    return apps, await _app_host_stats(session, apps)
+
+
+async def _app_host_stats(session: AsyncSession, apps: list[Application]) -> dict[int, dict]:
+    """一次查询聚合应用关联主机数量与 IP 清单。"""
     host_stats: dict[int, dict] = {}
     if apps:
         detail_rows = await session.execute(
-            select(AppHost.app_id, Host.ip, Host.cpu_cores, Host.memory_gb, Host.disk_gb)
+            select(AppHost.app_id, Host.ip)
             .join(Host, Host.id == AppHost.host_id)
             .where(AppHost.app_id.in_([a.id for a in apps]))
             .order_by(AppHost.app_id, Host.id)
         )
-        for app_id, ip, cpu, mem, disk in detail_rows:
-            s = host_stats.setdefault(app_id, {
-                "host_count": 0, "cpu_total": 0, "memory_total": 0, "disk_total": 0, "host_ips": [],
-            })
-            s["host_count"] += 1
-            s["cpu_total"] += cpu or 0
-            s["memory_total"] += mem or 0
-            s["disk_total"] += disk or 0
-            s["host_ips"].append(ip)
-    return apps, total, host_stats
+        for app_id, ip in detail_rows:
+            stats = host_stats.setdefault(app_id, {"host_count": 0, "host_ips": []})
+            stats["host_count"] += 1
+            stats["host_ips"].append(ip)
+    return host_stats
 
 
 async def _ensure_app_name_unique(session: AsyncSession, name: str, exclude_id: int | None = None) -> None:
@@ -276,17 +323,8 @@ async def update_app(
 
 
 async def delete_app(session: AsyncSession, app_id: int) -> Application:
-    """删除应用；被进行中工单引用时拒绝（42201），关联关系级联清理。"""
+    """删除应用；关联关系级联清理。V2 模型工单不引用应用，无需工单侧删除保护。"""
     app = await get_app_or_404(session, app_id)
-    ticket_nos = (
-        await session.execute(
-            select(Ticket.ticket_no).where(
-                Ticket.app_id == app_id, Ticket.status.in_(ACTIVE_TICKET_STATUSES)
-            )
-        )
-    ).scalars().all()
-    if ticket_nos:
-        raise Errors.rejected(f"应用被进行中工单引用，无法删除：{'、'.join(ticket_nos[:5])}")
     for link in (
         await session.execute(select(AppHost).where(AppHost.app_id == app_id))
     ).scalars():

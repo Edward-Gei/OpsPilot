@@ -92,7 +92,7 @@ export function listRoles() {
   return request<{ items: RoleItem[] }>({ url: '/roles', method: 'get' })
 }
 
-/** 轻量角色选项（template:read 即可）：模板编辑器审批节点/可见范围/收件人下拉用 */
+/** 轻量角色选项（template:read 即可）：流程步骤审批/可见范围/收件人下拉用 */
 export function listRoleOptions() {
   return request<{ items: { id: number; name: string }[] }>({ url: '/roles/options', method: 'get' })
 }
@@ -129,23 +129,4 @@ export function getConfigs() {
 
 export function updateConfigs(configs: Record<string, unknown>) {
   return request<null>({ url: '/system/configs', method: 'put', data: { configs } })
-}
-
-// ---------- Ansible 作业主机（M5，系统配置键 ansible.job_host） ----------
-
-/** 作业主机配置：Ansible 控制节点，null = 未配置（playbook 步骤将无法执行） */
-export interface JobHostConfig {
-  ip: string
-  port: number
-  credential_id: number | null
-  workdir: string
-}
-
-/** 连通性测试：SSH 建连 + ansible --version；传当前表单值，保存前可预测（04-API §11） */
-export function testJobHost(data: { ip: string; port: number; credential_id: number }) {
-  return request<{ success: boolean; message: string }>({
-    url: '/system/ansible-job-host/test',
-    method: 'post',
-    data,
-  })
 }

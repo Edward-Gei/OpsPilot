@@ -1,20 +1,24 @@
 """认证路由（04-API设计 §2）：登录三态 / MFA / 令牌 / 改密 / SSO。"""
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
+from sqlalchemy import select
 
 from app.auth_providers import oidc
 from app import audit
 from app.core.deps import CurrentUser, DbSession, get_client_ip, get_current_user
 from app.core.response import BizError, Errors, ok
 from app.core.security import SCOPE_MFA, SCOPE_PWD_CHANGE
+from app.models.notify import NotifyChannel
 from app.schemas.auth import (
     ChangePasswordRequest,
+    ForgotPasswordRequest,
     LoginRequest,
     LogoutRequest,
     MfaBindRequest,
     MfaTokenRequest,
     MfaVerifyRequest,
     RefreshRequest,
+    ResetPasswordRequest,
     SsoExchangeRequest,
     UpdateProfileRequest,
 )
@@ -28,6 +32,33 @@ async def login(req: LoginRequest, request: Request, session: DbSession) -> dict
     """登录入口：成功返回令牌对；40103/40104/40105 三态经全局异常处理器返回。"""
     tokens = await auth_service.login(session, req.username, req.password, get_client_ip(request))
     return ok(tokens)
+
+
+@router.post("/forgot-password", summary="申请密码重置")
+async def forgot_password(req: ForgotPasswordRequest, request: Request, session: DbSession) -> dict:
+    """公开申请接口：所有分支统一返回，防止账号枚举。"""
+    try:
+        await auth_service.forgot_password(session, req.email, get_client_ip(request))
+    except Exception:  # noqa: BLE001 申请接口不得因内部细节暴露分支
+        audit.log(module="auth", action="pwd_reset_failed", result="failed",
+                  source_ip=get_client_ip(request), detail={"reason": "internal_error"})
+    return ok({"message": auth_service.RESET_MESSAGE})
+
+
+@router.get("/reset-password/validate", summary="预校验密码重置令牌")
+async def validate_reset_password(token: str) -> dict:
+    return ok(await auth_service.validate_reset_token(token))
+
+
+@router.post("/reset-password", summary="提交密码重置")
+async def reset_password(req: ResetPasswordRequest, request: Request, session: DbSession) -> dict:
+    await auth_service.reset_password(session, req.token, req.new_password, get_client_ip(request))
+    return ok(message="密码重置成功，请使用新密码登录。")
+
+
+@router.get("/password-policy", summary="公开密码策略")
+async def password_policy(session: DbSession) -> dict:
+    return ok(await auth_service.password_policy(session))
 
 
 @router.post("/refresh", summary="刷新令牌")
@@ -159,4 +190,17 @@ async def sso_exchange(req: SsoExchangeRequest, request: Request, session: DbSes
 async def sso_options(session: DbSession) -> dict:
     """返回已启用的 SSO 方式（登录页据此显示/隐藏 SSO 按钮）。"""
     oidc_cfg = await config_service.get_config(session, "oidc.config")
-    return ok({"oidc_enabled": bool(oidc_cfg and oidc_cfg.get("authorize_endpoint"))})
+    email_channel = (await session.execute(
+        select(NotifyChannel).where(NotifyChannel.type == "email")
+    )).scalar_one_or_none()
+    email_cfg = email_channel.config if email_channel else None
+    smtp_configured = bool(
+        email_channel
+        and email_channel.enabled
+        and email_cfg
+        and email_cfg.get("host")
+        and (email_cfg.get("from_addr") or email_cfg.get("username"))
+    )
+    oidc_enabled = bool(oidc_cfg and oidc_cfg.get("authorize_endpoint"))
+    return ok({"oidc_enabled": oidc_enabled, "sso_enabled": oidc_enabled,
+               "forgot_password_enabled": smtp_configured})

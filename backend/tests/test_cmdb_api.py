@@ -1,14 +1,21 @@
 """M2 CMDB 接口测试：主机/应用 CRUD、权限矩阵、IP 冲突、删除保护、suggest、Excel。"""
+from datetime import datetime, timedelta
 from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
+from sqlalchemy import update
 
+from app.models.cmdb import Application, Host
 from tests.conftest import auth_header, login_for_tokens
 
 
 HOST_PAYLOAD = {
     "hostname": "web-01",
     "ip": "10.0.0.1",
+    "public_ip": "203.0.113.1",
+    "project": "tradingkey",
+    "ri": "ri-cn-001",
+    "host_series": "C7",
     "platform": "阿里云",
     "region": "华东1",
     "os": "CentOS 7.9",
@@ -32,10 +39,13 @@ async def _create_host(client, headers, **overrides) -> int:
 
 
 def _make_xlsx(rows: list[list]) -> bytes:
-    """测试辅助：构造导入用 xlsx（首行表头随意，导入从第 2 行读；列序含资源配置四列）。"""
+    """测试辅助：构造导入用 xlsx（首行表头随意，导入从第 2 行读）。"""
     wb = Workbook()
     ws = wb.active
-    ws.append(["主机名", "IP", "平台", "区域", "操作系统", "CPU", "内存", "磁盘", "环境", "状态", "端口", "说明"])
+    ws.append([
+        "主机名", "内网IP地址", "公网IP地址", "项目", "RI", "主机系列", "平台", "区域",
+        "操作系统", "CPU", "内存", "磁盘", "环境", "状态", "端口", "说明",
+    ])
     for row in rows:
         ws.append(row)
     buf = BytesIO()
@@ -44,6 +54,33 @@ def _make_xlsx(rows: list[list]) -> bytes:
 
 
 class TestHostCrud:
+    async def test_host_list_sorts_by_created_at(self, client, db_factory):
+        """主机列表按创建时间正反序排序。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        first_id = await _create_host(client, headers, ip="10.0.1.1")
+        second_id = await _create_host(client, headers, ip="10.0.1.2")
+        created_at = datetime(2026, 1, 1, 8, 0, 0)
+        async with db_factory() as session:
+            await session.execute(
+                update(Host).where(Host.id == first_id).values(created_at=created_at)
+            )
+            await session.execute(
+                update(Host)
+                .where(Host.id == second_id)
+                .values(created_at=created_at + timedelta(days=1))
+            )
+            await session.commit()
+
+        resp = await client.get(
+            "/api/v1/cmdb/hosts", params={"sort_by": "created_at", "sort_order": "asc"}, headers=headers
+        )
+        assert [item["id"] for item in resp.json()["data"]["items"]] == [first_id, second_id]
+
+        resp = await client.get(
+            "/api/v1/cmdb/hosts", params={"sort_by": "created_at", "sort_order": "desc"}, headers=headers
+        )
+        assert [item["id"] for item in resp.json()["data"]["items"]] == [second_id, first_id]
+
     async def test_host_crud_and_ip_conflict(self, client):
         """主机增查改删全链路 + IP 冲突 40901。"""
         tokens = await login_for_tokens(client, "ops1")
@@ -76,8 +113,9 @@ class TestHostCrud:
         assert (detail["cpu_cores"], detail["memory_gb"], detail["disk_gb"]) == (4, 8, 100)
         assert detail["apps"] == []
 
-        # 删除后 404
-        resp = await client.delete(f"/api/v1/cmdb/hosts/{host_id}", headers=headers)
+        # 删除属于独立高风险权限，由 admin 执行
+        admin_headers = auth_header(await login_for_tokens(client, "admin"))
+        resp = await client.delete(f"/api/v1/cmdb/hosts/{host_id}", headers=admin_headers)
         assert resp.json()["code"] == 0
         resp = await client.get(f"/api/v1/cmdb/hosts/{host_id}", headers=headers)
         assert resp.json()["code"] == 40401
@@ -92,13 +130,47 @@ class TestHostCrud:
         )
         assert resp.json()["code"] == 40001
 
+    async def test_host_extended_fields_and_validation(self, client):
+        """项目、RI、主机系列和公网 IP 可维护，项目默认值与校验生效。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        host_id = await _create_host(client, headers)
+        detail = (await client.get(f"/api/v1/cmdb/hosts/{host_id}", headers=headers)).json()["data"]
+        assert (detail["project"], detail["ri"], detail["host_series"], detail["public_ip"]) == (
+            "tradingkey", "ri-cn-001", "C7", "203.0.113.1",
+        )
+
+        edited = {
+            **HOST_PAYLOAD,
+            "project": "mitrade",
+            "ri": "ri-cn-002",
+            "host_series": "C8",
+            "public_ip": "2001:db8::1",
+        }
+        assert (await client.put(f"/api/v1/cmdb/hosts/{host_id}", json=edited, headers=headers)).json()["code"] == 0
+        detail = (await client.get(f"/api/v1/cmdb/hosts/{host_id}", headers=headers)).json()["data"]
+        assert (detail["project"], detail["ri"], detail["host_series"], detail["public_ip"]) == (
+            "mitrade", "ri-cn-002", "C8", "2001:db8::1",
+        )
+
+        default_payload = {**HOST_PAYLOAD, "ip": "10.0.0.8"}
+        default_payload.pop("project")
+        default_id = (await client.post("/api/v1/cmdb/hosts", json=default_payload, headers=headers)).json()["data"]["id"]
+        default_detail = (await client.get(f"/api/v1/cmdb/hosts/{default_id}", headers=headers)).json()["data"]
+        assert default_detail["project"] == "mitrade"
+
+        for payload in (
+            {**HOST_PAYLOAD, "ip": "10.0.0.9", "project": "invalid"},
+            {**HOST_PAYLOAD, "ip": "10.0.0.10", "public_ip": "not-an-ip"},
+        ):
+            assert (await client.post("/api/v1/cmdb/hosts", json=payload, headers=headers)).json()["code"] == 40001
+
     async def test_suggest(self, client):
-        """platform/region 自动补全去重 + 前缀过滤。"""
+        """平台和主机系列自动补全去重 + 前缀过滤。"""
         tokens = await login_for_tokens(client, "ops1")
         headers = auth_header(tokens)
-        await _create_host(client, headers, ip="10.1.0.1", platform="阿里云")
-        await _create_host(client, headers, ip="10.1.0.2", platform="腾讯云")
-        await _create_host(client, headers, ip="10.1.0.3", platform="阿里云")
+        await _create_host(client, headers, ip="10.1.0.1", platform="阿里云", host_series="C7")
+        await _create_host(client, headers, ip="10.1.0.2", platform="腾讯云", host_series="C8")
+        await _create_host(client, headers, ip="10.1.0.3", platform="阿里云", host_series="C7")
 
         resp = await client.get(
             "/api/v1/cmdb/hosts/suggest", params={"field": "platform"}, headers=headers
@@ -111,6 +183,11 @@ class TestHostCrud:
             "/api/v1/cmdb/hosts/suggest", params={"field": "platform", "q": "腾"}, headers=headers
         )
         assert resp.json()["data"]["items"] == ["腾讯云"]
+
+        resp = await client.get(
+            "/api/v1/cmdb/hosts/suggest", params={"field": "host_series", "q": "C7"}, headers=headers
+        )
+        assert resp.json()["data"]["items"] == ["C7"]
 
         # 非法 field -> 40001
         resp = await client.get(
@@ -155,6 +232,69 @@ class TestHostCrud:
 
 
 class TestAppCrud:
+    async def test_app_list_sorts_by_language(self, client):
+        """应用列表按语言正反序排序。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        first = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "Go 服务", "language": "Go", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+        second = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "Java 服务", "language": "Java", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+        first_id = first.json()["data"]["id"]
+        second_id = second.json()["data"]["id"]
+
+        resp = await client.get(
+            "/api/v1/cmdb/apps", params={"sort_by": "language", "sort_order": "asc"}, headers=headers
+        )
+        assert [item["id"] for item in resp.json()["data"]["items"]] == [first_id, second_id]
+
+        resp = await client.get(
+            "/api/v1/cmdb/apps", params={"sort_by": "language", "sort_order": "desc"}, headers=headers
+        )
+        assert [item["id"] for item in resp.json()["data"]["items"]] == [second_id, first_id]
+
+    async def test_app_list_sorts_by_created_at(self, client, db_factory):
+        """应用列表按创建时间正反序排序。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        first = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "先创建应用", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+        second = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "后创建应用", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+        first_id = first.json()["data"]["id"]
+        second_id = second.json()["data"]["id"]
+        created_at = datetime(2026, 1, 1, 8, 0, 0)
+        async with db_factory() as session:
+            await session.execute(
+                update(Application).where(Application.id == first_id).values(created_at=created_at)
+            )
+            await session.execute(
+                update(Application)
+                .where(Application.id == second_id)
+                .values(created_at=created_at + timedelta(days=1))
+            )
+            await session.commit()
+
+        resp = await client.get(
+            "/api/v1/cmdb/apps", params={"sort_by": "created_at", "sort_order": "asc"}, headers=headers
+        )
+        assert [item["id"] for item in resp.json()["data"]["items"]] == [first_id, second_id]
+
+        resp = await client.get(
+            "/api/v1/cmdb/apps", params={"sort_by": "created_at", "sort_order": "desc"}, headers=headers
+        )
+        assert [item["id"] for item in resp.json()["data"]["items"]] == [second_id, first_id]
+
     async def test_app_crud_with_hosts(self, client):
         """应用 CRUD + 多对多关联 + 名称唯一 + 主机详情反查。"""
         tokens = await login_for_tokens(client, "ops1")
@@ -180,16 +320,18 @@ class TestAppCrud:
         )
         assert resp.json()["code"] == 40901
 
-        # 列表含关联主机数、资源汇总（2 台 4C8G100G 求和）与 IP 清单
+        # 列表含关联主机数与 IP 清单，不返回资源汇总
         resp = await client.get("/api/v1/cmdb/apps", headers=headers)
         item = resp.json()["data"]["items"][0]
         assert item["host_count"] == 2
-        assert (item["cpu_total"], item["memory_total"], item["disk_total"]) == (8, 16, 200)
+        assert not {"cpu_total", "memory_total", "disk_total"} & item.keys()
         assert item["host_ips"] == ["10.2.0.1", "10.2.0.2"]
 
         # 详情含主机清单；主机详情反查应用
         resp = await client.get(f"/api/v1/cmdb/apps/{app_id}", headers=headers)
-        assert {h["id"] for h in resp.json()["data"]["hosts"]} == {h1, h2}
+        app_detail = resp.json()["data"]
+        assert not {"cpu_total", "memory_total", "disk_total"} & app_detail.keys()
+        assert {h["id"] for h in app_detail["hosts"]} == {h1, h2}
         resp = await client.get(f"/api/v1/cmdb/hosts/{h1}", headers=headers)
         assert resp.json()["data"]["apps"][0]["name"] == "订单服务"
 
@@ -212,6 +354,124 @@ class TestAppCrud:
             headers=headers,
         )
         assert resp.json()["code"] == 40001
+
+    async def test_app_project_type_default_update_and_filter(self, client):
+        """项目类型默认前端，支持更新和列表筛选，并拒绝枚举外的值。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        frontend = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "前端门户", "deploy_type": "docker", "project_type": "frontend", "host_ids": []},
+            headers=headers,
+        )
+        backend = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "订单后端", "deploy_type": "shell", "project_type": "backend", "host_ids": []},
+            headers=headers,
+        )
+        defaulted = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "默认应用", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+        frontend_id = frontend.json()["data"]["id"]
+        backend_id = backend.json()["data"]["id"]
+        defaulted_id = defaulted.json()["data"]["id"]
+
+        detail = await client.get(f"/api/v1/cmdb/apps/{defaulted_id}", headers=headers)
+        assert detail.json()["data"]["project_type"] == "frontend"
+
+        resp = await client.put(
+            f"/api/v1/cmdb/apps/{backend_id}",
+            json={"name": "订单后端", "deploy_type": "shell", "project_type": "frontend", "host_ids": []},
+            headers=headers,
+        )
+        assert resp.json()["code"] == 0
+        resp = await client.get(
+            "/api/v1/cmdb/apps", params={"project_type": "frontend"}, headers=headers
+        )
+        assert {item["id"] for item in resp.json()["data"]["items"]} == {
+            frontend_id, backend_id, defaulted_id,
+        }
+
+        resp = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "非法类型", "deploy_type": "shell", "project_type": "mobile", "host_ids": []},
+            headers=headers,
+        )
+        assert resp.json()["code"] == 40001
+
+    async def test_app_business_metadata_crud_defaults_and_filters(self, client):
+        """应用台账字段支持创建、更新、默认值、详情回显和组合筛选。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        created = await client.post(
+            "/api/v1/cmdb/apps",
+            json={
+                "name": "订单台账", "language": "Java", "deploy_type": "docker",
+                "project_type": "backend", "business_line": "tradingkey",
+                "system_name": "订单系统", "service_level": "一般服务",
+                "ops_owner": "运维甲", "dev_owner": "开发甲",
+                "repo_url": "https://git.example.com/order", "service_port": "8080",
+                "cpu_quota": "2 Core", "mem_quota": "4 GiB", "host_ids": [],
+            },
+            headers=headers,
+        )
+        assert created.json()["code"] == 0
+        app_id = created.json()["data"]["id"]
+
+        detail = (await client.get(f"/api/v1/cmdb/apps/{app_id}", headers=headers)).json()["data"]
+        assert {key: detail[key] for key in (
+            "business_line", "system_name", "service_level", "ops_owner", "dev_owner",
+            "repo_url", "service_port", "cpu_quota", "mem_quota",
+        )} == {
+            "business_line": "tradingkey", "system_name": "订单系统", "service_level": "一般服务",
+            "ops_owner": "运维甲", "dev_owner": "开发甲", "repo_url": "https://git.example.com/order",
+            "service_port": "8080", "cpu_quota": "2 Core", "mem_quota": "4 GiB",
+        }
+
+        defaulted = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "默认台账", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+        default_detail = (await client.get(
+            f"/api/v1/cmdb/apps/{defaulted.json()['data']['id']}", headers=headers,
+        )).json()["data"]
+        assert (default_detail["business_line"], default_detail["service_level"]) == ("mitrade", "核心服务")
+        assert all(default_detail[field] is None for field in (
+            "system_name", "ops_owner", "dev_owner", "repo_url", "service_port", "cpu_quota", "mem_quota",
+        ))
+
+        updated = await client.put(
+            f"/api/v1/cmdb/apps/{app_id}",
+            json={
+                "name": "订单台账", "language": "Go", "deploy_type": "k8s", "project_type": "backend",
+                "business_line": "tradingkey", "system_name": "订单系统", "service_level": "核心服务",
+                "ops_owner": "运维乙", "dev_owner": "开发乙", "repo_url": "https://git.example.com/order-v2",
+                "service_port": "9090", "cpu_quota": "4 Core", "mem_quota": "8 GiB", "host_ids": [],
+            },
+            headers=headers,
+        )
+        assert updated.json()["code"] == 0
+        detail = (await client.get(f"/api/v1/cmdb/apps/{app_id}", headers=headers)).json()["data"]
+        assert (detail["service_level"], detail["ops_owner"], detail["service_port"]) == ("核心服务", "运维乙", "9090")
+
+        filtered = await client.get(
+            "/api/v1/cmdb/apps",
+            params={"business_line": "tradingkey", "service_level": "核心服务"},
+            headers=headers,
+        )
+        assert [item["id"] for item in filtered.json()["data"]["items"]] == [app_id]
+
+    async def test_app_business_metadata_rejects_invalid_enums(self, client):
+        """业务线和服务级别拒绝未定义的枚举值。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        for field, value in (("business_line", "other"), ("service_level", "重要服务")):
+            resp = await client.post(
+                "/api/v1/cmdb/apps",
+                json={"name": f"非法{field}", "deploy_type": "shell", field: value, "host_ids": []},
+                headers=headers,
+            )
+            assert resp.json()["code"] == 40001
 
     async def test_app_only_prod_hosts(self, client):
         """应用仅可关联生产环境主机：非生产主机 -> 40001。"""
@@ -239,16 +499,17 @@ class TestAppCrud:
         )
         app_id = resp.json()["data"]["id"]
 
+        admin_headers = auth_header(await login_for_tokens(client, "admin"))
         # 主机被应用引用 -> 42201 且 message 指明引用方
-        resp = await client.delete(f"/api/v1/cmdb/hosts/{host_id}", headers=headers)
+        resp = await client.delete(f"/api/v1/cmdb/hosts/{host_id}", headers=admin_headers)
         body = resp.json()
         assert body["code"] == 42201
         assert "支付服务" in body["message"]
 
         # 删应用后主机可删
-        resp = await client.delete(f"/api/v1/cmdb/apps/{app_id}", headers=headers)
+        resp = await client.delete(f"/api/v1/cmdb/apps/{app_id}", headers=admin_headers)
         assert resp.json()["code"] == 0
-        resp = await client.delete(f"/api/v1/cmdb/hosts/{host_id}", headers=headers)
+        resp = await client.delete(f"/api/v1/cmdb/hosts/{host_id}", headers=admin_headers)
         assert resp.json()["code"] == 0
 
 
@@ -263,7 +524,9 @@ class TestHostExcel:
         assert "spreadsheetml" in resp.headers["content-type"]
         ws = load_workbook(BytesIO(resp.content)).active
         assert ws.cell(row=1, column=1).value == "主机名*"
-        assert ws.cell(row=1, column=2).value == "IP地址*"
+        assert [ws.cell(row=1, column=idx).value for idx in range(1, 7)] == [
+            "主机名*", "内网IP地址*", "公网IP地址", "项目", "RI", "主机系列",
+        ]
 
     async def test_import_and_failed_rows(self, client):
         """导入：成功行入库、失败行返回明细（行号+原因）。"""
@@ -272,11 +535,14 @@ class TestHostExcel:
         await _create_host(client, headers, ip="10.4.0.9", hostname="exists")
 
         content = _make_xlsx([
-            ["imp-1", "10.4.0.1", "华为云", "华北", "Ubuntu 22.04", 8, 16, 200, "prod", "online", 22, ""],
-            ["imp-2", "bad-ip", "华为云", "华北", None, None, None, None, "prod", "online", 22, ""],   # IP 非法
-            ["imp-3", "10.4.0.3", None, None, None, None, None, None, "wrong-env", None, None, ""],   # 环境非法
-            ["imp-4", "10.4.0.9", None, None, None, None, None, None, "demo", None, None, ""],          # 已存在（未开 upsert）
-            ["imp-5", "10.4.0.1", None, None, None, None, None, None, "demo", None, None, ""],          # 文件内重复
+            ["imp-1", "10.4.0.1", "203.0.113.11", "tradingkey", "ri-1", "C7", "华为云", "华北", "Ubuntu 22.04", 8, 16, 200, "prod", "online", 22, ""],
+            ["imp-default", "10.4.0.8", None, None, None, None, None, None, None, None, None, None, "prod", "online", 22, ""],
+            ["imp-2", "bad-ip", None, None, None, None, "华为云", "华北", None, None, None, None, "prod", "online", 22, ""],
+            ["imp-3", "10.4.0.3", None, None, None, None, None, None, None, None, None, None, "wrong-env", None, None, ""],
+            ["imp-4", "10.4.0.9", None, None, None, None, None, None, None, None, None, None, "demo", None, None, ""],
+            ["imp-5", "10.4.0.1", None, None, None, None, None, None, None, None, None, None, "demo", None, None, ""],
+            ["imp-6", "10.4.0.6", None, "invalid", None, None, None, None, None, None, None, None, "prod", None, None, ""],
+            ["imp-7", "10.4.0.7", "not-an-ip", None, None, None, None, None, None, None, None, None, "prod", None, None, ""],
         ])
         resp = await client.post(
             "/api/v1/cmdb/hosts/import",
@@ -286,13 +552,16 @@ class TestHostExcel:
         )
         body = resp.json()
         assert body["code"] == 0
-        assert body["data"]["success_count"] == 1
+        assert body["data"]["success_count"] == 2
         failed = {r["row"]: r["reason"] for r in body["data"]["failed_rows"]}
-        assert set(failed) == {3, 4, 5, 6}
+        assert set(failed) == {4, 5, 6, 7, 8, 9}
+
+        resp = await client.get("/api/v1/cmdb/hosts", params={"keyword": "10.4.0.8"}, headers=headers)
+        assert resp.json()["data"]["items"][0]["project"] == "mitrade"
 
         # upsert 模式：已存在 IP 被更新（含资源配置字段）
         content = _make_xlsx([
-            ["exists-new", "10.4.0.9", None, None, "Debian 12", 2, 4, 50, "stage", "offline", 2222, ""],
+            ["exists-new", "10.4.0.9", "203.0.113.19", "mitrade", "ri-updated", "C8", None, None, "Debian 12", 2, 4, 50, "stage", "offline", 2222, ""],
         ])
         resp = await client.post(
             "/api/v1/cmdb/hosts/import?upsert=true",
@@ -308,13 +577,19 @@ class TestHostExcel:
         assert item["ssh_port"] == 2222
         assert item["os"] == "Debian 12"
         assert (item["cpu_cores"], item["memory_gb"], item["disk_gb"]) == (2, 4, 50)
+        assert (item["public_ip"], item["project"], item["ri"], item["host_series"]) == (
+            "203.0.113.19", "mitrade", "ri-updated", "C8",
+        )
 
     async def test_export_with_filter(self, client):
         """导出：按筛选条件输出 xlsx，行数与筛选结果一致。"""
         tokens = await login_for_tokens(client, "ops1")
         headers = auth_header(tokens)
         await _create_host(client, headers, ip="10.5.0.1", environment="prod")
-        await _create_host(client, headers, ip="10.5.0.2", environment="demo")
+        await _create_host(
+            client, headers, ip="10.5.0.2", environment="demo", public_ip="203.0.113.52",
+            project="tradingkey", ri="ri-export", host_series="C9",
+        )
 
         resp = await client.get(
             "/api/v1/cmdb/hosts/export", params={"environment": "demo"}, headers=headers
@@ -324,3 +599,88 @@ class TestHostExcel:
         rows = list(ws.iter_rows(min_row=2, values_only=True))
         assert len(rows) == 1
         assert rows[0][1] == "10.5.0.2"
+        assert rows[0][2:6] == ("203.0.113.52", "tradingkey", "ri-export", "C9")
+
+
+class TestAppExcel:
+    async def test_export_with_business_metadata_filters_and_columns(self, client):
+        """应用导出按新增筛选取数，并包含全部新增台账列。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        await client.post(
+            "/api/v1/cmdb/apps",
+            json={
+                "name": "交易台账", "deploy_type": "docker", "business_line": "tradingkey",
+                "system_name": "交易系统", "service_level": "一般服务", "ops_owner": "运维甲",
+                "dev_owner": "开发甲", "repo_url": "https://git.example.com/trade", "service_port": "8080",
+                "cpu_quota": "2 Core", "mem_quota": "4 GiB", "host_ids": [],
+            },
+            headers=headers,
+        )
+        await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "默认导出", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+
+        resp = await client.get(
+            "/api/v1/cmdb/apps/export",
+            params={"business_line": "tradingkey", "service_level": "一般服务"},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        ws = load_workbook(BytesIO(resp.content)).active
+        headers_row = [cell.value for cell in ws[1]]
+        assert {
+            "关联主机数", "主机 IP", "所属业务线", "所属系统", "服务级别", "运维负责人",
+            "开发负责人", "代码仓库地址", "服务端口", "CPU 配额", "MEM 配额",
+        } <= set(headers_row)
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        assert len(rows) == 1
+        assert rows[0][headers_row.index("代码仓库地址")] == "https://git.example.com/trade"
+
+    async def test_export_with_project_type_filter(self, client):
+        """应用导出按项目类型筛选，并包含项目类型列。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "前端应用", "deploy_type": "docker", "project_type": "frontend", "host_ids": []},
+            headers=headers,
+        )
+        await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "后端应用", "deploy_type": "shell", "project_type": "backend", "host_ids": []},
+            headers=headers,
+        )
+
+        resp = await client.get(
+            "/api/v1/cmdb/apps/export", params={"project_type": "backend"}, headers=headers
+        )
+        assert resp.status_code == 200
+        ws = load_workbook(BytesIO(resp.content)).active
+        assert [cell.value for cell in ws[1]][:4] == ["应用名", "开发语言", "部署方式", "项目类型"]
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        assert len(rows) == 1
+        assert rows[0][:4] == ("后端应用", None, "shell", "后端")
+
+    async def test_export_with_filter(self, client):
+        """应用导出仅包含当前部署方式筛选结果。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "Docker 应用", "language": "Go", "deploy_type": "docker", "host_ids": []},
+            headers=headers,
+        )
+        await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "Shell 应用", "language": "Python", "deploy_type": "shell", "host_ids": []},
+            headers=headers,
+        )
+
+        resp = await client.get(
+            "/api/v1/cmdb/apps/export", params={"deploy_type": "docker"}, headers=headers
+        )
+        assert resp.status_code == 200
+        ws = load_workbook(BytesIO(resp.content)).active
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        assert len(rows) == 1
+        assert rows[0][0] == "Docker 应用"

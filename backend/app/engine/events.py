@@ -1,7 +1,7 @@
 """执行事件总线：状态变化事件的发布 / 回放（04-API §7/§8）。
 
 事件模型：
-    {"seq": 递增序号, "kind": "execution_status|step_status|host_status", "data": {...}, "ts": ISO时间}
+    {"seq": 递增序号, "kind": "execution_status|step_status", "data": {...}, "ts": ISO时间}
 
 三条通道：
 - Redis INCR `ops:event:seq:{eid}` 生成单调递增 seq（WS/长轮询断线补发凭据）；
@@ -23,7 +23,6 @@ _EVENT_TTL = 3 * 24 * 3600
 
 KIND_EXECUTION = "execution_status"
 KIND_STEP = "step_status"
-KIND_HOST = "host_status"
 
 
 async def publish_event(execution_id: int, kind: str, data: dict) -> int:

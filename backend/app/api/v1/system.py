@@ -7,10 +7,8 @@ from fastapi import APIRouter, Depends, Request
 from app import audit
 from app.core.deps import DbSession, get_client_ip, require_perm
 from app.core.response import ok
-from app.engine.ansible_runner import JobHostError, test_job_host
 from app.models.auth import User
-from app.models.job import Credential
-from app.schemas.rbac import ConfigUpdateRequest, JobHostTestRequest
+from app.schemas.rbac import ConfigUpdateRequest
 from app.services import config_service
 
 router = APIRouter(prefix="/system", tags=["系统配置"])
@@ -64,23 +62,3 @@ async def update_configs(
               actor_name=actor.username, source_ip=get_client_ip(request),
               detail={"keys": sorted(req.configs.keys())})
     return ok()
-
-
-@router.post("/ansible-job-host/test", summary="作业主机连通性测试")
-async def ansible_job_host_test(
-    req: JobHostTestRequest,
-    session: DbSession,
-    _: User = Depends(require_perm("system:config")),
-) -> dict:
-    """SSH 建连 + `ansible --version` 探测（04-API §11）；同步返回成败与原因。
-
-    接受当前表单值（非已保存配置），支持保存前预测；失败不抛异常，
-    前端按 success 字段展示结果。"""
-    credential = await session.get(Credential, req.credential_id)
-    if credential is None:
-        return ok({"success": False, "message": "凭据不存在或已删除"})
-    try:
-        version = await test_job_host({"ip": req.ip, "port": req.port}, credential)
-    except JobHostError as exc:
-        return ok({"success": False, "message": str(exc)})
-    return ok({"success": True, "message": version})

@@ -1,198 +1,102 @@
-"""工单模板路由（04-API设计 §5，V2）：template:read / template:write 权限点控制。
+"""工单模板 API；页面维护业务入口、参数契约和一个流程引用。"""
 
-模板管理负责工单全部规则配置：基本信息/目标应用/步骤编排（内嵌脚本）/执行策略/
-审批规则/通知规则/权限范围/版本。规则任一变更自动升版（TPL-06）。
-"""
 from fastapi import APIRouter, Depends, Query, Request
 
 from app import audit
 from app.core.deps import DbSession, get_client_ip, require_perm
-from app.core.response import ok
+from app.core.response import BizError, Errors, ok
 from app.models.auth import User
-from app.schemas.job import TemplateStatusRequest, TemplateUpsertRequest
-from app.services import template_service
+from app.schemas.ticket_template import TicketTemplateStatusRequest, TicketTemplateUpsertRequest
+from app.services import rbac_service, template_service
 
 router = APIRouter(prefix="/templates", tags=["工单模板"])
 
 
-def _tpl_brief(t) -> dict:
-    """模板主表统一序列化（列表用，不含步骤/节点明细）。"""
-    return {
-        "id": t.id,
-        "name": t.name,
-        "type": t.type,
-        "description": t.description,
-        "app_id": t.app_id,
-        "approval_enabled": t.approval_enabled,
-        "status": t.status,
-        "current_version": t.current_version,
+def _brief(t, credential_refs: list[dict] | None = None) -> dict:
+    data = {
+        "id": t.id, "name": t.name, "type": t.type, "description": t.description,
+        "job_host_id": t.job_host_id, "process_template_id": t.process_template_id,
+        "params_schema": t.params_schema or [], "generator_script": t.generator_script,
+        "generator_timeout": t.generator_timeout,
+        "status": t.status, "allow_withdraw": t.allow_withdraw,
+        "notify_rules": t.notify_rules or [], "visible_role_ids": t.visible_role_ids or [],
         "created_at": t.created_at.isoformat() if t.created_at else None,
         "updated_at": t.updated_at.isoformat() if t.updated_at else None,
     }
-
-
-def _step_row(s) -> dict:
-    """模板步骤序列化。"""
-    return {
-        "step_order": s.step_order,
-        "name": s.name,
-        "script_type": s.script_type,
-        "content": s.content,
-        "params_schema": s.params_schema or [],
-        "credential_id": s.credential_id,
-        "timeout": s.timeout,
-    }
-
-
-def _node_row(n) -> dict:
-    """审批节点序列化。"""
-    return {"node_order": n.node_order, "role_id": n.role_id, "approve_mode": n.approve_mode}
-
-
-def _version_brief(v, with_snapshot: bool = False) -> dict:
-    """版本行序列化；with_snapshot=True 时附全量配置快照。"""
-    data = {
-        "id": v.id,
-        "version": v.version,
-        "changelog": v.changelog,
-        "created_by": v.created_by,
-        "created_at": v.created_at.isoformat() if v.created_at else None,
-    }
-    if with_snapshot:
-        data["snapshot"] = v.snapshot or {}
+    if credential_refs is not None:
+        data["credential_refs"] = credential_refs
     return data
 
 
-@router.get("", summary="模板列表")
-async def list_templates(
-    session: DbSession,
-    _: User = Depends(require_perm("template:read")),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    keyword: str | None = None,
-    type: str | None = Query(None, description="release | change | ops | other"),  # noqa: A002
-    status: str | None = Query(None, description="enabled | disabled"),
-) -> dict:
-    """分页查模板（keyword 模糊匹配名称）。"""
-    tpls, total = await template_service.list_templates(
+async def _can_view_secret_refs(session: DbSession, actor: User) -> bool:
+    return "secret:read" in await rbac_service.get_user_perms(session, actor.id)
+
+
+@router.get("")
+async def list_templates(session: DbSession, actor: User = Depends(require_perm("template:read")),
+                         page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+                         keyword: str | None = None, type: str | None = None, status: str | None = None):
+    rows, total = await template_service.list_templates(
         session, page=page, page_size=page_size, keyword=keyword, type_=type, status=status
     )
-    return ok({"items": [_tpl_brief(t) for t in tpls], "total": total,
-               "page": page, "page_size": page_size})
+    can_view_refs = await _can_view_secret_refs(session, actor)
+    items = [
+        _brief(t, await template_service.credential_ref_metadata(session, t.credential_refs or []))
+        if can_view_refs else _brief(t)
+        for t in rows
+    ]
+    return ok({"items": items, "total": total, "page": page, "page_size": page_size})
 
 
-@router.post("", summary="新建模板")
-async def create_template(
-    req: TemplateUpsertRequest,
-    request: Request,
-    session: DbSession,
-    actor: User = Depends(require_perm("template:write")),
-) -> dict:
-    """新建模板（全量配置）并生成 v1 版本；名称冲突 40901。"""
-    tpl = await template_service.create_template(
-        session, created_by=actor.id, data=req.model_dump()
-    )
-    audit.log(module="job", action="template.create", actor_id=actor.id,
-              actor_name=actor.username, source_ip=get_client_ip(request),
-              target_type="template", target_id=str(tpl.id), target_name=tpl.name,
-              detail={"type": tpl.type, "version": 1, "steps": len(req.steps),
-                      "approval_enabled": req.approval_enabled})
+@router.post("")
+async def create_template(req: TicketTemplateUpsertRequest, request: Request, session: DbSession,
+                          actor: User = Depends(require_perm("template:write"))):
+    if req.credential_refs and not await _can_view_secret_refs(session, actor):
+        raise BizError(Errors.NO_PERM, "缺少权限: secret:read", 403)
+    tpl = await template_service.create_template(session, created_by=actor.id, data=req.model_dump())
+    audit.log(module="job", action="template.create", actor_id=actor.id, actor_name=actor.username,
+              source_ip=get_client_ip(request), target_type="template", target_id=str(tpl.id), target_name=tpl.name)
     return ok({"id": tpl.id})
 
 
-@router.get("/{template_id}", summary="模板详情（当前版本全量配置）")
-async def get_template(
-    template_id: int,
-    session: DbSession,
-    _: User = Depends(require_perm("template:read")),
-) -> dict:
-    """详情 = 主表全部规则 + 步骤 + 审批节点（当前生效配置）。"""
+@router.get("/{template_id}")
+async def get_template(template_id: int, session: DbSession, actor: User = Depends(require_perm("template:read"))):
     tpl = await template_service.get_template_or_404(session, template_id)
-    steps = await template_service.get_template_steps(session, template_id)
-    nodes = await template_service.get_template_nodes(session, template_id)
-    data = _tpl_brief(tpl)
-    data.update({
-        "exec_strategy": tpl.exec_strategy or {},
-        "allow_withdraw": tpl.allow_withdraw,
-        "allow_transfer": tpl.allow_transfer,
-        "allow_countersign": tpl.allow_countersign,
-        "notify_rules": tpl.notify_rules or [],
-        "visible_role_ids": tpl.visible_role_ids or [],
-        "steps": [_step_row(s) for s in steps],
-        "approval_nodes": [_node_row(n) for n in nodes],
-    })
+    process = await template_service.get_process_or_404(session, tpl.process_template_id)
+    data = _brief(
+        tpl,
+        await template_service.credential_ref_metadata(session, tpl.credential_refs or [])
+        if await _can_view_secret_refs(session, actor) else None,
+    )
+    data["process_template"] = {"id": process.id, "name": process.name, "status": process.status}
     return ok(data)
 
 
-@router.put("/{template_id}", summary="编辑模板")
-async def update_template(
-    template_id: int,
-    req: TemplateUpsertRequest,
-    request: Request,
-    session: DbSession,
-    actor: User = Depends(require_perm("template:write")),
-) -> dict:
-    """全量更新；规则任一变更自动升版，仅改名/说明不升版（TPL-06）。"""
-    tpl, bumped = await template_service.update_template(
-        session, template_id, updated_by=actor.id, data=req.model_dump()
-    )
-    audit.log(module="job", action="template.update", actor_id=actor.id,
-              actor_name=actor.username, source_ip=get_client_ip(request),
-              target_type="template", target_id=str(tpl.id), target_name=tpl.name,
-              detail={"type": tpl.type, "version_bumped": bumped,
-                      "current_version": tpl.current_version})
-    return ok({"current_version": tpl.current_version, "version_bumped": bumped})
+@router.put("/{template_id}")
+async def update_template(template_id: int, req: TicketTemplateUpsertRequest, request: Request,
+                          session: DbSession, actor: User = Depends(require_perm("template:write"))):
+    existing = await template_service.get_template_or_404(session, template_id)
+    if (req.credential_refs or existing.credential_refs) and not await _can_view_secret_refs(session, actor):
+        raise BizError(Errors.NO_PERM, "缺少权限: secret:read", 403)
+    tpl = await template_service.update_template(session, template_id, data=req.model_dump())
+    audit.log(module="job", action="template.update", actor_id=actor.id, actor_name=actor.username,
+              source_ip=get_client_ip(request), target_type="template", target_id=str(tpl.id), target_name=tpl.name)
+    return ok({"id": tpl.id})
 
 
-@router.put("/{template_id}/status", summary="启用/禁用模板")
-async def set_template_status(
-    template_id: int,
-    req: TemplateStatusRequest,
-    request: Request,
-    session: DbSession,
-    actor: User = Depends(require_perm("template:write")),
-) -> dict:
-    """禁用后不可被提交工单，不影响已提交工单（TPL-03）。"""
+@router.put("/{template_id}/status")
+async def set_template_status(template_id: int, req: TicketTemplateStatusRequest, request: Request,
+                              session: DbSession, actor: User = Depends(require_perm("template:write"))):
     tpl = await template_service.set_status(session, template_id, status=req.status)
-    audit.log(module="job", action=f"template.{req.status}", actor_id=actor.id,
-              actor_name=actor.username, source_ip=get_client_ip(request),
-              target_type="template", target_id=str(tpl.id), target_name=tpl.name)
+    audit.log(module="job", action=f"template.{req.status}", actor_id=actor.id, actor_name=actor.username,
+              source_ip=get_client_ip(request), target_type="template", target_id=str(tpl.id), target_name=tpl.name)
     return ok({"status": tpl.status})
 
 
-@router.delete("/{template_id}", summary="删除模板")
-async def delete_template(
-    template_id: int,
-    request: Request,
-    session: DbSession,
-    actor: User = Depends(require_perm("template:write")),
-) -> dict:
-    """删除模板（含步骤/节点/全部版本行）；被进行中工单引用时 42201。"""
+@router.delete("/{template_id}")
+async def delete_template(template_id: int, request: Request, session: DbSession,
+                          actor: User = Depends(require_perm("template:delete"))):
     tpl = await template_service.delete_template(session, template_id)
-    audit.log(module="job", action="template.delete", actor_id=actor.id,
-              actor_name=actor.username, source_ip=get_client_ip(request),
-              target_type="template", target_id=str(template_id), target_name=tpl.name)
-    return ok()
-
-
-@router.get("/{template_id}/versions", summary="版本历史")
-async def list_versions(
-    template_id: int,
-    session: DbSession,
-    _: User = Depends(require_perm("template:read")),
-) -> dict:
-    """版本列表（新版本在前，不含快照体）。"""
-    versions = await template_service.list_versions(session, template_id)
-    return ok({"items": [_version_brief(v) for v in versions]})
-
-
-@router.get("/{template_id}/versions/{version}", summary="历史版本快照")
-async def get_version(
-    template_id: int,
-    version: int,
-    session: DbSession,
-    _: User = Depends(require_perm("template:read")),
-) -> dict:
-    """查看指定历史版本的全量配置快照（只读）。"""
-    row = await template_service.get_version_row(session, template_id, version)
-    return ok(_version_brief(row, with_snapshot=True))
+    audit.log(module="job", action="template.delete", actor_id=actor.id, actor_name=actor.username,
+              source_ip=get_client_ip(request), target_type="template", target_id=str(template_id), target_name=tpl.name)
+    return ok({"id": template_id})

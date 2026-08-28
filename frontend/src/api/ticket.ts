@@ -5,9 +5,6 @@ import type { PageResult } from './system'
 
 /** 执行策略（配置在模板内，提交时快照到工单 TPL-04） */
 export interface ExecStrategy {
-  concurrency: number
-  batch_size: number
-  batch_pause: boolean
   timeout: number
   fail_fast: boolean
   kill_on_stop: boolean
@@ -15,7 +12,7 @@ export interface ExecStrategy {
 
 /** 默认执行策略工厂：模板编辑器初始值 */
 export function defaultExecStrategy(): ExecStrategy {
-  return { concurrency: 5, batch_size: 0, batch_pause: false, timeout: 600, fail_fast: true, kill_on_stop: false }
+  return { timeout: 600, fail_fast: true, kill_on_stop: false }
 }
 
 /** V2 九态状态机（M5）：approving→queued→running(可paused)→终态；rejected/cancelled/interrupted */
@@ -23,12 +20,20 @@ export type TicketStatus =
   | 'approving' | 'queued' | 'running' | 'paused' | 'success' | 'failed'
   | 'rejected' | 'cancelled' | 'interrupted'
 
-/** flow_snap 审批节点快照格式（免审为 []） */
-export interface FlowNodeSnap {
-  node: number
-  role_id: number
-  role_name: string
-  approve_mode: string
+/** 提交时固化的流程快照；审批角色绑定在具体步骤上。 */
+export interface ProcessSnapshot {
+  process_name?: string
+  params_schema?: FormParam[]
+  generator?: { script?: string | null; timeout?: number | null }
+  exec_strategy?: Partial<ExecStrategy>
+  steps: {
+    step_order: number
+    name: string
+    script_type: string
+    content: string
+    timeout: number
+    approval_role_id?: number | null
+  }[]
 }
 
 /** 工单列表/待办行 */
@@ -36,14 +41,15 @@ export interface TicketBrief {
   id: number
   ticket_no: string
   template_id: number
-  template_version: number
+  process_template_id?: number | null
+  process_name?: string | null
   type: string
   title: string
-  app_id: number
-  app_name: string | null
+  job_host_id: number
+  job_host_name: string | null
   status: TicketStatus
-  current_node: number
-  total_nodes: number
+  current_step: number
+  total_steps: number
   creator_id: number
   creator_name: string
   submitted_at: string | null
@@ -51,13 +57,18 @@ export interface TicketBrief {
   created_at: string | null
 }
 
-/** 提交时固化的主机快照行 */
-export interface TicketHostSnap {
-  host_id: number
-  hostname: string
+export interface TodoEvent {
+  seq: number
+  kind: 'todo.changed'
+}
+
+/** 提交时固化的作业主机快照（登录认证随关联凭据，快照不含账号信息） */
+export interface JobHostSnap {
+  id: number
+  name: string
   ip: string
-  environment: string
   ssh_port: number
+  workdir: string
 }
 
 /** 步骤快照（含脚本内容快照与生效参数） */
@@ -67,13 +78,14 @@ export interface TicketStepSnap {
   script_type: string
   content_snap: string
   params: Record<string, string>
-  credential_id: number
   timeout: number
+  approval_role_id?: number | null
+  approval_role_name?: string | null
 }
 
 /** 审批时间线行 */
 export interface ApprovalRecord {
-  node_order: number
+  step_order: number
   action: 'approve' | 'reject'
   comment: string | null
   approver_id: number
@@ -86,8 +98,6 @@ export interface ExecutionBrief {
   id: number
   status: string
   total_steps: number
-  total_hosts: number
-  triggered_by: string
   created_at: string | null
 }
 
@@ -95,12 +105,14 @@ export interface ExecutionBrief {
 export interface TicketDetail extends TicketBrief {
   params: Record<string, string>
   exec_strategy: Partial<ExecStrategy>
-  flow_snap: FlowNodeSnap[]
+  flow_snap: ProcessSnapshot
   allow_withdraw: boolean
-  hosts: TicketHostSnap[]
+  job_host: JobHostSnap | null
   steps: TicketStepSnap[]
   approvals: ApprovalRecord[]
   execution: ExecutionBrief | null
+  /** 提单时冻结的模板引用凭据（执行时按 credential_id 实时取密文） */
+  credential_refs?: { alias: string; credential_id: number; credential_name: string }[]
 }
 
 export interface TicketQuery {
@@ -108,7 +120,6 @@ export interface TicketQuery {
   page_size?: number
   status?: string
   creator_id?: number
-  app_id?: number
   keyword?: string
   start?: string
   end?: string
@@ -122,9 +133,10 @@ export interface UsableTemplate {
   name: string
   type: string
   description: string | null
-  app_id: number
-  approval_enabled: boolean
-  current_version: number
+  job_host_id: number
+  job_host_name?: string | null
+  process_template_id: number
+  process_name?: string
 }
 
 /** 提交表单参数行（汇总后，不含 fixed） */
@@ -134,30 +146,33 @@ export interface FormParam {
   default: string | null
   required: boolean
   description: string | null
+  input_type?: 'text' | 'enum'
+  options?: string[]
+  source?: 'user' | 'generated' | 'fixed'
 }
 
-/** 提交表单描述：汇总参数 + 主机/步骤/审批节点/策略只读预览 */
+/** 提交表单描述：汇总参数 + 作业主机/步骤前审批/策略只读预览 */
 export interface TemplateFormDesc {
   template: {
     id: number
     name: string
     type: string
     description: string | null
-    current_version: number
-    approval_enabled: boolean
+    process_template_id: number
+    process_name: string
     allow_withdraw: boolean
   }
   params: FormParam[]
-  app: { id: number; name: string }
-  hosts: TicketHostSnap[]
+  job_host: JobHostSnap | null
   steps: {
     step_order: number
     name: string
     script_type: string
-    credential_id: number
     timeout: number
+    approval_role_id?: number | null
+    approval_role_name?: string | null
   }[]
-  flow: FlowNodeSnap[]
+  generator?: { enabled: boolean; timeout?: number | null }
   exec_strategy: Partial<ExecStrategy>
 }
 
@@ -182,22 +197,41 @@ export function todoTickets(params: { page?: number; page_size?: number } = {}) 
   return request<PageResult<TicketBrief>>({ url: '/tickets/todo', method: 'get', params })
 }
 
+/** 待办角标事件长轮询（服务端最长挂起 30 秒）。 */
+export function pollTodoEvents(sinceSeq: number, signal?: AbortSignal) {
+  return request<{ events: TodoEvent[]; last_seq: number }>({
+    url: '/tickets/todo/events',
+    method: 'get',
+    params: { since_seq: sinceSeq },
+    timeout: 40000,
+    signal,
+    silentCancel: true,
+    silentTransportError: true,
+  })
+}
+
 export function getTicket(id: number) {
   return request<TicketDetail>({ url: `/tickets/${id}`, method: 'get' })
 }
 
 /** 提交工单：只填参数，标题=模板名；免审入队 queued，否则 approving（TICKET-01/M5） */
-export function createTicket(templateId: number, params: Record<string, string>) {
-  return request<{ id: number; ticket_no: string; status: TicketStatus; current_node: number }>({
+export function prepareTicket(templateId: number, params: Record<string, string>) {
+  return request<{ prepare_id: string; values: Record<string, string>; options: Record<string, string[]>; expires_at: string }>({
+    url: '/tickets/prepare', method: 'post', data: { template_id: templateId, params },
+  })
+}
+
+export function createTicket(templateId: number, params: Record<string, string>, prepareId?: string) {
+  return request<{ id: number; ticket_no: string; status: TicketStatus; current_step: number }>({
     url: '/tickets',
     method: 'post',
-    data: { template_id: templateId, params },
+    data: { template_id: templateId, params, prepare_id: prepareId },
   })
 }
 
 /** 审批：驳回时 comment 必填（后端 40001 校验） */
 export function approveTicket(id: number, action: 'approve' | 'reject', comment?: string) {
-  return request<{ status: TicketStatus; current_node: number }>({
+  return request<{ status: TicketStatus; current_step: number }>({
     url: `/tickets/${id}/approve`,
     method: 'post',
     data: { action, comment },

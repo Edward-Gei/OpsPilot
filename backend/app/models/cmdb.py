@@ -1,10 +1,10 @@
-"""CMDB 域模型：主机 / 应用 / 关联（03-数据库设计 §4）。"""
+"""CMDB 域模型：主机 / 应用 / 关联 / 作业主机（03-数据库设计 §4）。"""
 from datetime import datetime
 
-from sqlalchemy import Index, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import UBIGINT, Base, created_at_column, pk_column, updated_at_column
+from app.models.base import DT3, UBIGINT, Base, created_at_column, pk_column, updated_at_column
 
 
 class Host(Base):
@@ -21,6 +21,12 @@ class Host(Base):
     id: Mapped[int] = pk_column()
     hostname: Mapped[str] = mapped_column(String(128), nullable=False, comment="主机名")
     ip: Mapped[str] = mapped_column(String(45), unique=True, nullable=False, comment="管理 IP（兼容 IPv6 长度）")
+    project: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="mitrade", comment="项目：mitrade/tradingkey"
+    )
+    public_ip: Mapped[str | None] = mapped_column(String(45), comment="公网 IP（兼容 IPv6 长度）")
+    ri: Mapped[str | None] = mapped_column(String(64), comment="RI")
+    host_series: Mapped[str | None] = mapped_column(String(64), comment="主机系列，自由文本")
     platform: Mapped[str | None] = mapped_column(String(64), comment="平台，自由文本")
     region: Mapped[str | None] = mapped_column(String(64), comment="区域，自由文本")
     os: Mapped[str | None] = mapped_column(String(64), comment="操作系统，自由文本")
@@ -46,6 +52,24 @@ class Application(Base):
     description: Mapped[str | None] = mapped_column(String(255))
     language: Mapped[str | None] = mapped_column(String(32), comment="开发语言")
     deploy_type: Mapped[str] = mapped_column(String(16), nullable=False, comment="shell/docker/k8s")
+    project_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="frontend", server_default="frontend", comment="frontend/backend"
+    )
+    business_line: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="mitrade", server_default="mitrade",
+        comment="所属业务线：mitrade/tradingkey",
+    )
+    system_name: Mapped[str | None] = mapped_column(String(128), comment="所属系统")
+    service_level: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="核心服务", server_default="核心服务",
+        comment="服务级别：核心服务/一般服务",
+    )
+    ops_owner: Mapped[str | None] = mapped_column(String(64), comment="运维负责人")
+    dev_owner: Mapped[str | None] = mapped_column(String(64), comment="开发负责人")
+    repo_url: Mapped[str | None] = mapped_column(String(255), comment="代码仓库地址")
+    service_port: Mapped[str | None] = mapped_column(String(64), comment="服务端口")
+    cpu_quota: Mapped[str | None] = mapped_column(String(64), comment="CPU 配额")
+    mem_quota: Mapped[str | None] = mapped_column(String(64), comment="MEM 配额")
     created_by: Mapped[int | None] = mapped_column(UBIGINT)
     created_at: Mapped[datetime] = created_at_column()
     updated_at: Mapped[datetime] = updated_at_column()
@@ -65,3 +89,30 @@ class AppHost(Base):
     app_id: Mapped[int] = mapped_column(UBIGINT, nullable=False)
     host_id: Mapped[int] = mapped_column(UBIGINT, nullable=False)
     created_at: Mapped[datetime] = created_at_column()
+
+
+class JobHost(Base):
+    """作业主机（Jenkins agent）：替平台执行 Pipeline 步骤的通用执行节点；登录认证引用凭据管理（credential_id）。"""
+
+    __tablename__ = "job_host"
+    __table_args__ = (
+        UniqueConstraint("ip", "ssh_port", name="uk_job_host_ip_port"),
+        Index("idx_job_host_enabled", "enabled"),
+        Base.__table_args__,
+    )
+
+    id: Mapped[int] = pk_column()
+    name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, comment="作业主机名称")
+    ip: Mapped[str] = mapped_column(String(45), nullable=False, comment="IP 地址")
+    ssh_port: Mapped[int] = mapped_column(Integer, nullable=False, default=22, comment="SSH 端口")
+    credential_id: Mapped[int | None] = mapped_column(
+        UBIGINT, comment="关联凭据 credential.id（登录认证随凭据管理；API 层必填）"
+    )
+    workdir: Mapped[str] = mapped_column(String(255), nullable=False, default="/opt/opspilot/workspace", comment="工作目录")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="启用状态")
+    last_check_at: Mapped[datetime | None] = mapped_column(DT3, comment="最近连通性测试时间")
+    last_check_ok: Mapped[bool | None] = mapped_column(Boolean, comment="最近测试结果")
+    last_check_msg: Mapped[str | None] = mapped_column(String(255), comment="最近测试结果信息")
+    created_by: Mapped[int | None] = mapped_column(UBIGINT, comment="创建人 user.id")
+    created_at: Mapped[datetime] = created_at_column()
+    updated_at: Mapped[datetime] = updated_at_column()

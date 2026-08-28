@@ -8,6 +8,8 @@ import {
   CloudServerOutlined,
   DeleteOutlined,
   DownloadOutlined,
+  EditOutlined,
+  EyeOutlined,
   PlusOutlined,
   SearchOutlined,
   UploadOutlined,
@@ -18,6 +20,8 @@ import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 const canWrite = userStore.hasPerm('cmdb:write')
+const canDelete = userStore.hasPerm('cmdb:delete')
+const canImport = userStore.hasPerm('cmdb:import')
 
 // 环境/状态彩色标签（与 M1 列表标签风格一致；环境按产品约定保留英文原值）
 const envText: Record<string, { text: string; color: string }> = {
@@ -55,12 +59,18 @@ const query = reactive({
   region: undefined as string | undefined,
   environment: undefined as string | undefined,
   status: undefined as string | undefined,
+  sort_by: undefined as 'created_at' | undefined,
+  sort_order: undefined as 'asc' | 'desc' | undefined,
 })
 
 // 列宽尽量均匀；操作列固定右侧，其余列可拖拽调宽（响应式包装使 width 变更生效）
 const columns = ref(makeResizable([
   { title: '主机名', dataIndex: 'hostname', key: 'hostname', width: 130, ellipsis: true },
-  { title: 'IP 地址', dataIndex: 'ip', key: 'ip', width: 120 },
+  { title: '内网 IP 地址', dataIndex: 'ip', key: 'ip', width: 120 },
+  { title: '公网 IP 地址', key: 'public_ip', width: 120 },
+  { title: '项目', dataIndex: 'project', key: 'project', width: 100 },
+  { title: 'RI', key: 'ri', width: 110, ellipsis: true },
+  { title: '主机系列', key: 'host_series', width: 110, ellipsis: true },
   { title: '平台', key: 'platform', width: 100, ellipsis: true },
   { title: '区域', key: 'region', width: 100, ellipsis: true },
   { title: '操作系统', key: 'os', width: 110, ellipsis: true },
@@ -68,8 +78,8 @@ const columns = ref(makeResizable([
   { title: '环境', key: 'environment', width: 90 },
   { title: '状态', key: 'status', width: 90 },
   { title: 'SSH 端口', dataIndex: 'ssh_port', key: 'ssh_port', width: 90 },
-  { title: '创建时间', key: 'created', width: 155 },
-  { title: '操作', key: 'action', width: canWrite ? 190 : 90, fixed: 'right' as const },
+  { title: '创建时间', dataIndex: 'created_at', key: 'created', width: 155, sorter: true },
+  { title: '操作', key: 'action', width: canDelete ? 244 : canWrite ? 171 : 98, fixed: 'right' as const },
 ]))
 
 /** 拉取主机列表（携带全部筛选条件） */
@@ -84,6 +94,8 @@ async function loadList() {
       region: query.region || undefined,
       environment: query.environment,
       status: query.status,
+      sort_by: query.sort_by,
+      sort_order: query.sort_order,
     })
     items.value = data.items
     total.value = data.total
@@ -148,22 +160,38 @@ function onSearch() {
   loadList()
 }
 
-function onPageChange(page: number, pageSize: number) {
-  query.page = page
-  query.page_size = pageSize
+function onTableChange(
+  pagination: { current?: number; pageSize?: number },
+  _: unknown,
+  sorter: { field?: string; order?: 'ascend' | 'descend' | null } | { field?: string; order?: 'ascend' | 'descend' | null }[],
+) {
+  const current = Array.isArray(sorter) ? sorter[0] : sorter
+  const sortBy = current.order && current.field === 'created_at' ? 'created_at' : undefined
+  const sortOrder = current.order === 'ascend' ? 'asc' : current.order === 'descend' ? 'desc' : undefined
+  const sortChanged = query.sort_by !== sortBy || query.sort_order !== sortOrder
+  query.sort_by = sortBy
+  query.sort_order = sortOrder
+  query.page = sortChanged ? 1 : pagination.current || 1
+  query.page_size = pagination.pageSize || query.page_size
   loadList()
 }
 
 // ---------- platform/region 自动补全（复用后端 suggest 接口，筛选与表单共用） ----------
 const platformOptions = ref<{ value: string }[]>([])
 const regionOptions = ref<{ value: string }[]>([])
+const hostSeriesOptions = ref<{ value: string }[]>([])
+const projectOptions = [
+  { value: 'mitrade', label: 'mitrade' },
+  { value: 'tradingkey', label: 'tradingkey' },
+]
 
-/** 拉取自由文本补全项：field=platform|region，q 为已输入前缀 */
-async function loadSuggest(field: 'platform' | 'region', q?: string) {
+/** 拉取自由文本补全项：q 为已输入前缀。 */
+async function loadSuggest(field: 'platform' | 'region' | 'host_series', q?: string) {
   const data = await cmdbApi.suggestHostField(field, q || undefined)
   const opts = data.items.map((v) => ({ value: v }))
   if (field === 'platform') platformOptions.value = opts
-  else regionOptions.value = opts
+  else if (field === 'region') regionOptions.value = opts
+  else hostSeriesOptions.value = opts
 }
 
 // ---------- 创建 / 编辑 ----------
@@ -173,6 +201,10 @@ const editing = ref<cmdbApi.HostItem | null>(null) // null=创建
 const editForm = reactive<cmdbApi.HostForm>({
   hostname: '',
   ip: '',
+  project: 'mitrade',
+  public_ip: '',
+  ri: '',
+  host_series: '',
   platform: '',
   region: '',
   os: '',
@@ -188,7 +220,7 @@ const editForm = reactive<cmdbApi.HostForm>({
 function openCreate() {
   editing.value = null
   Object.assign(editForm, {
-    hostname: '', ip: '', platform: '', region: '', os: '',
+    hostname: '', ip: '', project: 'mitrade', public_ip: '', ri: '', host_series: '', platform: '', region: '', os: '',
     cpu_cores: null, memory_gb: null, disk_gb: null,
     environment: 'prod', status: 'online', ssh_port: 22, description: '',
   })
@@ -200,6 +232,10 @@ function openEdit(row: cmdbApi.HostItem) {
   Object.assign(editForm, {
     hostname: row.hostname,
     ip: row.ip,
+    project: row.project,
+    public_ip: row.public_ip || '',
+    ri: row.ri || '',
+    host_series: row.host_series || '',
     platform: row.platform || '',
     region: row.region || '',
     os: row.os || '',
@@ -214,16 +250,19 @@ function openEdit(row: cmdbApi.HostItem) {
   editVisible.value = true
 }
 
-/** 提交创建/编辑（IP 冲突 40901 由拦截器统一弹出提示） */
+/** 提交创建/编辑（内网 IP 冲突 40901 由拦截器统一弹出提示） */
 async function onSubmitEdit() {
   if (!editForm.hostname || !editForm.ip) {
-    message.warning('请填写主机名与 IP 地址')
+    message.warning('请填写主机名与内网 IP 地址')
     return
   }
   editLoading.value = true
   try {
     const payload = {
       ...editForm,
+      public_ip: editForm.public_ip || undefined,
+      ri: editForm.ri || undefined,
+      host_series: editForm.host_series || undefined,
       platform: editForm.platform || undefined,
       region: editForm.region || undefined,
       os: editForm.os || undefined,
@@ -411,7 +450,7 @@ onMounted(() => {
       <!-- 右侧操作组：批量删除 → 导出 → 导入 → 新建 -->
       <div class="toolbar-actions">
         <a-popconfirm
-          v-if="canWrite"
+          v-if="canDelete"
           :title="`确认删除选中的 ${selectedKeys.length} 台主机？`"
           :disabled="!selectedKeys.length"
           @confirm="onBatchDelete"
@@ -421,9 +460,9 @@ onMounted(() => {
           </a-button>
         </a-popconfirm>
         <a-button @click="onExport"><DownloadOutlined />导出</a-button>
-        <template v-if="canWrite">
-          <a-button @click="openImport"><UploadOutlined />导入</a-button>
-          <a-button type="primary" @click="openCreate"><PlusOutlined />新建主机</a-button>
+        <template v-if="canImport || canWrite">
+          <a-button v-if="canImport" @click="openImport"><UploadOutlined />导入</a-button>
+          <a-button v-if="canWrite" type="primary" @click="openCreate"><PlusOutlined />新建主机</a-button>
         </template>
       </div>
     </div>
@@ -432,12 +471,14 @@ onMounted(() => {
     <a-table
       :columns="columns"
       :data-source="items"
+      :show-sorter-tooltip="false"
       :loading="loading"
       row-key="id"
       bordered
-      :scroll="{ x: 1360 }"
+      :scroll="{ x: 1780 }"
       :row-selection="rowSelection"
       @resize-column="onResizeColumn"
+      @change="onTableChange"
       :pagination="{
         current: query.page,
         pageSize: query.page_size,
@@ -445,11 +486,13 @@ onMounted(() => {
         showSizeChanger: true,
         showQuickJumper: true,
         showTotal: (t: number) => `共 ${t} 台主机`,
-        onChange: onPageChange,
       }"
     >
       <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'platform'">{{ record.platform || '—' }}</template>
+        <template v-if="column.key === 'public_ip'">{{ record.public_ip || '—' }}</template>
+        <template v-else-if="column.key === 'ri'">{{ record.ri || '—' }}</template>
+        <template v-else-if="column.key === 'host_series'">{{ record.host_series || '—' }}</template>
+        <template v-else-if="column.key === 'platform'">{{ record.platform || '—' }}</template>
         <template v-else-if="column.key === 'region'">{{ record.region || '—' }}</template>
         <template v-else-if="column.key === 'os'">{{ record.os || '—' }}</template>
         <template v-else-if="column.key === 'spec'">{{ specText(record as cmdbApi.HostItem) }}</template>
@@ -468,11 +511,11 @@ onMounted(() => {
         </template>
         <template v-else-if="column.key === 'action'">
           <a-space>
-            <a-button size="small" class="op-btn-cyan" @click="openDetail(record as cmdbApi.HostItem)">详情</a-button>
-            <template v-if="canWrite">
-              <a-button size="small" class="op-btn-blue" @click="openEdit(record as cmdbApi.HostItem)">编辑</a-button>
-              <a-popconfirm title="确认删除该主机？" @confirm="onDelete(record as cmdbApi.HostItem)">
-                <a-button size="small" danger>删除</a-button>
+            <a-button size="small" class="op-btn-cyan" @click="openDetail(record as cmdbApi.HostItem)"><EyeOutlined />详情</a-button>
+            <template v-if="canWrite || canDelete">
+              <a-button size="small" class="op-btn-blue" @click="openEdit(record as cmdbApi.HostItem)"><EditOutlined />编辑</a-button>
+              <a-popconfirm v-if="canDelete" title="确认删除该主机？" @confirm="onDelete(record as cmdbApi.HostItem)">
+                <a-button size="small" danger><DeleteOutlined />删除</a-button>
               </a-popconfirm>
             </template>
           </a-space>
@@ -484,56 +527,77 @@ onMounted(() => {
     <a-modal
       v-model:open="editVisible"
       :title="editing ? '编辑主机' : '新建主机'"
+      :width="920"
       :confirm-loading="editLoading"
       @ok="onSubmitEdit"
     >
-      <a-form layout="vertical">
-        <a-form-item label="主机名" required>
-          <a-input v-model:value="editForm.hostname" placeholder="如 web-prod-01" />
-        </a-form-item>
-        <a-form-item label="IP 地址" required>
-          <a-input v-model:value="editForm.ip" placeholder="如 10.0.0.1" />
-        </a-form-item>
-        <a-form-item label="所属平台">
-          <a-auto-complete
-            v-model:value="editForm.platform"
-            placeholder="如 阿里云（可自由输入）"
-            :options="platformOptions"
-            @focus="loadSuggest('platform')"
-            @search="(q: string) => loadSuggest('platform', q)"
-          />
-        </a-form-item>
-        <a-form-item label="所属区域">
-          <a-auto-complete
-            v-model:value="editForm.region"
-            placeholder="如 华东1（可自由输入）"
-            :options="regionOptions"
-            @focus="loadSuggest('region')"
-            @search="(q: string) => loadSuggest('region', q)"
-          />
-        </a-form-item>
-        <a-form-item label="操作系统">
-          <a-input v-model:value="editForm.os" placeholder="如 CentOS 7.9" />
-        </a-form-item>
-        <a-form-item label="资源配置">
-          <div class="spec-inputs">
-            <a-input-number v-model:value="editForm.cpu_cores" :min="1" :max="4096" placeholder="CPU 核数" addon-after="核" />
-            <a-input-number v-model:value="editForm.memory_gb" :min="1" :max="65536" placeholder="内存" addon-after="GB" />
-            <a-input-number v-model:value="editForm.disk_gb" :min="1" :max="1048576" placeholder="磁盘" addon-after="GB" />
-          </div>
-        </a-form-item>
-        <a-form-item label="环境" required>
-          <a-select v-model:value="editForm.environment" :options="envOptions" />
-        </a-form-item>
-        <a-form-item label="状态">
-          <a-select v-model:value="editForm.status" :options="statusOptions" />
-        </a-form-item>
-        <a-form-item label="SSH 端口">
-          <a-input-number v-model:value="editForm.ssh_port" :min="1" :max="65535" style="width: 100%" />
-        </a-form-item>
-        <a-form-item label="说明">
-          <a-textarea v-model:value="editForm.description" :rows="2" />
-        </a-form-item>
+      <a-form layout="vertical" class="host-edit-form">
+        <div class="host-form-grid">
+          <a-form-item label="主机名" required>
+            <a-input v-model:value="editForm.hostname" placeholder="如 web-prod-01" />
+          </a-form-item>
+          <a-form-item label="项目">
+            <a-select v-model:value="editForm.project" :options="projectOptions" />
+          </a-form-item>
+          <a-form-item label="内网 IP 地址" required>
+            <a-input v-model:value="editForm.ip" placeholder="如 10.0.0.1" />
+          </a-form-item>
+          <a-form-item label="公网 IP 地址">
+            <a-input v-model:value="editForm.public_ip" placeholder="如 203.0.113.1" />
+          </a-form-item>
+          <a-form-item label="所属平台">
+            <a-auto-complete
+              v-model:value="editForm.platform"
+              placeholder="如 阿里云（可自由输入）"
+              :options="platformOptions"
+              @focus="loadSuggest('platform')"
+              @search="(q: string) => loadSuggest('platform', q)"
+            />
+          </a-form-item>
+          <a-form-item label="所属区域">
+            <a-auto-complete
+              v-model:value="editForm.region"
+              placeholder="如 华东1（可自由输入）"
+              :options="regionOptions"
+              @focus="loadSuggest('region')"
+              @search="(q: string) => loadSuggest('region', q)"
+            />
+          </a-form-item>
+          <a-form-item label="RI">
+            <a-input v-model:value="editForm.ri" />
+          </a-form-item>
+          <a-form-item label="主机系列">
+            <a-auto-complete
+              v-model:value="editForm.host_series"
+              placeholder="如 C7（可自由输入）"
+              :options="hostSeriesOptions"
+              @focus="loadSuggest('host_series')"
+              @search="(q: string) => loadSuggest('host_series', q)"
+            />
+          </a-form-item>
+          <a-form-item label="操作系统">
+            <a-input v-model:value="editForm.os" placeholder="如 CentOS 7.9" />
+          </a-form-item>
+          <a-form-item label="资源配置">
+            <div class="spec-inputs">
+              <a-input-number v-model:value="editForm.cpu_cores" :min="1" :max="4096" placeholder="CPU 核数" addon-after="核" />
+              <a-input-number v-model:value="editForm.memory_gb" :min="1" :max="65536" placeholder="内存" addon-after="GB" />
+              <a-input-number v-model:value="editForm.disk_gb" :min="1" :max="1048576" placeholder="磁盘" addon-after="GB" />
+            </div>
+          </a-form-item>
+          <a-form-item label="环境" required>
+            <a-select v-model:value="editForm.environment" :options="envOptions" />
+          </a-form-item>
+          <a-form-item label="状态">
+            <a-select v-model:value="editForm.status" :options="statusOptions" />
+          </a-form-item>
+          <a-form-item label="SSH 端口">
+            <a-input-number v-model:value="editForm.ssh_port" :min="1" :max="65535" style="width: 100%" />
+          </a-form-item>
+          <a-form-item label="说明">
+            <a-textarea v-model:value="editForm.description" :rows="2" />
+          </a-form-item>
+        </div>
       </a-form>
     </a-modal>
 
@@ -585,9 +649,13 @@ onMounted(() => {
     <a-drawer v-model:open="detailVisible" :title="detail?.hostname || '主机详情'" :width="600">
       <a-spin :spinning="detailLoading">
         <template v-if="detail">
-          <a-descriptions :column="1" bordered size="small">
+          <a-descriptions :column="1" bordered size="small" class="op-desc-table">
             <a-descriptions-item label="主机名">{{ detail.hostname }}</a-descriptions-item>
-            <a-descriptions-item label="IP 地址">{{ detail.ip }}</a-descriptions-item>
+            <a-descriptions-item label="内网 IP 地址">{{ detail.ip }}</a-descriptions-item>
+            <a-descriptions-item label="公网 IP 地址">{{ detail.public_ip || '—' }}</a-descriptions-item>
+            <a-descriptions-item label="项目">{{ detail.project }}</a-descriptions-item>
+            <a-descriptions-item label="RI">{{ detail.ri || '—' }}</a-descriptions-item>
+            <a-descriptions-item label="主机系列">{{ detail.host_series || '—' }}</a-descriptions-item>
             <a-descriptions-item label="所属平台">{{ detail.platform || '—' }}</a-descriptions-item>
             <a-descriptions-item label="所属区域">{{ detail.region || '—' }}</a-descriptions-item>
             <a-descriptions-item label="操作系统">{{ detail.os || '—' }}</a-descriptions-item>
@@ -657,6 +725,19 @@ onMounted(() => {
 }
 .spec-inputs :deep(.ant-input-number) {
   flex: 1;
+}
+.host-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+.host-form-grid :deep(.ant-form-item) {
+  margin-bottom: 18px;
+}
+@media (max-width: 768px) {
+  .host-form-grid {
+    grid-template-columns: 1fr;
+  }
 }
 .import-tip {
   margin-bottom: 14px;

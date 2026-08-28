@@ -15,7 +15,7 @@ import logging
 import secrets
 
 from passlib.hash import bcrypt
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -42,6 +42,7 @@ from app.models import (
 logger = logging.getLogger("opspilot.seed")
 
 _SEED_LOCK = "opspilot:seed"
+_NOTIFY_MAPPING_INIT_KEY = "notify.mapping_initialized"
 
 
 async def run_seed(session: AsyncSession) -> None:
@@ -63,7 +64,19 @@ async def run_seed(session: AsyncSession) -> None:
 
 
 async def _sync_permissions(session: AsyncSession) -> None:
-    """权限点幂等同步：新增补齐、名称/模块变更覆盖；不删除（防止误删自定义引用）。"""
+    """权限点幂等同步，并清理已废弃的通知配置权限。"""
+    legacy_ids = list(
+        (await session.execute(select(Permission.id).where(Permission.code == "notify:config"))).scalars()
+    )
+    if legacy_ids:
+        await session.execute(delete(RolePermission).where(RolePermission.permission_id.in_(legacy_ids)))
+        await session.execute(delete(Permission).where(Permission.id.in_(legacy_ids)))
+        try:
+            keys = await redis_client.keys(KEY_USER_PERMS.format(user_id="*"))
+            if keys:
+                await redis_client.delete(*keys)
+        except Exception:  # noqa: BLE001
+            logger.warning("旧权限缓存清理失败（不影响启动，缓存将随 TTL 自然过期）")
     existing = {p.code: p for p in (await session.execute(select(Permission))).scalars()}
     for code, name, module in PERMISSIONS:
         if code in existing:
@@ -142,7 +155,7 @@ async def _ensure_system_config(session: AsyncSession) -> None:
 
 
 async def _ensure_notify_defaults(session: AsyncSession) -> None:
-    """通知渠道占位行（6 类型全建、默认禁用）+ 事件默认映射（仅落地渠道）。"""
+    """首次初始化通知映射；后续启动只补渠道占位行，不覆盖用户配置。"""
     existing_channels = {
         c.type for c in (await session.execute(select(NotifyChannel))).scalars()
     }
@@ -153,7 +166,18 @@ async def _ensure_notify_defaults(session: AsyncSession) -> None:
         (e.event, e.channel_type)
         for e in (await session.execute(select(NotifyChannelEvent))).scalars()
     }
-    for event in NotifyEvent:
-        for channel_type in DEFAULT_EVENT_CHANNELS:
-            if (event.value, channel_type) not in existing_events:
+    marker = await session.get(SystemConfig, _NOTIFY_MAPPING_INIT_KEY)
+    if marker is None:
+        marker = SystemConfig(
+            cfg_key=_NOTIFY_MAPPING_INIT_KEY,
+            cfg_value={"value": bool(existing_events)},
+        )
+        session.add(marker)
+        await session.flush()
+    if marker.cfg_value and marker.cfg_value.get("value"):
+        return
+    if not existing_events and not existing_channels:
+        for event in NotifyEvent:
+            for channel_type in DEFAULT_EVENT_CHANNELS:
                 session.add(NotifyChannelEvent(event=event.value, channel_type=channel_type))
+    marker.cfg_value = {"value": True}

@@ -101,6 +101,30 @@ async def test_mfa_required_bind_and_verify_flow(client, db_factory):
     assert body["code"] == 0 and body["data"]["access_token"]
 
 
+async def test_mfa_binding_persists_before_first_login_password_change(client, db_factory):
+    """首次绑定后进入改密流程，MFA 绑定仍应保留。"""
+    await set_config(db_factory, "mfa.policy", "required")
+    resp = await client.post(LOGIN, json={"username": "newbie", "password": TEST_PASSWORD})
+    mfa_token = resp.json()["data"]["mfa_token"]
+
+    resp = await client.post("/api/v1/auth/mfa/setup", json={"mfa_token": mfa_token})
+    secret = resp.json()["data"]["secret"]
+    resp = await client.post("/api/v1/auth/mfa/bind", json={
+        "mfa_token": mfa_token, "code": pyotp.TOTP(secret).now(),
+    })
+    assert resp.json()["code"] == 40105
+    change_token = resp.json()["data"]["change_token"]
+
+    resp = await client.put("/api/v1/auth/password", json={
+        "old_password": TEST_PASSWORD,
+        "new_password": "NewPass456",
+        "change_token": change_token,
+    })
+    tokens = resp.json()["data"]
+    resp = await client.get("/api/v1/auth/me", headers=auth_header(tokens))
+    assert resp.json()["data"]["mfa_enabled"] is True
+
+
 async def test_mfa_optional_only_challenges_bound_user(client, db_factory):
     """optional 策略：未绑定用户直接登录成功（不强制绑定）。"""
     await set_config(db_factory, "mfa.policy", "optional")

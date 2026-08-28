@@ -5,11 +5,12 @@ emit 语义（M6 正式版）：按事件-渠道映射逐渠道落 notification_
 与业务事务 commit 竞态都不影响送达——分发器 30s 定时扫描是可靠兜底
 （冲突决策 C3）。
 
-消息模板：每渠道一套（notify_channel.config 的 title_template/content_template 键），
-emit 落库时即按渠道渲染——发送记录里的 title/content 即最终实发内容，
+消息模板：按渠道×事件保存于 notify_channel.config.templates，
+emit 落库时即按渠道和事件渲染——发送记录里的 title/content 即最终实发内容，
 修改模板只对新产生的通知生效。
 """
 import logging
+import json
 import re
 from datetime import datetime
 
@@ -46,19 +47,21 @@ NOTIFY_EVENT_TEXT = {
     NotifyEvent.EXECUTION_INTERRUPTED.value: "执行中断",
 }
 
-# 模板长度上限（update_channel 校验；标题列本身 String(255)，渲染后另有截断兜底）
+# 模板长度上限（按渠道模板字段校验）
 TITLE_TEMPLATE_MAX = 200
 CONTENT_TEMPLATE_MAX = 2000
+JSON_TEMPLATE_MAX = 10000
 
 # 模板占位符语法：{变量名}（仅字母数字下划线）
 _VAR_PATTERN = re.compile(r"\{(\w+)\}")
 
-# test_channel 预览用示例变量：保存前即可验证模板渲染效果
+# test_channel 预览用示例变量：与 emit 实发变量口径一致（job_host_name 为作业主机名），
+# 保证“测试发送”预览效果与真实通知一致（无 app_name——emit 从不注入该变量）
 SAMPLE_TEMPLATE_VARS = {
     "event": "审批通过",
     "ticket_no": "TK20260001",
     "ticket_title": "示例工单",
-    "app_name": "示例应用",
+    "job_host_name": "示例作业主机",
     "creator": "admin",
     "approver": "ops1",
     "comment": "同意",
@@ -67,16 +70,200 @@ SAMPLE_TEMPLATE_VARS = {
     "reason": "worker_lost",
     "detail": "示例中断详情",
     "ref_id": 1,
+    "receivers": ["admin", "ops1"],
 }
+
+TEMPLATE_EVENTS = [
+    {"key": key, "label": label}
+    for key, label in NOTIFY_EVENT_TEXT.items()
+]
+TEMPLATE_VARIABLES = [
+    {"key": "event", "label": "事件名称", "type": "string", "group": "通用", "events": list(NOTIFY_EVENT_TEXT)},
+    {"key": "ticket_no", "label": "工单号", "type": "string", "group": "通用", "events": list(NOTIFY_EVENT_TEXT)},
+    {"key": "ticket_title", "label": "工单标题", "type": "string", "group": "通用", "events": list(NOTIFY_EVENT_TEXT)},
+    {"key": "job_host_name", "label": "作业主机名", "type": "string", "group": "通用", "events": list(NOTIFY_EVENT_TEXT)},
+    {"key": "creator", "label": "创建人", "type": "string", "group": "通用", "events": list(NOTIFY_EVENT_TEXT)},
+    {"key": "receiver", "label": "收件人", "type": "string", "group": "通用", "events": list(NOTIFY_EVENT_TEXT)},
+    {"key": "receivers", "label": "收件人列表", "type": "array", "group": "通用", "events": list(NOTIFY_EVENT_TEXT)},
+    {"key": "time", "label": "触发时间", "type": "string", "group": "通用", "events": list(NOTIFY_EVENT_TEXT)},
+    {"key": "ref_id", "label": "关联 ID", "type": "number", "group": "通用", "events": list(NOTIFY_EVENT_TEXT)},
+    {"key": "default_title", "label": "默认标题", "type": "string", "group": "通用", "events": list(NOTIFY_EVENT_TEXT)},
+    {"key": "default_content", "label": "默认正文", "type": "string", "group": "通用", "events": list(NOTIFY_EVENT_TEXT)},
+    {"key": "node", "label": "审批节点", "type": "number", "group": "审批", "events": ["ticket.pending_approval"]},
+    {"key": "role", "label": "审批角色", "type": "string", "group": "审批", "events": ["ticket.pending_approval"]},
+    {"key": "approver", "label": "审批人", "type": "string", "group": "审批", "events": ["ticket.approved", "ticket.rejected"]},
+    {"key": "comment", "label": "审批意见", "type": "string", "group": "审批", "events": ["ticket.approved", "ticket.rejected"]},
+    {"key": "reason", "label": "中断原因", "type": "string", "group": "中断", "events": ["execution.interrupted"]},
+    {"key": "detail", "label": "详情", "type": "string", "group": "中断", "events": ["execution.interrupted"]},
+]
+_VARIABLE_TYPES = {item["key"]: item["type"] for item in TEMPLATE_VARIABLES}
+
+_JSON_DEFAULTS = {
+    "webhook": {
+        event: '{"event": "{event}", "title": "{default_title}", "content": "{default_content}", "receivers": {receivers}, "ref_id": {ref_id}, "timestamp": "{time}"}'
+        for event in NOTIFY_EVENT_TEXT
+    },
+    "teams": {
+        event: '{"@type": "MessageCard", "@context": "http://schema.org/extensions", "summary": "{default_title}", "title": "{default_title}", "text": "{default_content}"}'
+        for event in NOTIFY_EVENT_TEXT
+    },
+}
+
+def default_template(channel_type: str, event: str) -> dict:
+    """返回渠道×事件的只读默认模板；未配置自定义模板时由发送链路使用。"""
+    if channel_type == "email":
+        return {"title": "{default_title}", "content": "{default_content}"}
+    if channel_type not in _JSON_DEFAULTS:
+        return {}
+    field = "body" if channel_type == "webhook" else "card"
+    return {field: _JSON_DEFAULTS[channel_type][event]}
+
+def default_templates(channel_type: str) -> dict[str, dict]:
+    return {event: default_template(channel_type, event) for event in NOTIFY_EVENT_TEXT}
+
+
+def _validate_templates(channel_type: str, templates: dict) -> None:
+    """校验渠道事件模板，拒绝未知事件和不匹配的字段。"""
+    if not isinstance(templates, dict):
+        raise Errors.param("templates 必须是对象")
+    valid_events = set(NOTIFY_EVENT_TEXT)
+    for event, item in templates.items():
+        if event not in valid_events or not isinstance(item, dict):
+            raise Errors.param(f"模板事件无效: {event}")
+        if channel_type == "email":
+            allowed = {"title", "content"}
+            if set(item) - allowed:
+                raise Errors.param(f"邮件模板字段无效: {event}")
+            if len(str(item.get("title") or "")) > TITLE_TEMPLATE_MAX:
+                raise Errors.param(f"标题模板不能超过 {TITLE_TEMPLATE_MAX} 字")
+            if len(str(item.get("content") or "")) > CONTENT_TEMPLATE_MAX:
+                raise Errors.param(f"正文模板不能超过 {CONTENT_TEMPLATE_MAX} 字")
+        elif channel_type in {"webhook", "teams"}:
+            key = "body" if channel_type == "webhook" else "card"
+            if set(item) - {key} or key not in item:
+                raise Errors.param(f"{channel_type} 模板字段无效: {event}")
+            if not isinstance(item[key], str):
+                raise Errors.param(f"{channel_type} 模板字段必须是字符串: {event}")
+            value = item[key]
+            if len(value) > JSON_TEMPLATE_MAX:
+                raise Errors.param(f"JSON 模板不能超过 {JSON_TEMPLATE_MAX} 字")
+            try:
+                validate_json_template(value)
+            except (ValueError, json.JSONDecodeError) as exc:
+                raise Errors.param(f"JSON 模板无效: {exc}") from exc
 
 
 def render_template(tpl: str, variables: dict) -> str:
-    """渲染消息模板：{变量} 占位替换；变量缺失或值为 None 时原样保留占位符（不抛错）。"""
+    """渲染普通文本模板；未知或空变量原样保留占位符。"""
     def _sub(m: re.Match) -> str:
-        value = variables.get(m.group(1))
-        return str(value) if value is not None else m.group(0)
+        key = m.group(1)
+        value = variables.get(key)
+        if value is None:
+            kind = _VARIABLE_TYPES.get(key)
+            if kind == "number":
+                return "0"
+            if kind == "array":
+                return "[]"
+            return "" if kind == "string" else m.group(0)
+        return str(value)
 
     return _VAR_PATTERN.sub(_sub, tpl)
+
+
+def _placeholder_context(template: str, match_start: int) -> bool:
+    """判断占位符是否处于 JSON 字符串中，忽略转义引号。"""
+    in_string = False
+    escaped = False
+    for char in template[:match_start]:
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == '"':
+            in_string = not in_string
+    return in_string
+
+
+def _placeholder_is_object_key(template: str, match_end: int) -> bool:
+    """判断字符串占位符是否位于 JSON 对象 key，key 不允许使用变量。"""
+    escaped = False
+    index = match_end
+    while index < len(template):
+        char = template[index]
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == '"':
+            index += 1
+            break
+        index += 1
+    while index < len(template) and template[index].isspace():
+        index += 1
+    return index < len(template) and template[index] == ":"
+
+
+def _json_placeholder_value(key: str, variables: dict, *, strict: bool) -> str:
+    """把已知原生变量编码为 JSON 值；未知变量仅在字符串上下文中允许。"""
+    if key not in _VARIABLE_TYPES:
+        if strict:
+            raise ValueError(f"未知变量 {{{key}}} 不能作为 JSON 原生值")
+        return "{" + key + "}"
+    kind = _VARIABLE_TYPES[key]
+    value = variables.get(key)
+    if value is None:
+        value = [] if kind == "array" else 0 if kind == "number" else ""
+    if kind == "number":
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError(f"变量 {{{key}}} 必须是 number 类型")
+    elif kind == "array" and not isinstance(value, list):
+        raise ValueError(f"变量 {{{key}}} 必须是 array 类型")
+    elif kind == "string" and not isinstance(value, str):
+        value = str(value)
+    return json.dumps(value, ensure_ascii=False)
+
+
+def render_json_template(template: str, variables: dict, *, validate: bool = True) -> str:
+    """渲染 JSON 模板；类型变量可按原生 JSON 值或字符串值使用。"""
+    pieces: list[str] = []
+    last = 0
+    for match in _VAR_PATTERN.finditer(template):
+        pieces.append(template[last:match.start()])
+        in_string = _placeholder_context(template, match.start())
+        key = match.group(1)
+        if in_string:
+            if _placeholder_is_object_key(template, match.end()):
+                raise ValueError(f"变量 {{{key}}} 不能作为 JSON 对象 key")
+            kind = _VARIABLE_TYPES.get(key, "string")
+            value = variables.get(key)
+            if key not in _VARIABLE_TYPES:
+                replacement = "{" + key + "}"
+            elif value is None:
+                replacement = ""
+            elif kind == "array":
+                if not isinstance(value, list):
+                    raise ValueError(f"变量 {{{key}}} 必须是 array 类型")
+                replacement = ", ".join(str(item) for item in value)
+            elif kind == "number":
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    raise ValueError(f"变量 {{{key}}} 必须是 number 类型")
+                replacement = str(value)
+            else:
+                replacement = str(value)
+            pieces.append(json.dumps(replacement, ensure_ascii=False)[1:-1] if key in _VARIABLE_TYPES else replacement)
+        else:
+            pieces.append(_json_placeholder_value(key, variables, strict=True))
+        last = match.end()
+    pieces.append(template[last:])
+    rendered = "".join(pieces)
+    if validate:
+        json.loads(rendered)
+    return rendered
+
+
+def validate_json_template(template: str) -> None:
+    """校验 JSON 模板结构、变量位置和原生类型占位符。"""
+    render_json_template(template, {key: (0 if kind == "number" else [] if kind == "array" else "x") for key, kind in _VARIABLE_TYPES.items()})
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -110,7 +297,8 @@ async def emit(
             )
         ).scalars()
     ) or ["email"]
-    # 一次性取涉及渠道的模板配置（title_template/content_template 存 config JSON）
+    receiver_names = [item.strip() for item in (receiver or "").split(",") if item.strip()]
+    # 一次性取涉及渠道的模板配置（templates 按事件保存）
     configs = {
         row.type: (row.config or {})
         for row in (
@@ -123,21 +311,27 @@ async def emit(
         "default_title": title,
         "default_content": content,
         "receiver": receiver,
+        "receivers": receiver_names,
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "ref_id": ref_id,
         **(variables or {}),
     }
     for channel_type in channels:
         cfg = configs.get(channel_type) or {}
-        # 渠道配了模板即渲染（标题截到列宽 255）；留空走业务默认文案
-        r_title = (
-            render_template(cfg["title_template"], all_vars)[:255]
-            if cfg.get("title_template") else title
-        )
-        r_content = (
-            render_template(cfg["content_template"], all_vars)
-            if cfg.get("content_template") else content
-        )
+        custom = (cfg.get("templates") or {}).get(event.value) or {}
+        template = {**default_template(channel_type, event.value), **custom}
+        r_title = render_template(template.get("title", title), all_vars)[:255]
+        render_error: str | None = None
+        if channel_type in {"webhook", "teams"}:
+            json_key = "body" if channel_type == "webhook" else "card"
+            try:
+                r_content = render_json_template(template[json_key], all_vars)
+            except (ValueError, json.JSONDecodeError) as exc:
+                # 配置保存时已校验；运行时变量类型变化仍需留下明确失败记录。
+                r_content = ""
+                render_error = f"模板渲染失败: {exc}"
+        else:
+            r_content = render_template(template.get("content", content) or "", all_vars)
         session.add(
             NotificationRecord(
                 event=event.value,
@@ -147,7 +341,8 @@ async def emit(
                 content=r_content,
                 ref_type=ref_type,
                 ref_id=ref_id,
-                status="pending",
+                status="failed" if render_error else "pending",
+                error=render_error,
             )
         )
     await session.flush()
@@ -164,6 +359,34 @@ async def emit(
         )
     except Exception:  # noqa: BLE001 Redis 抖动不能反噬业务事务
         logger.warning("通知队列 XADD 失败（事件 %s），等待定时扫描兜底", event.value)
+
+
+async def emit_security_email(
+    session: AsyncSession, *, receiver: str, title: str, content: str, source_ip: str | None = None
+) -> None:
+    """落密码重置安全邮件记录，不经过事件映射或站内信。"""
+    record = NotificationRecord(
+        event="password_reset",
+        channel_type=NotifyChannelType.EMAIL.value,
+        receiver=receiver,
+        title=title,
+        content=content,
+        status="pending",
+    )
+    session.add(record)
+    await session.flush()
+    if source_ip:
+        await redis_mod.redis_client.set(
+            redis_mod.KEY_PWD_RESET_NOTIFICATION_IP.format(record_id=record.id),
+            source_ip,
+            ex=86400,
+        )
+    try:
+        await redis_mod.redis_client.xadd(
+            redis_mod.NOTIFY_QUEUE, {"event": "password_reset"}, maxlen=10000, approximate=True
+        )
+    except Exception:  # noqa: BLE001 队列失败由扫描兜底
+        logger.warning("密码重置邮件队列提示失败，等待定时扫描兜底")
 
 
 async def _emit_inapp(
@@ -281,6 +504,9 @@ async def list_channels(session: AsyncSession) -> list[dict]:
                 "implemented": channel_type.value in IMPLEMENTED_CHANNELS,
                 "enabled": bool(row.enabled) if row else False,
                 "config": (row.config if row else None) or {},
+                "template_events": TEMPLATE_EVENTS,
+                "template_defaults": default_templates(channel_type.value),
+                "template_variables": TEMPLATE_VARIABLES,
                 "secret": SECRET_MASK if (row and row.secret_enc) else None,
                 "updated_at": _iso(row.updated_at) if row else None,
             }
@@ -324,11 +550,7 @@ async def update_channel(
     if enabled and channel_type not in IMPLEMENTED_CHANNELS:
         raise Errors.param(f"渠道 {channel_type} 暂未实现，不能启用")
     cfg = config or {}
-    # 消息模板长度校验（40001）：防御超长模板撑爆渲染与存储
-    if len(str(cfg.get("title_template") or "")) > TITLE_TEMPLATE_MAX:
-        raise Errors.param(f"标题模板不能超过 {TITLE_TEMPLATE_MAX} 字")
-    if len(str(cfg.get("content_template") or "")) > CONTENT_TEMPLATE_MAX:
-        raise Errors.param(f"正文模板不能超过 {CONTENT_TEMPLATE_MAX} 字")
+    _validate_templates(channel_type, cfg.get("templates") or {})
     row.enabled = enabled
     row.config = cfg
     if secret is not None and secret != SECRET_MASK:
@@ -345,12 +567,15 @@ async def test_channel(
     config: dict | None,
     secret: str | None,
     receiver: str | None,
+    event: str = "ticket.approved",
 ) -> tuple[bool, str]:
     """按当前表单值发送测试消息，同步返回成败（保存前预测，与作业主机测试同形态）。
 
     secret 为掩码/不传时回退库中已存密钥；Email 渠道 receiver 需直接给邮箱地址。
     """
     _validate_channel_type(channel_type)
+    if event not in NOTIFY_EVENT_TEXT:
+        return False, f"未知通知事件: {event}"
     if secret is None or secret == SECRET_MASK:
         row = (
             await session.execute(select(NotifyChannel).where(NotifyChannel.type == channel_type))
@@ -366,20 +591,21 @@ async def test_channel(
         "default_title": default_title,
         "default_content": default_content,
         "receiver": receiver,
+        "receivers": receivers,
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
-    message = NotifyMessage(
-        event="notify.test",
-        title=(
-            render_template(cfg["title_template"], variables)[:255]
-            if cfg.get("title_template") else default_title
-        ),
-        content=(
-            render_template(cfg["content_template"], variables)
-            if cfg.get("content_template") else default_content
-        ),
-        receivers=receivers,
-    )
+    custom = (cfg.get("templates") or {}).get(event) or {}
+    template = {**default_template(channel_type, event), **custom}
+    try:
+        title_value = render_template(template.get("title", default_title), variables)[:255]
+        if channel_type in {"webhook", "teams"}:
+            json_key = "body" if channel_type == "webhook" else "card"
+            content_value = render_json_template(template[json_key], variables)
+        else:
+            content_value = render_template(template.get("content", default_content), variables)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return False, f"模板无效: {exc}"
+    message = NotifyMessage(event=event, title=title_value, content=content_value, receivers=receivers)
     try:
         await get_channel(channel_type).send(message, cfg, secret)
     except ChannelSendError as exc:

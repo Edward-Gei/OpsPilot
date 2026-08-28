@@ -12,6 +12,9 @@
     auth:mfa:pending:{uid}  MFA 绑定中的待确认 secret（TTL 600s）
     auth:oidc:state:{state} OIDC 授权码流程 state 防伪造（TTL 600s）
     auth:sso:ticket:{tk}    SSO 回调一次性换票（TTL 60s）
+    pwd_reset:{user_id}    密码重置 token 哈希（TTL 配置）
+    pwd_reset:lookup:{hash} token 哈希到用户 ID 索引（TTL 配置）
+    auth:refresh:{user_id} 用户 Refresh jti 集合
 """
 import redis.asyncio as aioredis
 
@@ -37,6 +40,10 @@ KEY_EXEC_EVENT = "ops:event:{eid}"        # 状态事件通道（PubSub）
 KEY_EXEC_EVENT_LIST = "ops:events:{eid}"  # 事件回放列表（List，长轮询/WS 断线补发）
 KEY_EXEC_EVENT_SEQ = "ops:event:seq:{eid}"  # 事件序号发号器（INCR，单调递增）
 
+# 待办变更事件键名模板（用户级回放）
+KEY_TODO_EVENT_LIST = "ops:todo:events:{user_id}"
+KEY_TODO_EVENT_SEQ = "ops:todo:event:seq:{user_id}"
+
 # 认证相关键名模板（M1）
 KEY_LOGIN_FAIL = "login:fail:{username}"
 KEY_TOKEN_REVOKED = "auth:revoked:{jti}"
@@ -44,6 +51,14 @@ KEY_USER_PERMS = "auth:perms:{user_id}"
 KEY_MFA_PENDING = "auth:mfa:pending:{user_id}"
 KEY_OIDC_STATE = "auth:oidc:state:{state}"
 KEY_SSO_TICKET = "auth:sso:ticket:{ticket}"
+KEY_PWD_RESET = "pwd_reset:{user_id}"
+KEY_PWD_RESET_LOOKUP = "pwd_reset:lookup:{token_hash}"
+KEY_PWD_RESET_USED = "pwd_reset:used:{token_hash}"
+KEY_PWD_RESET_EMAIL_COOLDOWN = "pwd_reset:email:cooldown:{email}"
+KEY_PWD_RESET_EMAIL_DAILY = "pwd_reset:email:daily:{date}:{email}"
+KEY_PWD_RESET_IP_HOURLY = "pwd_reset:ip:hourly:{hour}:{ip}"
+KEY_PWD_RESET_NOTIFICATION_IP = "pwd_reset:notification_ip:{record_id}"
+KEY_USER_REFRESH = "auth:refresh:{user_id}"
 
 
 

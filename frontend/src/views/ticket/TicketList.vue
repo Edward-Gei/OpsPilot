@@ -6,8 +6,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import dayjs, { type Dayjs } from 'dayjs'
 import {
+  EyeOutlined,
   FileDoneOutlined,
   PlusOutlined,
+  RollbackOutlined,
   SearchOutlined,
 } from '@ant-design/icons-vue'
 import * as ticketApi from '@/api/ticket'
@@ -37,8 +39,12 @@ const query = reactive({
   keyword: '',
   status: undefined as string | undefined,
   // 创建时间范围：[开始, 结束]，精确到秒（YYYY-MM-DD HH:mm:ss）
-  range: [] as string[],
+  range: [
+    dayjs().subtract(30, 'day').format('YYYY-MM-DD HH:mm:ss'),
+    dayjs().format('YYYY-MM-DD HH:mm:ss'),
+  ] as string[],
 })
+const usingDefaultRange = ref(true)
 
 // 时间筛选快捷项：最近 N 天 → 当前时刻，精确到秒
 const rangePresets: { label: string; value: [Dayjs, Dayjs] }[] = [
@@ -51,12 +57,11 @@ const rangePresets: { label: string; value: [Dayjs, Dayjs] }[] = [
 const columns = ref(makeResizable([
   { title: '工单号', dataIndex: 'ticket_no', key: 'ticket_no', width: 150 },
   { title: '标题（模板名）', dataIndex: 'title', key: 'title', width: 200, ellipsis: true },
-  { title: '目标应用', key: 'app', width: 130, ellipsis: true },
-  { title: '模板版本', key: 'tpl_version', width: 90 },
+  { title: '作业主机', key: 'job_host', width: 130, ellipsis: true },
   { title: '状态', key: 'status', width: 140 },
   { title: '提交人', dataIndex: 'creator_name', key: 'creator_name', width: 110, ellipsis: true },
   { title: '提交时间', key: 'submitted', width: 155 },
-  { title: '操作', key: 'action', width: 140, fixed: 'right' as const },
+  { title: '操作', key: 'action', width: 171, fixed: 'right' as const },
 ]))
 
 /** 拉取工单列表（keyword 匹配 工单号/标题） */
@@ -103,6 +108,20 @@ function refreshAll() {
 function onSearch() {
   query.page = 1
   loadList()
+}
+
+function onRangeChange() {
+  usingDefaultRange.value = false
+  onSearch()
+}
+
+/** 提交成功后仅推进默认时间范围，避免覆盖用户主动筛选。 */
+function onTicketCreated() {
+  if (usingDefaultRange.value) {
+    query.range = [dayjs().subtract(30, 'day').format('YYYY-MM-DD HH:mm:ss'), dayjs().add(1, 'second').format('YYYY-MM-DD HH:mm:ss')]
+  }
+  query.page = 1
+  refreshAll()
 }
 
 function onPageChange(page: number, pageSize: number) {
@@ -195,7 +214,7 @@ onMounted(() => {
         class="range"
         :placeholder="['创建开始时间', '创建结束时间']"
         :presets="rangePresets"
-        @change="onSearch"
+        @change="onRangeChange"
       />
       <a-button v-if="canWrite" type="primary" class="create-btn" @click="wizardOpen = true">
         <PlusOutlined />提交工单
@@ -222,22 +241,17 @@ onMounted(() => {
       }"
     >
       <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'app'">{{ record.app_name || '—' }}</template>
-        <template v-else-if="column.key === 'tpl_version'">
-          <a-tag color="cyan">v{{ record.template_version }}</a-tag>
-        </template>
+        <template v-if="column.key === 'job_host'">{{ record.job_host_name || '—' }}</template>
         <template v-else-if="column.key === 'status'">
           <a-tag :color="statusMeta[record.status as ticketApi.TicketStatus]?.color">
             {{ statusMeta[record.status as ticketApi.TicketStatus]?.text || record.status }}
           </a-tag>
-          <span v-if="record.status === 'approving'" class="node-hint">
-            节点 {{ record.current_node }}/{{ record.total_nodes }}
-          </span>
         </template>
         <template v-else-if="column.key === 'submitted'">{{ fmtTime(record.submitted_at) }}</template>
         <template v-else-if="column.key === 'action'">
           <a-space>
             <a-button size="small" class="op-btn-cyan" @click="openDetail(record as ticketApi.TicketBrief)">
+              <EyeOutlined />
               详情
             </a-button>
             <!-- 审批中：仅创建人可撤回（模板 allow_withdraw=false 时后端拒绝） -->
@@ -246,7 +260,7 @@ onMounted(() => {
               title="确认撤回该工单？"
               @confirm="onCancel(record as ticketApi.TicketBrief)"
             >
-              <a-button size="small" class="op-btn-orange">撤回</a-button>
+              <a-button size="small" class="op-btn-orange"><RollbackOutlined />撤回</a-button>
             </a-popconfirm>
           </a-space>
         </template>
@@ -254,7 +268,7 @@ onMounted(() => {
     </a-table>
 
     <!-- 提交向导 + 详情抽屉 -->
-    <TicketWizard v-model:open="wizardOpen" @saved="refreshAll" />
+    <TicketWizard v-model:open="wizardOpen" @saved="onTicketCreated" />
     <TicketDetailDrawer v-model:open="detailOpen" :ticket-id="detailId" />
   </div>
 </template>
@@ -276,10 +290,5 @@ onMounted(() => {
 }
 .create-btn {
   margin-left: auto;
-}
-.node-hint {
-  font-size: 12px;
-  color: var(--text-3);
-  margin-left: 4px;
 }
 </style>

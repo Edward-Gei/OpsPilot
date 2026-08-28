@@ -23,21 +23,15 @@ class WebhookChannel(BaseChannel):
     type = "webhook"
 
     async def send(self, message: NotifyMessage, config: dict, secret: str | None) -> None:
-        """POST 事件载荷；HTTP 异常或非 2xx/3xx 响应视为发送失败。"""
+        """POST 已由通知服务渲染的 JSON 载荷。"""
         url = str((config or {}).get("url") or "").strip()
         if not url:
             raise ChannelSendError("Webhook URL 未配置")
-        # 载荷固定结构，receivers 透传供接收方展示（冲突决策 C2）
-        body = json.dumps(
-            {
-                "event": message.event,
-                "title": message.title,
-                "content": message.content or "",
-                "receivers": message.receivers,
-                "timestamp": int(time.time()),
-            },
-            ensure_ascii=False,
-        )
+        try:
+            payload = json.loads(message.content or "")
+        except json.JSONDecodeError as exc:
+            raise ChannelSendError(f"Webhook JSON 模板无效: {exc}") from exc
+        body = json.dumps(payload, ensure_ascii=False)
         headers = {"Content-Type": "application/json"}
         if secret:
             # 时间戳参与签名，接收方可校验时效防重放
@@ -47,7 +41,7 @@ class WebhookChannel(BaseChannel):
             headers["X-Ops-Signature"] = sign
         try:
             async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-                resp = await client.post(url, content=body.encode(), headers=headers)
+                resp = await client.post(url, json=payload, headers=headers)
         except httpx.HTTPError as exc:
             raise ChannelSendError(f"Webhook 请求失败: {exc}") from exc
         if resp.status_code >= 400:

@@ -10,11 +10,13 @@
 _issue_or_challenge，避免三态判定逻辑重复。
 """
 import logging
+import hashlib
 import secrets
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from redis.exceptions import WatchError
 
 from app import audit
 from app.auth_providers import LdapAuthProvider, LocalAuthProvider
@@ -23,7 +25,9 @@ from app.core import security
 from app.core.config import settings
 from app.core.response import BizError, Errors
 from app.models.auth import User
+from app.models.notify import NotifyChannel
 from app.services import config_service
+from app.services import notify_service
 
 logger = logging.getLogger("opspilot.auth")
 
@@ -32,6 +36,7 @@ _PROVIDERS = [LocalAuthProvider(), LdapAuthProvider()]
 
 _MFA_PENDING_TTL = 600  # 绑定中 secret 的 Redis 保留时间（秒）
 _SSO_TICKET_TTL = 60    # SSO 一次性换票有效期（秒）
+RESET_MESSAGE = "如果该邮箱已绑定本地账号，系统将发送密码重置邮件，请查收邮箱。"
 
 
 # ---------- 登录主流程 ----------
@@ -129,8 +134,11 @@ async def _create_token_pair(session: AsyncSession, user: User) -> dict:
     refresh_ttl = timedelta(days=int(policy.get("refresh_days") or settings.refresh_token_days))
     access, _, expires_in = security.create_token(
         user.id, user.username, security.SCOPE_ACCESS, ttl=access_ttl)
-    refresh, _, _ = security.create_token(
+    refresh, refresh_jti, _ = security.create_token(
         user.id, user.username, security.SCOPE_REFRESH, ttl=refresh_ttl)
+    refresh_key = redis_mod.KEY_USER_REFRESH.format(user_id=user.id)
+    await redis_mod.redis_client.sadd(refresh_key, refresh_jti)
+    await redis_mod.redis_client.expire(refresh_key, int(refresh_ttl.total_seconds()))
     return {
         "access_token": access,
         "refresh_token": refresh,
@@ -187,6 +195,160 @@ async def _revoke_jti(payload: dict) -> None:
         await redis_mod.redis_client.set(
             redis_mod.KEY_TOKEN_REVOKED.format(jti=payload["jti"]), "1", ex=remain
         )
+    await redis_mod.redis_client.srem(
+        redis_mod.KEY_USER_REFRESH.format(user_id=payload["sub"]), payload["jti"]
+    )
+
+
+async def _revoke_all_user_refresh(user: User) -> None:
+    key = redis_mod.KEY_USER_REFRESH.format(user_id=user.id)
+    jtis = await redis_mod.redis_client.smembers(key)
+    for jti in jtis:
+        await redis_mod.redis_client.set(
+            redis_mod.KEY_TOKEN_REVOKED.format(jti=jti), "1", ex=settings.refresh_token_days * 86400
+        )
+    await redis_mod.redis_client.delete(key)
+
+
+def _normalize_email(value: str) -> str:
+    return value.strip().lower()
+
+
+async def password_policy(session: AsyncSession) -> dict:
+    policy = await config_service.get_config(session, "password.policy") or {}
+    return {
+        "min_length": int(policy.get("min_length", 8)),
+        "require_complex": bool(policy.get("require_complex", True)),
+    }
+
+
+async def forgot_password(session: AsyncSession, email: str, ip: str | None) -> None:
+    """申请重置：所有外部路径统一返回，内部按条件生成邮件。"""
+    normalized = _normalize_email(email)
+    cooldown = redis_mod.KEY_PWD_RESET_EMAIL_COOLDOWN.format(email=normalized)
+    daily = redis_mod.KEY_PWD_RESET_EMAIL_DAILY.format(date=datetime.now().strftime("%Y%m%d"), email=normalized)
+    hourly = redis_mod.KEY_PWD_RESET_IP_HOURLY.format(hour=datetime.now().strftime("%Y%m%d%H"), ip=ip or "unknown")
+    if await redis_mod.redis_client.exists(cooldown) or int(await redis_mod.redis_client.get(daily) or 0) >= 5 or int(await redis_mod.redis_client.get(hourly) or 0) >= 20:
+        audit.log(module="auth", action="pwd_reset_failed", result="failed", source_ip=ip,
+                  detail={"reason": "rate_limited"})
+        return
+    await redis_mod.redis_client.set(cooldown, "1", ex=60)
+    for key, ttl in ((daily, 86400), (hourly, 3600)):
+        count = await redis_mod.redis_client.incr(key)
+        if count == 1:
+            await redis_mod.redis_client.expire(key, ttl)
+    user = (await session.execute(select(User).where(User.email == normalized))).scalar_one_or_none()
+    if user is None or user.source != "local" or not user.email:
+        audit.log(module="auth", action="pwd_reset_failed", result="failed", source_ip=ip,
+                  detail={"reason": "not_eligible"})
+        return
+    channel = (await session.execute(select(NotifyChannel).where(NotifyChannel.type == "email"))).scalar_one_or_none()
+    cfg = channel.config if channel else None
+    if (
+        not channel
+        or not channel.enabled
+        or not cfg
+        or not str(cfg.get("host") or "").strip()
+        or not str(cfg.get("from_addr") or cfg.get("username") or "").strip()
+    ):
+        audit.log(module="auth", action="pwd_reset_failed", result="failed", actor_id=user.id,
+                  actor_name=user.username, source_ip=ip, detail={"reason": "smtp_unconfigured"})
+        return
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    ttl = settings.reset_token_ttl_minutes * 60
+    await redis_mod.redis_client.set(redis_mod.KEY_PWD_RESET.format(user_id=user.id), token_hash, ex=ttl)
+    await redis_mod.redis_client.set(redis_mod.KEY_PWD_RESET_LOOKUP.format(token_hash=token_hash), str(user.id), ex=ttl + 86400)
+    reset_url = f"{settings.public_base_url.rstrip('/')}/reset-password?token={raw_token}"
+    content = (
+        f"您好，{user.username}：\n\n我们收到了您的密码重置请求。\n\n"
+        f"请点击以下链接设置新密码：\n\n{reset_url}\n\n"
+        f"该链接将在 {settings.reset_token_ttl_minutes} 分钟后失效，且只能使用一次。\n\n"
+        f"请求来源 IP：{ip or 'unknown'}\n\n若非本人操作，请忽略此邮件，不会有任何变更。\n\nOpsPilot"
+    )
+    await notify_service.emit_security_email(session, receiver=normalized,
+                                              source_ip=ip,
+                                              title="【OpsPilot】密码重置请求", content=content)
+    audit.log(module="auth", action="pwd_reset_requested", result="success", actor_id=user.id,
+              actor_name=user.username, source_ip=ip)
+
+
+async def validate_reset_token(token: str) -> dict:
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    used_key = redis_mod.KEY_PWD_RESET_USED.format(token_hash=token_hash)
+    if await redis_mod.redis_client.exists(used_key):
+        return {"status": "used"}
+    user_id = await redis_mod.redis_client.get(redis_mod.KEY_PWD_RESET_LOOKUP.format(token_hash=token_hash))
+    if not user_id:
+        return {"status": "invalid"}
+    key = redis_mod.KEY_PWD_RESET.format(user_id=user_id)
+    stored = await redis_mod.redis_client.get(key)
+    if not stored:
+        return {"status": "expired"}
+    if stored != token_hash:
+        return {"status": "used"}
+    return {"status": "valid", "expires_in_seconds": await redis_mod.redis_client.ttl(key)}
+
+
+async def reset_password(session: AsyncSession, token: str, new_password: str, ip: str | None) -> None:
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    lookup_key = redis_mod.KEY_PWD_RESET_LOOKUP.format(token_hash=token_hash)
+    user_id = await redis_mod.redis_client.get(lookup_key)
+    if not user_id:
+        audit.log(module="auth", action="pwd_reset_failed", result="failed", source_ip=ip,
+                  detail={"reason": "invalid_token"})
+        raise Errors.param("重置链接无效或已过期")
+    user = await session.get(User, int(user_id))
+    if user is None or user.source != "local" or not user.password_hash:
+        audit.log(module="auth", action="pwd_reset_failed", result="failed", source_ip=ip,
+                  detail={"reason": "invalid_user"})
+        raise Errors.param("重置链接无效或已过期")
+    policy = await config_service.get_config(session, "password.policy") or {}
+    try:
+        security.validate_password_strength(new_password, policy)
+    except BizError:
+        audit.log(module="auth", action="pwd_reset_failed", result="failed", actor_id=user.id,
+                  actor_name=user.username, source_ip=ip, detail={"reason": "password_policy"})
+        raise
+    if security.verify_password(new_password, user.password_hash):
+        audit.log(module="auth", action="pwd_reset_failed", result="failed", actor_id=user.id,
+                  actor_name=user.username, source_ip=ip, detail={"reason": "same_as_current"})
+        raise Errors.param("新密码不能与当前密码相同")
+    # Prepare the password update before consuming the token so transient hashing or
+    # persistence failures do not strand the user with an unusable reset link.
+    user.password_hash = security.hash_password(new_password)
+    user.must_change_password = False
+    user.locked_until = None
+    await redis_mod.redis_client.delete(redis_mod.KEY_LOGIN_FAIL.format(username=user.username))
+    await _revoke_all_user_refresh(user)
+    await session.flush()
+
+    user_key = redis_mod.KEY_PWD_RESET.format(user_id=user_id)
+    pipe = redis_mod.redis_client.pipeline(transaction=True)
+    consumed = 0
+    try:
+        await pipe.watch(user_key)
+        current = await pipe.get(user_key)
+        if current == token_hash:
+            pipe.multi()
+            pipe.delete(user_key, lookup_key)
+            await pipe.execute()
+            consumed = 1
+        elif current:
+            consumed = -1
+    except WatchError:
+        consumed = -1
+    finally:
+        await pipe.reset()
+    if consumed != 1:
+        audit.log(module="auth", action="pwd_reset_failed", result="failed", actor_id=user.id,
+                  actor_name=user.username, source_ip=ip, detail={"reason": "used_token"})
+        raise Errors.param("重置链接已使用")
+    await redis_mod.redis_client.set(
+        redis_mod.KEY_PWD_RESET_USED.format(token_hash=token_hash), "1", ex=86400
+    )
+    audit.log(module="auth", action="pwd_reset_success", result="success", actor_id=user.id,
+              actor_name=user.username, source_ip=ip)
 
 
 # ---------- MFA ----------
@@ -223,6 +385,8 @@ async def mfa_bind(
     audit.log(module="auth", action="mfa.bind", result="success",
               actor_id=user.id, actor_name=user.username, source_ip=ip)
     if issue_tokens:
+        # 后续首次改密会抛出 40105，先提交已验证的 MFA 绑定，避免请求回滚丢失状态。
+        await session.commit()
         return await _issue_or_challenge(session, user, ip, mfa_passed=True)
     return None
 

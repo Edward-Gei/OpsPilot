@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 角色管理：角色卡片列表 + 权限矩阵编辑（role:read / role:write）
-// 内置角色（admin/ops/auditor）不允许改权限矩阵与删除，由后端 42201 兜底
+// admin 角色不可编辑或删除，其他内置角色允许编辑但不可删除，由后端兜底
 import { computed, onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { PlusOutlined, SafetyCertificateOutlined, TeamOutlined } from '@ant-design/icons-vue'
@@ -9,6 +9,7 @@ import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 const canWrite = userStore.hasPerm('role:write')
+const canEditRole = (role: sysApi.RoleItem) => canWrite && role.code !== 'admin'
 
 // 角色头像渐变色（按卡片顺序循环，提升辨识度）
 const avatarGrads = [
@@ -110,8 +111,7 @@ async function onSubmitEdit() {
       await sysApi.updateRole(editing.value.id, {
         name: editForm.name,
         description: editForm.description || undefined,
-        // 内置角色权限矩阵锁定，不提交 permissions 字段
-        ...(editing.value.is_builtin ? {} : { permissions: editForm.permissions }),
+        ...(editing.value.code !== 'admin' ? { permissions: editForm.permissions } : {}),
       })
       message.success('已保存')
     } else {
@@ -161,7 +161,7 @@ onMounted(loadAll)
     </div>
 
     <div class="toolbar">
-      <div class="hint">内置角色（标记 <a-tag>内置</a-tag>）权限矩阵固定，不可修改或删除</div>
+      <div class="hint">admin 角色不可编辑；其他内置角色可编辑权限但不可删除</div>
       <a-button v-if="canWrite" type="primary" @click="openCreate">
         <PlusOutlined />新建角色
       </a-button>
@@ -196,9 +196,9 @@ onMounted(loadAll)
             <a-tag v-if="role.permissions.length > 6">+{{ role.permissions.length - 6 }}</a-tag>
             <span v-if="!role.permissions.length" class="muted">无权限点</span>
           </div>
-          <div v-if="canWrite" class="role-actions">
+          <div v-if="canEditRole(role)" class="role-actions">
             <a-button size="small" @click="openEdit(role)">
-              {{ role.is_builtin ? '查看 / 改名' : '编辑' }}
+              编辑
             </a-button>
             <a-popconfirm
               v-if="!role.is_builtin"
@@ -242,7 +242,7 @@ onMounted(loadAll)
             type="warning"
             show-icon
             class="builtin-alert"
-            message="内置角色的权限矩阵固定，仅可修改名称与描述。"
+            message="admin 角色不可编辑；其他内置角色可修改权限矩阵。"
           />
           <a-checkbox-group v-model:value="editForm.permissions" class="perm-groups">
             <div v-for="g in permGroups" :key="g.module" class="perm-group">
@@ -251,7 +251,7 @@ onMounted(loadAll)
                 v-for="p in g.items"
                 :key="p.code"
                 :value="p.code"
-                :disabled="!!editing?.is_builtin"
+                :disabled="editing?.code === 'admin'"
               >
                 {{ p.name }}
               </a-checkbox>
@@ -281,6 +281,12 @@ onMounted(loadAll)
 }
 .role-card {
   border-radius: 14px;
+  height: 100%;
+}
+.role-card :deep(.ant-card-body) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 .role-head {
   display: flex;
@@ -326,7 +332,7 @@ onMounted(loadAll)
   font-size: 12px;
 }
 .role-actions {
-  margin-top: 10px;
+  margin-top: auto;
   padding-top: 10px;
   border-top: 1px solid var(--border);
   display: flex;

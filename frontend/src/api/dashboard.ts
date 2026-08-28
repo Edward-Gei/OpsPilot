@@ -7,14 +7,12 @@ export interface RecentExecution {
   ticket_id: number
   ticket_no: string
   title: string
-  app_id: number
-  app_name: string
+  job_host_id: number
+  job_host_name: string | null
   creator_id: number
   creator_name: string
   status: string
   total_steps: number
-  total_hosts: number
-  triggered_by: string
   started_at: string | null
   finished_at: string | null
   created_at: string | null

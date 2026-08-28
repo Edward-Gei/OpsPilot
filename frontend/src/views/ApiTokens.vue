@@ -2,7 +2,7 @@
 // 访问密钥：个人 API Token 管理（明文仅创建时展示一次，opsp_ 前缀 Bearer 直调平台 API）
 import { onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
-import { CopyOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons-vue'
+import { CopyOutlined, DeleteOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons-vue'
 import * as tokenApi from '@/api/apiToken'
 
 // ---------- 列表（每人上限 10 个，无需分页） ----------
@@ -151,7 +151,7 @@ onMounted(loadList)
         <template v-else-if="column.key === 'created'">{{ fmt(record.created_at) }}</template>
         <template v-else-if="column.key === 'action'">
           <a-popconfirm title="删除后立即失效，确认删除？" @confirm="onDelete(record as tokenApi.ApiTokenItem)">
-            <a-button size="small" danger>删除</a-button>
+            <a-button size="small" danger><DeleteOutlined />删除</a-button>
           </a-popconfirm>
         </template>
       </template>

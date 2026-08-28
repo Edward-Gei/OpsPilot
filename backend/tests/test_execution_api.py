@@ -5,10 +5,11 @@
   resume=仅 paused、force-abort=running/paused，状态不匹配 40901；
 - 控制权限：无 execution:control 40301；非创建人且非 admin 40302；
 - 控制接口只发信号不改工单状态（状态迁移由 pipeline 单一写入方负责）；
-- 执行记录只读接口：列表筛选 / 详情步骤 / 主机明细 / 历史日志 / 事件长轮询；
-- 作业主机连通性测试：凭据缺失返回 success=False（不抛错）。
+- 执行记录只读接口：列表筛选 / 详情步骤 / 历史日志 / 事件长轮询；
+- 作业主机连通性测试：SSH 异常返回 ok=False（不抛错）。
 """
 import os
+from datetime import datetime
 
 from sqlalchemy import select, update
 
@@ -24,9 +25,9 @@ from tests.test_ticket_api import _approver_headers, _base_env, _create_template
 
 # ---------- 测试辅助 ----------
 
-async def _queued_ticket(client, env, db_factory) -> tuple[dict, int]:
+async def _queued_ticket(client, env, db_factory, **template_override) -> tuple[dict, int]:
     """免审提交一张工单（queued），返回 (提交返回体, execution_id)。"""
-    tpl_id = await _create_template(client, env)
+    tpl_id = await _create_template(client, env, **template_override)
     data = await _submit(client, env["ops_h"], tpl_id)
     async with db_factory() as s:
         eid = (await s.execute(
@@ -64,23 +65,23 @@ class TestExecutionControl:
         tid = data["id"]
         h = env["ops_h"]
 
-        # queued：pause/resume/force-abort 均 40901
-        for op in ("pause", "resume", "force-abort"):
+        # queued：普通控制的状态机拒绝；force-abort 先由独立权限拒绝
+        for op in ("pause", "resume"):
             resp = await client.post(f"/api/v1/tickets/{tid}/{op}", headers=h)
             assert resp.json()["code"] == 40901, op
+        assert (await client.post(f"/api/v1/tickets/{tid}/force-abort", headers=h)).json()["code"] == 40301
         # queued：abort 放行（覆盖排队中撤销场景），工单状态保持 queued
         body = (await client.post(f"/api/v1/tickets/{tid}/abort", headers=h)).json()
         assert body["code"] == 0
         assert body["data"] == {"status": "queued", "execution_id": eid, "signal": "abort"}
         assert await fake_redis.get(f"ops:ctrl:{eid}") == "abort"
 
-        # running：pause / force-abort 放行；resume 40901
+        # running：pause 放行；force-abort 由 ops 独立权限拒绝；resume 40901
         await _set_ticket_status(db_factory, tid, "running")
         assert (await client.post(f"/api/v1/tickets/{tid}/pause", headers=h)).json()["code"] == 0
         assert await fake_redis.get(f"ops:ctrl:{eid}") == "pause"
         assert (await client.post(f"/api/v1/tickets/{tid}/resume", headers=h)).json()["code"] == 40901
-        assert (await client.post(f"/api/v1/tickets/{tid}/force-abort", headers=h)).json()["code"] == 0
-        assert await fake_redis.get(f"ops:ctrl:{eid}") == "force_abort"
+        assert (await client.post(f"/api/v1/tickets/{tid}/force-abort", headers=h)).json()["code"] == 40301
 
         # paused：resume 放行；pause 40901
         await _set_ticket_status(db_factory, tid, "paused")
@@ -90,9 +91,10 @@ class TestExecutionControl:
 
         # 终态：一律 40901
         await _set_ticket_status(db_factory, tid, "success")
-        for op in ("abort", "pause", "resume", "force-abort"):
+        for op in ("abort", "pause", "resume"):
             resp = await client.post(f"/api/v1/tickets/{tid}/{op}", headers=h)
             assert resp.json()["code"] == 40901, op
+        assert (await client.post(f"/api/v1/tickets/{tid}/force-abort", headers=h)).json()["code"] == 40301
 
     async def test_control_permission(self, client, db_factory, seed):
         """approver 无 execution:control 40301；ops2 非创建人 40302；admin 放行。"""
@@ -117,10 +119,33 @@ class TestExecutionControl:
 
 
 class TestExecutionReadApis:
-    """执行记录只读接口：列表 / 详情 / 主机明细 / 日志 / 事件长轮询。"""
+    """执行记录只读接口：列表 / 详情 / 日志 / 事件长轮询。"""
 
-    async def test_list_detail_hosts(self, client, db_factory):
-        """列表筛选与详情步骤/主机明细装配（预建子表全 pending）。"""
+    async def test_list_filters_by_started_at(self, client, db_factory):
+        """时间范围按实际开始时间过滤，而不是执行记录创建时间。"""
+        env = await _base_env(client)
+        _first, in_range_id = await _queued_ticket(client, env, db_factory)
+        _second, out_range_id = await _queued_ticket(
+            client, env, db_factory, name="重启 Nginx 2",
+        )
+        async with db_factory() as session:
+            await session.execute(update(Execution).where(Execution.id == in_range_id).values(
+                created_at=datetime(2026, 7, 1, 10), started_at=datetime(2026, 8, 10, 10),
+            ))
+            await session.execute(update(Execution).where(Execution.id == out_range_id).values(
+                created_at=datetime(2026, 8, 10, 10), started_at=datetime(2026, 7, 1, 10),
+            ))
+            await session.commit()
+
+        body = (await client.get("/api/v1/executions", params={
+            "start": "2026-08-01 00:00:00", "end": "2026-08-31 23:59:59",
+        }, headers=env["ops_h"])).json()["data"]
+
+        assert body["total"] == 1
+        assert [item["id"] for item in body["items"]] == [in_range_id]
+
+    async def test_list_and_detail(self, client, db_factory):
+        """列表筛选与详情步骤装配（预建步骤子表全 pending）。"""
         env = await _base_env(client)
         data, eid = await _queued_ticket(client, env, db_factory)
 
@@ -130,8 +155,8 @@ class TestExecutionReadApis:
                                  headers=env["ops_h"])).json()["data"]
         assert body["total"] == 1
         item = body["items"][0]
-        assert (item["id"], item["status"], item["triggered_by"]) == (eid, "queued", "no_approval")
-        assert item["creator_name"] == "ops1" and item["app_name"] == "订单服务"
+        assert (item["id"], item["status"]) == (eid, "queued")
+        assert item["creator_name"] == "ops1" and item["job_host_name"] == "tk-agent-01"
         body = (await client.get("/api/v1/executions", params={"status": "running"},
                                  headers=env["ops_h"])).json()["data"]
         assert body["total"] == 0
@@ -140,19 +165,12 @@ class TestExecutionReadApis:
         detail = (await client.get(f"/api/v1/executions/{eid}",
                                    headers=env["ops_h"])).json()["data"]
         assert (detail["status"], detail["ticket_status"]) == ("queued", "queued")
-        assert (detail["total_steps"], detail["total_hosts"]) == (1, 1)
-        assert detail["exec_strategy"]["concurrency"] == 5
+        assert detail["total_steps"] == 1
+        assert detail["exec_strategy"]["timeout"] == 600
         assert len(detail["steps"]) == 1
         step = detail["steps"][0]
         assert (step["step_order"], step["step_name"], step["script_type"]) == (1, "重启服务", "shell")
         assert step["status"] == "pending"
-
-        # 主机明细：预建行 pending / batch_no 默认 1
-        hosts = (await client.get(f"/api/v1/executions/{eid}/hosts",
-                                  headers=env["ops_h"])).json()["data"]
-        assert hosts["total"] == 1
-        row = hosts["items"][0]
-        assert (row["ip"], row["status"], row["batch_no"], row["step_order"]) == ("10.9.0.1", "pending", 1, 1)
 
         # 不存在 40401
         assert (await client.get("/api/v1/executions/99999",
@@ -163,22 +181,22 @@ class TestExecutionReadApis:
         env = await _base_env(client)
         _data, eid = await _queued_ticket(client, env, db_factory)
         monkeypatch.setattr(settings, "exec_log_dir", str(tmp_path))
-        path = log_file_path(eid, 1, "10.9.0.1")
+        path = log_file_path(eid, 1)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write("line1\nline2\nline3\n")
 
         body = (await client.get(f"/api/v1/executions/{eid}/logs",
-                                 params={"step_order": 1, "ip": "10.9.0.1", "offset": 0, "limit": 2},
+                                 params={"step_order": 1, "offset": 0, "limit": 2},
                                  headers=env["ops_h"])).json()["data"]
         assert body == {"lines": ["line1", "line2"], "next_offset": 2, "eof": False}
         body = (await client.get(f"/api/v1/executions/{eid}/logs",
-                                 params={"step_order": 1, "ip": "10.9.0.1", "offset": 2},
+                                 params={"step_order": 1, "offset": 2},
                                  headers=env["ops_h"])).json()["data"]
         assert body == {"lines": ["line3"], "next_offset": 3, "eof": True}
-        # 文件不存在（如 Ansible 伪主机未产生日志）→ 空 + eof
+        # 文件不存在（步骤尚未产生日志）→ 空 + eof
         body = (await client.get(f"/api/v1/executions/{eid}/logs",
-                                 params={"step_order": 1, "ip": "ansible"},
+                                 params={"step_order": 2},
                                  headers=env["ops_h"])).json()["data"]
         assert body == {"lines": [], "next_offset": 0, "eof": True}
 
@@ -213,17 +231,21 @@ class TestExecutionReadApis:
 
 
 class TestJobHostTestApi:
-    """作业主机连通性测试接口（04-API §11）。"""
+    """作业主机连通性测试接口（/api/v1/job-hosts/{id}/test）。"""
 
-    async def test_missing_credential_and_permission(self, client, db_factory):
-        """凭据不存在 → success=False（不抛错）；ops 无 system:config 40301。"""
+    async def test_ssh_failure_and_permission(self, client, db_factory, monkeypatch):
+        """SSH 建连异常 → ok=False（不抛错）；ops 无 job_host:write 40301。"""
         env = await _base_env(client)
-        payload = {"ip": "10.0.0.9", "port": 22, "credential_id": 9999}
-        body = (await client.post("/api/v1/system/ansible-job-host/test",
-                                  json=payload, headers=env["admin_h"])).json()
-        assert body["code"] == 0
-        assert body["data"]["success"] is False and "凭据" in body["data"]["message"]
 
-        resp = await client.post("/api/v1/system/ansible-job-host/test",
-                                 json=payload, headers=env["ops_h"])
+        async def _fail_conn(ip, port, cred):
+            raise OSError("connection refused")
+
+        monkeypatch.setattr("app.services.job_host_service.open_connection", _fail_conn)
+        body = (await client.post(f"/api/v1/job-hosts/{env['job_host_id']}/test",
+                                  headers=env["admin_h"])).json()
+        assert body["code"] == 0
+        assert body["data"]["ok"] is False and "SSH 异常" in body["data"]["message"]
+
+        resp = await client.post(f"/api/v1/job-hosts/{env['job_host_id']}/test",
+                                 headers=env["ops_h"])
         assert resp.json()["code"] == 40301
