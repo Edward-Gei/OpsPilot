@@ -184,6 +184,7 @@ export function listTemplates(params: {
   keyword?: string
   type?: string
   status?: string
+  process_template_id?: number
 }) {
   return request<PageResult<TemplateItem>>({ url: '/templates', method: 'get', params })
 }

@@ -138,7 +138,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/templates` | `template:read` | 分页、关键字、类型和状态筛选 |
+| GET | `/templates` | `template:read` | 分页、关键字、类型、流程模板和状态筛选 |
 | POST | `/templates` | `template:write` | 创建工单入口和参数定义 |
 | GET | `/templates/{id}` | `template:read` | 入口详情和流程引用 |
 | PUT | `/templates/{id}` | `template:write` | 全量更新 |

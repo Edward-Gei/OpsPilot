@@ -139,7 +139,8 @@ async def delete_process_template(session: AsyncSession, process_id: int) -> Pro
 
 
 async def list_templates(session: AsyncSession, *, page: int, page_size: int, keyword: str | None = None,
-                         type_: str | None = None, status: str | None = None):
+                         type_: str | None = None, status: str | None = None,
+                         process_template_id: int | None = None):
     query = select(TicketTemplate)
     if keyword:
         query = query.where(TicketTemplate.name.like(f"%{keyword}%"))
@@ -147,6 +148,8 @@ async def list_templates(session: AsyncSession, *, page: int, page_size: int, ke
         query = query.where(TicketTemplate.type == type_)
     if status:
         query = query.where(TicketTemplate.status == status)
+    if process_template_id is not None:
+        query = query.where(TicketTemplate.process_template_id == process_template_id)
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
     rows = await session.execute(query.order_by(TicketTemplate.id.desc()).offset((page - 1) * page_size).limit(page_size))
     return list(rows.scalars()), total
