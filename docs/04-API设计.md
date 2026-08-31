@@ -153,7 +153,7 @@
 | GET | `/tickets/templates/{template_id}/form` | `ticket:write` | 参数表单和作业主机/步骤只读预览 |
 | POST | `/tickets/prepare` | `ticket:write` | 执行动态参数脚本并生成短期 `prepare_id` |
 | POST | `/tickets` | `ticket:write` | `{template_id,params,prepare_id?}` 提交工单 |
-| GET | `/tickets` | `ticket:read` | 分页、状态、创建人、关键字和时间筛选 |
+| GET | `/tickets` | `ticket:read` | 分页、工单状态、创建人、关键字（工单号/标题/提交人）、创建时间，以及最新执行实例的 `execution_status`、`has_execution`、`execution_active` 筛选；列表项包含可空 `execution` 摘要 |
 | GET | `/tickets/todo` | `ticket:approve` | 当前角色待审批列表 |
 | GET | `/tickets/todo/events` | `ticket:approve` | `since_seq`（整数，`>=0`，默认 `0`）回放当前用户的待办变更事件；无新事件最长等待 30 秒，返回 `{events:[{seq,kind:"todo.changed"}],last_seq}`，超时返回空 `events` 和原 `since_seq`。客户端必须直接赋值返回的 `last_seq`；若游标大于当前序号，返回一条合成 `todo.changed` 重同步事件和较小的 `last_seq` |
 | GET | `/tickets/{id}` | `ticket:read` | 工单、快照、审批时间线和执行概要 |
@@ -164,7 +164,7 @@
 | POST | `/tickets/{id}/resume` | `execution:control` | 恢复执行 |
 | POST | `/tickets/{id}/force-abort` | `execution:force_control` | 强制中止并记录高风险审计 |
 
-工单服务校验模板启用、可见角色、流程启用、参数定义和预生成结果；提交后只读快照。
+工单服务校验模板启用、可见角色、流程启用、参数定义和预生成结果；提交后只读快照。`GET /tickets` 中的 `execution` 是每张工单最新执行实例的 `{id,status,total_steps,started_at,finished_at}` 摘要；`has_execution=true` 仅返回已创建执行实例的工单，`execution_active=true` 匹配最新执行状态为 `queued`、`running` 或 `paused` 的工单。
 
 ## 7. 执行和实时日志
 
@@ -176,6 +176,8 @@
 | GET | `/executions/{id}/events` | `execution:read` | 状态事件 REST 长轮询 |
 
 日志保存在共享卷，事件用于低延迟刷新，前端按偏移增量读取正文。
+
+前端工单中心是唯一的列表入口；不提供 `/executions` 列表路由。以上执行接口和 `/executions/{id}` 执行详情页继续用于步骤、日志和控制。
 
 ## 8. 通知
 

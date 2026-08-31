@@ -11,11 +11,13 @@ import {
   PlusOutlined,
   RollbackOutlined,
   SearchOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons-vue'
 import * as ticketApi from '@/api/ticket'
 import { makeResizable, onResizeColumn } from '@/utils/table'
 import { useUserStore } from '@/stores/user'
-import { fmtTime, statusMeta, statusOptions } from './meta'
+import { fmtTime, statusMeta } from './meta'
+import { execStatusMeta } from '@/views/execution/meta'
 import TicketWizard from './TicketWizard.vue'
 import TicketDetailDrawer from './TicketDetailDrawer.vue'
 
@@ -37,13 +39,32 @@ const query = reactive({
   page: 1,
   page_size: 20,
   keyword: '',
-  status: undefined as string | undefined,
+  combined_status: undefined as string | undefined,
+  has_execution: false,
+  execution_active: false,
   // 创建时间范围：[开始, 结束]，精确到秒（YYYY-MM-DD HH:mm:ss）
   range: [
     dayjs().subtract(30, 'day').format('YYYY-MM-DD HH:mm:ss'),
     dayjs().format('YYYY-MM-DD HH:mm:ss'),
   ] as string[],
 })
+
+const combinedStatusOptions = [
+  {
+    label: '工单状态',
+    options: (['approving', 'rejected', 'cancelled'] as const).map((value) => ({
+      label: statusMeta[value].text,
+      value: `ticket:${value}`,
+    })),
+  },
+  {
+    label: '执行状态',
+    options: (['queued', 'running', 'paused', 'success', 'failed', 'terminated', 'interrupted'] as const).map((value) => ({
+      label: execStatusMeta[value].text,
+      value: `execution:${value}`,
+    })),
+  },
+]
 const usingDefaultRange = ref(true)
 
 // 时间筛选快捷项：最近 N 天 → 当前时刻，精确到秒
@@ -61,10 +82,11 @@ const columns = ref(makeResizable([
   { title: '状态', key: 'status', width: 140 },
   { title: '提交人', dataIndex: 'creator_name', key: 'creator_name', width: 110, ellipsis: true },
   { title: '提交时间', key: 'submitted', width: 155 },
-  { title: '操作', key: 'action', width: 171, fixed: 'right' as const },
+  { title: '完成时间', key: 'finished', width: 155 },
+  { title: '操作', key: 'action', width: 220, fixed: 'right' as const },
 ]))
 
-/** 拉取工单列表（keyword 匹配 工单号/标题） */
+/** 拉取工单列表（keyword 匹配工单号、标题或提交人） */
 async function loadList() {
   loading.value = true
   try {
@@ -72,7 +94,10 @@ async function loadList() {
       page: query.page,
       page_size: query.page_size,
       keyword: query.keyword || undefined,
-      status: query.status,
+      status: query.combined_status?.startsWith('ticket:') ? query.combined_status.slice(7) : undefined,
+      execution_status: query.combined_status?.startsWith('execution:') ? query.combined_status.slice(10) : undefined,
+      has_execution: query.has_execution || undefined,
+      execution_active: query.execution_active || undefined,
       start: query.range?.[0] || undefined,
       end: query.range?.[1] || undefined,
     })
@@ -142,6 +167,12 @@ function openDetail(row: ticketApi.TicketBrief) {
   detailOpen.value = true
 }
 
+function openExecution(row: ticketApi.TicketBrief) {
+  if (row.execution) {
+    router.push({ name: 'execution-detail', params: { id: row.execution.id } })
+  }
+}
+
 // ---------- 撤回（仅创建人、审批中；模板禁止撤回时后端 42201） ----------
 async function onCancel(row: ticketApi.TicketBrief) {
   try {
@@ -154,20 +185,37 @@ async function onCancel(row: ticketApi.TicketBrief) {
 }
 
 onMounted(() => {
+  let usedRouteQuery = false
   // 全局搜索跳转：?keyword= 带入搜索框自动过滤，随后清掉 query 避免刷新残留（SEARCH-04）
   const qkw = route.query.keyword
   if (typeof qkw === 'string' && qkw) {
     query.keyword = qkw
-    router.replace({ path: route.path })
+    usedRouteQuery = true
   }
-  refreshAll()
+  const executionStatus = route.query.execution_status
+  if (typeof executionStatus === 'string' && executionStatus) {
+    query.combined_status = `execution:${executionStatus}`
+    usedRouteQuery = true
+  }
+  if (route.query.has_execution === 'true') {
+    query.has_execution = true
+    usedRouteQuery = true
+  }
+  if (route.query.execution_active === 'true') {
+    query.execution_active = true
+    usedRouteQuery = true
+  }
   // 站内通知跳转：?id={工单id} 自动打开详情抽屉，随后清掉 query 避免刷新重复弹出
   const qid = Number(route.query.id)
   if (qid > 0) {
     detailId.value = qid
     detailOpen.value = true
+    usedRouteQuery = true
+  }
+  if (usedRouteQuery) {
     router.replace({ path: route.path })
   }
+  refreshAll()
 })
 </script>
 
@@ -192,7 +240,7 @@ onMounted(() => {
     <div class="toolbar">
       <a-input
         v-model:value="query.keyword"
-        placeholder="搜索工单号/标题"
+        placeholder="搜索工单号/标题/提交人"
         class="kw"
         allow-clear
         @press-enter="onSearch"
@@ -200,11 +248,11 @@ onMounted(() => {
         <template #prefix><SearchOutlined /></template>
       </a-input>
       <a-select
-        v-model:value="query.status"
+        v-model:value="query.combined_status"
         placeholder="状态"
         class="status-sel"
         allow-clear
-        :options="statusOptions"
+        :options="combinedStatusOptions"
         @change="onSearch"
       />
       <a-range-picker
@@ -228,7 +276,7 @@ onMounted(() => {
       :loading="loading"
       row-key="id"
       bordered
-      :scroll="{ x: 1180 }"
+      :scroll="{ x: 1550 }"
       @resize-column="onResizeColumn"
       :pagination="{
         current: query.page,
@@ -243,16 +291,34 @@ onMounted(() => {
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'job_host'">{{ record.job_host_name || '—' }}</template>
         <template v-else-if="column.key === 'status'">
-          <a-tag :color="statusMeta[record.status as ticketApi.TicketStatus]?.color">
+          <a-tag
+            v-if="record.execution"
+            :color="execStatusMeta[record.execution.status as keyof typeof execStatusMeta]?.color"
+          >
+            {{ execStatusMeta[record.execution.status as keyof typeof execStatusMeta]?.text || record.execution.status }}
+          </a-tag>
+          <a-tag
+            v-else
+            :color="statusMeta[record.status as ticketApi.TicketStatus]?.color"
+          >
             {{ statusMeta[record.status as ticketApi.TicketStatus]?.text || record.status }}
           </a-tag>
         </template>
         <template v-else-if="column.key === 'submitted'">{{ fmtTime(record.submitted_at) }}</template>
+        <template v-else-if="column.key === 'finished'">{{ fmtTime(record.finished_at) }}</template>
         <template v-else-if="column.key === 'action'">
           <a-space>
             <a-button size="small" class="op-btn-cyan" @click="openDetail(record as ticketApi.TicketBrief)">
               <EyeOutlined />
               详情
+            </a-button>
+            <a-button
+              v-if="record.execution && userStore.hasPerm('execution:read')"
+              size="small"
+              class="op-btn-cyan"
+              @click="openExecution(record as ticketApi.TicketBrief)"
+            >
+              <ThunderboltOutlined />执行详情
             </a-button>
             <!-- 审批中：仅创建人可撤回（模板 allow_withdraw=false 时后端拒绝） -->
             <a-popconfirm
@@ -276,6 +342,7 @@ onMounted(() => {
 <style scoped>
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 16px;
 }

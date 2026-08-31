@@ -120,7 +120,7 @@ const heroStats = computed(() => {
   if (!s) return []
   const list: { label: string; value: number; path: string }[] = []
   if (s.todo_total !== null) list.push({ label: '待我审批', value: s.todo_total, path: '/ticket/todo' })
-  if (s.execution) list.push({ label: '执行中', value: s.execution.active.running ?? 0, path: '/executions' })
+  if (s.execution) list.push({ label: '执行中', value: s.execution.active.running ?? 0, path: '/ticket/list?execution_status=running' })
   if (s.ticket) list.push({ label: '今日工单', value: s.ticket.today_total, path: '/ticket/list' })
   return list
 })
@@ -170,7 +170,7 @@ const kpis = computed<KpiCard[]>(() => {
       grad: 'orange', icon: RocketOutlined,
       num: String((a.queued ?? 0) + (a.running ?? 0) + (a.paused ?? 0)), label: '进行中执行',
       trend: `排队 ${a.queued ?? 0} · 执行 ${a.running ?? 0} · 暂停 ${a.paused ?? 0}`,
-      path: '/executions',
+      path: '/ticket/list?execution_active=true',
     })
   } else if (s.audit_today !== null) {
     cards.push({
@@ -305,7 +305,7 @@ const ALL_LINKS: QuickLink[] = [
   { icon: AuditOutlined, color: '#fbbf24', label: '待办审批', path: '/ticket/todo', perm: 'ticket:approve' },
   { icon: DatabaseOutlined, color: '#4ade80', label: '主机管理', path: '/cmdb/hosts', perm: 'cmdb:read' },
   { icon: CodeOutlined, color: '#a78bfa', label: '模板管理', path: '/job/templates', perm: 'template:read' },
-  { icon: RocketOutlined, color: '#38bdf8', label: '执行中心', path: '/executions', perm: 'execution:read' },
+  { icon: RocketOutlined, color: '#38bdf8', label: '执行记录', path: '/ticket/list?has_execution=true', perm: 'execution:read' },
   { icon: BellOutlined, color: '#f472b6', label: '通知中心', path: '/notify', perm: 'notify:read' },
   { icon: SafetyCertificateOutlined, color: '#f87171', label: '安全审计', path: '/audit', perm: 'audit:read' },
   { icon: TeamOutlined, color: '#34d399', label: '用户管理', path: '/system/users', perm: 'user:read' },
@@ -467,7 +467,7 @@ onUnmounted(() => {
                 <div class="op-card-title">执行动态</div>
                 <div class="op-card-sub">最近执行记录 · 30 秒自动刷新</div>
               </div>
-              <a class="more-link" @click="router.push('/executions')">全部执行 →</a>
+              <a class="more-link" @click="router.push('/ticket/list?has_execution=true')">全部执行 →</a>
             </div>
             <div v-if="summary.execution.recent.length" class="exec-list">
               <div
