@@ -167,7 +167,7 @@ onMounted(load)
     <div class="toolbar">
       <a-input v-model:value="query.keyword" class="kw" allow-clear placeholder="搜索工单模板" @press-enter="search"><template #prefix><SearchOutlined /></template></a-input>
       <a-select v-model:value="query.type" class="type-sel" allow-clear placeholder="模板类型" :options="typeOptions" @change="search" />
-      <a-select v-model:value="query.process_template_id" class="process-sel" allow-clear placeholder="流程模板" :options="processOptions" @change="search" />
+      <a-select v-model:value="query.process_template_id" class="process-sel" allow-clear show-search option-filter-prop="label" placeholder="流程模板" :options="processOptions" @change="search" />
       <a-select v-model:value="query.status" class="status-sel" allow-clear placeholder="状态" :options="[{ label: '启用', value: 'enabled' }, { label: '停用', value: 'disabled' }]" @change="search" />
       <div class="toolbar-actions">
         <a-button v-if="canDelete" danger :disabled="!selectedKeys.length" @click="confirmBatchRemove"><DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}</a-button>
