@@ -20,7 +20,6 @@ import {
   SearchOutlined,
   SettingOutlined,
   TeamOutlined,
-  ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons-vue'
 import { pollTodoEvents, todoTickets } from '@/api/ticket'
@@ -115,8 +114,6 @@ const menuGroups = computed(() =>
         // M4 已开放：工单中心 + 待办审批（角标显示待我审批数）
         { key: 'ticket-list', label: '工单中心', icon: FileDoneOutlined, path: '/ticket/list', perm: 'ticket:read' },
         { key: 'ticket-todo', label: '待办审批', icon: AuditOutlined, path: '/ticket/todo', perm: 'ticket:approve', count: todoCount.value },
-                // M5 已开放：执行中心（执行记录 + 矩阵/实时日志）
-                { key: 'execution-list', label: '执行中心', icon: ThunderboltOutlined, path: '/executions', perm: 'execution:read' },
         { key: 'audit-logs', label: '安全审计', icon: SafetyCertificateOutlined, path: '/audit', perm: 'audit:read' },
                 // M6 已开放：通知中心（渠道配置 + 事件映射 + 发送记录）
                 { key: 'notify', label: '通知中心', icon: BellOutlined, path: '/notify', perm: 'notify:read' },

@@ -619,9 +619,13 @@ class TestApproveAndCancel:
         resp = await client.post(f"/api/v1/tickets/{data['id']}/cancel", headers=env["ops_h"])
         assert resp.json()["code"] == 42201
 
-    async def test_list_filters(self, client, seed):
-        """列表筛选：status/keyword 命中；标题=模板名。"""
+    async def test_list_filters(self, client, seed, db_factory):
+        """列表筛选：状态、工单号、标题和提交人关键字均可命中。"""
         env = await _base_env(client)
+        async with db_factory() as session:
+            creator = await session.get(User, seed["users"]["ops1"])
+            creator.display_name = "运维一号"
+            await session.commit()
         tpl_a = await _create_template(
             client, env, approval_roles=[seed["roles"]["approver"]])
         tpl_b = await _create_template(client, env, name="免审模板")
@@ -635,6 +639,48 @@ class TestApproveAndCancel:
                                 headers=env["ops_h"])
         body = resp.json()["data"]
         assert body["total"] == 1 and body["items"][0]["ticket_no"] == data_a["ticket_no"]
+        for creator_keyword in ("运维一号", "ops1"):
+            resp = await client.get("/api/v1/tickets", params={"keyword": creator_keyword},
+                                    headers=env["ops_h"])
+            body = resp.json()["data"]
+            assert body["total"] == 2
+
+    async def test_list_returns_latest_execution_summary_and_filters(self, client, seed, db_factory):
+        """列表取最新执行摘要；执行状态和已有执行记录筛选不混入审批中工单。"""
+        env = await _base_env(client)
+        approval_template = await _create_template(
+            client, env, approval_roles=[seed["roles"]["approver"]])
+        execution_template = await _create_template(client, env, name="免审模板")
+        awaiting = await _submit(client, env["ops_h"], approval_template)
+        executed = await _submit(client, env["ops_h"], execution_template)
+        active = await _submit(client, env["ops_h"], execution_template)
+
+        async with db_factory() as session:
+            session.add(Execution(ticket_id=executed["id"], status="failed", total_steps=1))
+            await session.commit()
+
+        body = (await client.get("/api/v1/tickets", headers=env["ops_h"])).json()["data"]
+        rows = {row["id"]: row for row in body["items"]}
+        assert rows[awaiting["id"]]["execution"] is None
+        assert rows[executed["id"]]["execution"]["status"] == "failed"
+
+        failed = (await client.get(
+            "/api/v1/tickets", params={"execution_status": "failed"}, headers=env["ops_h"],
+        )).json()["data"]
+        assert failed["total"] == 1
+        assert [row["id"] for row in failed["items"]] == [executed["id"]]
+
+        with_execution = (await client.get(
+            "/api/v1/tickets", params={"has_execution": True}, headers=env["ops_h"],
+        )).json()["data"]
+        assert with_execution["total"] == 2
+        assert {row["id"] for row in with_execution["items"]} == {executed["id"], active["id"]}
+
+        active_rows = (await client.get(
+            "/api/v1/tickets", params={"execution_active": True}, headers=env["ops_h"],
+        )).json()["data"]
+        assert active_rows["total"] == 1
+        assert [row["id"] for row in active_rows["items"]] == [active["id"]]
 
     async def test_list_time_range(self, client, seed, db_factory):
         """创建时间范围筛选：秒级 start/end 命中；回归——曾因缺括号把裸字符串传入 where 报 500。"""

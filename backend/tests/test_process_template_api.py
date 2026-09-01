@@ -122,6 +122,32 @@ async def test_ops_can_load_template_reference_options(client):
     assert roles.json()["code"] == 0
 
 
+async def test_ticket_template_list_filters_by_process_template(client):
+    """列表筛选必须只返回指定流程关联的工单模板。"""
+    admin, _, host_id = await _env(client)
+    first_process = await client.post("/api/v1/process-templates", headers=admin,
+                                      json={**_process_payload(), "name": "流程筛选目标"})
+    second_process = await client.post("/api/v1/process-templates", headers=admin,
+                                       json={**_process_payload(), "name": "流程筛选排除"})
+    first_process_id = first_process.json()["data"]["id"]
+    second_process_id = second_process.json()["data"]["id"]
+    for name, process_id in [("目标流程模板", first_process_id), ("排除流程模板", second_process_id)]:
+        created = await client.post("/api/v1/templates", headers=admin, json={
+            "name": name, "type": "daily_ops", "job_host_id": host_id,
+            "process_template_id": process_id, "params_schema": [], "notify_rules": [], "visible_role_ids": [],
+        })
+        assert created.json()["code"] == 0, created.json()
+
+    response = await client.get("/api/v1/templates", headers=admin,
+                                params={"process_template_id": first_process_id})
+
+    data = response.json()["data"]
+    assert data["total"] == 1
+    assert [(item["name"], item["process_template_id"]) for item in data["items"]] == [
+        ("目标流程模板", first_process_id)
+    ]
+
+
 def test_generated_parameter_output_supports_value_and_options():
     values, options = _parse_output('{"release": ["blue", "green"], "version": "2026.08"}', ["release", "version"])
     assert values == {"version": "2026.08"}

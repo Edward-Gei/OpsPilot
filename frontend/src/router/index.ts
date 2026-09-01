@@ -98,17 +98,11 @@ const router = createRouter({
           meta: { title: '待办审批', perm: 'ticket:approve' },
         },
         {
-          path: 'executions',
-          name: 'execution-list',
-          component: () => import('@/views/execution/ExecutionList.vue'),
-          meta: { title: '执行中心', perm: 'execution:read' },
-        },
-        {
           path: 'executions/:id',
           name: 'execution-detail',
           component: () => import('@/views/execution/ExecutionDetail.vue'),
-          // menuKey：详情页侧边栏仍高亮「执行中心」
-          meta: { title: '执行详情', perm: 'execution:read', menuKey: 'execution-list' },
+          // menuKey：详情页侧边栏高亮「工单中心」
+          meta: { title: '执行详情', perm: 'execution:read', menuKey: 'ticket-list' },
         },
         {
           path: 'notify',

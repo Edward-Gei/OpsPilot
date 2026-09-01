@@ -549,7 +549,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="op-hero-extra hero-actions">
-        <a-button class="back-btn" @click="router.push({ name: 'execution-list' })">
+        <a-button class="back-btn" @click="router.push({ name: 'ticket-list', query: { has_execution: 'true' } })">
           <ArrowLeftOutlined />返回列表
         </a-button>
         <a-popconfirm v-if="showControl('pause')" placement="bottom" overlay-class-name="execution-control-popconfirm" title="确认暂停执行？在跑步骤将先跑完。" @confirm="onControl('pause')">

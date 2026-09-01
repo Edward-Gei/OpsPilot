@@ -34,9 +34,10 @@ const open = ref(false)
 const copyFromId = ref<number | null>(null)
 const detail = ref<api.TemplateDetail | null>(null)
 const detailOpen = ref(false)
-const query = reactive({ page: 1, page_size: 20, keyword: '', type: undefined as string | undefined, status: undefined as string | undefined })
+const query = reactive({ page: 1, page_size: 20, keyword: '', type: undefined as string | undefined, process_template_id: undefined as number | undefined, status: undefined as string | undefined })
 const hostMap = computed(() => Object.fromEntries(hosts.value.map((h) => [h.id, h.name])))
 const processMap = computed(() => Object.fromEntries(processes.value.map((p) => [p.id, p.name])))
+const processOptions = computed(() => processes.value.map((process) => ({ label: process.name, value: process.id })))
 const roleMap = computed(() => Object.fromEntries(roles.value.map((role) => [role.id, role.name])))
 const paramSourceText: Record<api.TicketParamSource, string> = { fixed: '固定值', user: '用户输入', generated: '动态生成' }
 const paramInputText: Record<api.TicketInputType, string> = { text: '文本', enum: '枚举' }
@@ -166,6 +167,7 @@ onMounted(load)
     <div class="toolbar">
       <a-input v-model:value="query.keyword" class="kw" allow-clear placeholder="搜索工单模板" @press-enter="search"><template #prefix><SearchOutlined /></template></a-input>
       <a-select v-model:value="query.type" class="type-sel" allow-clear placeholder="模板类型" :options="typeOptions" @change="search" />
+      <a-select v-model:value="query.process_template_id" class="process-sel" allow-clear show-search option-filter-prop="label" placeholder="流程模板" :options="processOptions" @change="search" />
       <a-select v-model:value="query.status" class="status-sel" allow-clear placeholder="状态" :options="[{ label: '启用', value: 'enabled' }, { label: '停用', value: 'disabled' }]" @change="search" />
       <div class="toolbar-actions">
         <a-button v-if="canDelete" danger :disabled="!selectedKeys.length" @click="confirmBatchRemove"><DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}</a-button>
@@ -232,7 +234,7 @@ onMounted(load)
 
 <style scoped>
 .toolbar { display: flex; gap: 10px; margin-bottom: 16px; }
-.kw { width: 220px; }.type-sel { width: 130px; }.status-sel { width: 110px; }.toolbar-actions { margin-left: auto; display: flex; gap: 10px; }
+.kw { width: 220px; }.type-sel { width: 130px; }.process-sel { width: 180px; }.status-sel { width: 110px; }.toolbar-actions { margin-left: auto; display: flex; gap: 10px; }
 .copy-tip { font-size: 12px; color: var(--text-3); margin-bottom: 10px; }.copy-select { width: 100%; }
 .head-line { display: flex; gap: 4px; margin-bottom: 14px; }.detail-collapse { margin-top: 14px; }.detail-list { display: flex; flex-direction: column; gap: 10px; }.detail-item-title { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font-weight: 600; }.detail-code { max-height: 240px; overflow: auto; margin: 0; padding: 10px; background: var(--bg-soft); white-space: pre-wrap; word-break: break-word; }.inline-muted { color: var(--text-3); margin-left: 4px; }
 </style>

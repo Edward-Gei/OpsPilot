@@ -27,6 +27,7 @@ logger = logging.getLogger("opspilot.api.tickets")
 
 _TODO_EVENT_POLL_TIMEOUT = 30
 _TODO_EVENT_POLL_INTERVAL = 1.0
+_UNSET = object()
 
 
 async def _publish_todo_changes(user_ids: list[int]) -> None:
@@ -39,9 +40,9 @@ async def _publish_todo_changes(user_ids: list[int]) -> None:
         logger.exception("发布工单待办变更事件失败", extra={"user_ids": user_ids})
 
 
-def _ticket_brief(t, creator_names: dict[int, str] | None = None) -> dict:
+def _ticket_brief(t, creator_names: dict[int, str] | None = None, execution=_UNSET) -> dict:
     """工单主表统一序列化（列表/待办共用，不含快照明细）。"""
-    return {
+    data = {
         "id": t.id,
         "ticket_no": t.ticket_no,
         "template_id": t.template_id,
@@ -60,6 +61,15 @@ def _ticket_brief(t, creator_names: dict[int, str] | None = None) -> dict:
         "finished_at": t.finished_at.isoformat() if t.finished_at else None,
         "created_at": t.created_at.isoformat() if t.created_at else None,
     }
+    if execution is not _UNSET:
+        data["execution"] = {
+            "id": execution.id,
+            "status": execution.status,
+            "total_steps": execution.total_steps,
+            "started_at": execution.started_at.isoformat() if execution.started_at else None,
+            "finished_at": execution.finished_at.isoformat() if execution.finished_at else None,
+        } if execution else None
+    return data
 
 
 async def _creator_name_map(session, tickets) -> dict[int, str]:
@@ -152,17 +162,23 @@ async def list_tickets(
     page_size: int = Query(20, ge=1, le=100),
     status: str | None = None,
     creator_id: int | None = None,
-    keyword: str | None = Query(None, description="模糊匹配标题/工单号"),
+    keyword: str | None = Query(None, description="模糊匹配标题/工单号/提交人"),
     start: str | None = None,
     end: str | None = None,
+    execution_status: str | None = None,
+    has_execution: bool | None = None,
+    execution_active: bool | None = None,
 ) -> dict:
-    """分页查工单（status/creator/keyword/时间范围）。"""
+    """分页查工单（工单与最新执行状态筛选）。"""
     tickets, total = await ticket_service.list_tickets(
         session, page=page, page_size=page_size, status=status,
         creator_id=creator_id, keyword=keyword, start=start, end=end,
+        execution_status=execution_status, has_execution=has_execution,
+        execution_active=execution_active,
     )
     names = await _creator_name_map(session, tickets)
-    return ok({"items": [_ticket_brief(t, names) for t in tickets], "total": total,
+    executions = await ticket_service.latest_executions_for_tickets(session, tickets)
+    return ok({"items": [_ticket_brief(t, names, executions.get(t.id)) for t in tickets], "total": total,
                "page": page, "page_size": page_size})
 
 

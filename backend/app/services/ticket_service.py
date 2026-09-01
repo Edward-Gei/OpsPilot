@@ -455,16 +455,67 @@ async def cancel_ticket(session: AsyncSession, ticket_id: int, *, actor: User) -
 
 
 async def list_tickets(session: AsyncSession, *, page: int, page_size: int, status: str | None = None,
-                       creator_id: int | None = None, keyword: str | None = None, start: str | None = None, end: str | None = None):
+                       creator_id: int | None = None, keyword: str | None = None, start: str | None = None,
+                       end: str | None = None, execution_status: str | None = None,
+                       has_execution: bool | None = None, execution_active: bool | None = None):
     query = select(Ticket)
+    latest_execution_id = (
+        select(Execution.id)
+        .where(Execution.ticket_id == Ticket.id)
+        .order_by(Execution.id.desc())
+        .limit(1)
+        .correlate(Ticket)
+        .scalar_subquery()
+    )
     if status: query = query.where(Ticket.status == status)
     if creator_id: query = query.where(Ticket.creator_id == creator_id)
-    if keyword: query = query.where(Ticket.ticket_no.like(f"%{keyword}%") | Ticket.title.like(f"%{keyword}%"))
+    if keyword:
+        creator_matches = (
+            select(User.id)
+            .where(
+                User.id == Ticket.creator_id,
+                User.display_name.like(f"%{keyword}%") | User.username.like(f"%{keyword}%"),
+            )
+            .correlate(Ticket)
+            .exists()
+        )
+        query = query.where(Ticket.ticket_no.like(f"%{keyword}%") | Ticket.title.like(f"%{keyword}%") | creator_matches)
     if start: query = query.where(Ticket.created_at >= start)
     if end: query = query.where(Ticket.created_at <= (f"{end} 23:59:59" if len(end) == 10 else end))
+    if has_execution:
+        query = query.where(latest_execution_id.is_not(None))
+    if execution_status or execution_active:
+        latest_execution_status = (
+            select(Execution.status)
+            .where(Execution.ticket_id == Ticket.id)
+            .order_by(Execution.id.desc())
+            .limit(1)
+            .correlate(Ticket)
+            .scalar_subquery()
+        )
+    if execution_status:
+        query = query.where(latest_execution_status == execution_status)
+    if execution_active:
+        query = query.where(latest_execution_status.in_(("queued", "running", "paused")))
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
     rows = await session.execute(query.order_by(Ticket.id.desc()).offset((page - 1) * page_size).limit(page_size))
     return list(rows.scalars()), total
+
+
+async def latest_executions_for_tickets(session: AsyncSession, tickets: list[Ticket]) -> dict[int, Execution]:
+    """批量取当前页每张工单的最新执行实例，避免列表装配产生 N+1 查询。"""
+    ticket_ids = [ticket.id for ticket in tickets]
+    if not ticket_ids:
+        return {}
+    rows = await session.execute(
+        select(Execution)
+        .where(Execution.ticket_id.in_(ticket_ids))
+        .order_by(Execution.ticket_id, Execution.id.desc())
+    )
+    latest: dict[int, Execution] = {}
+    for execution in rows.scalars():
+        latest.setdefault(execution.ticket_id, execution)
+    return latest
 
 
 async def todo_tickets(session: AsyncSession, *, user_id: int, page: int, page_size: int):

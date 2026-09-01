@@ -55,6 +55,7 @@ export interface TicketBrief {
   submitted_at: string | null
   finished_at: string | null
   created_at: string | null
+  execution?: ExecutionBrief | null
 }
 
 export interface TodoEvent {
@@ -99,6 +100,8 @@ export interface ExecutionBrief {
   status: string
   total_steps: number
   created_at: string | null
+  started_at?: string | null
+  finished_at?: string | null
 }
 
 /** 工单详情（只读，全部来自快照） */
@@ -123,6 +126,9 @@ export interface TicketQuery {
   keyword?: string
   start?: string
   end?: string
+  execution_status?: string
+  has_execution?: boolean
+  execution_active?: boolean
 }
 
 // ---------- 可用模板与提交表单 ----------
