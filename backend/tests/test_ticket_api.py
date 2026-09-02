@@ -731,6 +731,22 @@ class TestApproveAndCancel:
         assert active_rows["total"] == 1
         assert [row["id"] for row in active_rows["items"]] == [active["id"]]
 
+    async def test_list_keeps_approving_ticket_status_with_queued_execution(self, client, seed, db_factory):
+        """步骤前审批时工单审批状态与已保留的排队执行实例必须同时返回。"""
+        env = await _base_env(client)
+        approval_template = await _create_template(
+            client, env, approval_roles=[seed["roles"]["approver"]])
+        awaiting = await _submit(client, env["ops_h"], approval_template)
+
+        async with db_factory() as session:
+            session.add(Execution(ticket_id=awaiting["id"], status="queued", total_steps=1))
+            await session.commit()
+
+        body = (await client.get("/api/v1/tickets", headers=env["ops_h"])).json()["data"]
+        row = next(item for item in body["items"] if item["id"] == awaiting["id"])
+        assert row["status"] == "approving"
+        assert row["execution"]["status"] == "queued"
+
     async def test_list_time_range(self, client, seed, db_factory):
         """创建时间范围筛选：秒级 start/end 命中；回归——曾因缺括号把裸字符串传入 where 报 500。"""
         env = await _base_env(client)
