@@ -18,6 +18,7 @@ from app.engine import todo_events
 from app.models.auth import User, UserRole
 from app.models.execution import Execution
 from app.models.notify import NotificationRecord
+from app.models.ticket import Ticket
 from app.services import ticket_service
 from tests.conftest import TEST_PASSWORD_HASH, auth_header, login_for_tokens
 
@@ -210,6 +211,14 @@ class TestUsableTemplatesAndForm:
         resp = await client.get(f"/api/v1/tickets/templates/{limited}/form", headers=env["ops_h"])
         assert resp.json()["code"] == 40302
 
+    async def test_template_concurrency_control_roundtrip(self, client):
+        """模板并发控制开关保存后，详情接口必须如实返回当前配置。"""
+        env = await _base_env(client)
+        tpl_id = await _create_template(client, env, concurrency_control_enabled=True)
+
+        detail = (await client.get(f"/api/v1/templates/{tpl_id}", headers=env["ops_h"])).json()["data"]
+        assert detail["concurrency_control_enabled"] is True
+
 
 class TestSubmit:
     """提交：五重快照 / 参数校验 / 免审直跑 / 提交守卫。"""
@@ -351,6 +360,46 @@ class TestSubmit:
         assert not detail["flow_snap"]["steps"][0]["approval_role_id"] and detail["total_steps"] == 1
         assert await fake_redis.xlen(EXEC_QUEUE) == 1
         assert await _notify_rows(db_factory) == []
+
+    async def test_rejects_second_submission_when_template_concurrency_control_enabled(self, client, db_factory):
+        """同模板已有排队执行时，第二次提交必须返回占用工单信息且不落新快照。"""
+        env = await _base_env(client)
+        tpl_id = await _create_template(client, env, concurrency_control_enabled=True)
+        first = await _submit(client, env["ops_h"], tpl_id)
+
+        response = await client.post(
+            "/api/v1/tickets", json={"template_id": tpl_id, "params": {}}, headers=env["ops_h"],
+        )
+
+        assert response.status_code == 409
+        assert response.json()["code"] == 40901
+        assert first["ticket_no"] in response.json()["message"]
+        assert "queued" in response.json()["message"]
+        async with db_factory() as session:
+            assert len(list((await session.execute(select(Ticket))).scalars())) == 1
+            assert len(list((await session.execute(select(Execution))).scalars())) == 1
+
+    async def test_disabling_concurrency_control_allows_later_submission(self, client):
+        """关闭开关立即放开后续提交，但不改变已排队执行的第一张工单。"""
+        env = await _base_env(client)
+        tpl_id = await _create_template(client, env, concurrency_control_enabled=True)
+        first = await _submit(client, env["ops_h"], tpl_id)
+        template = (await client.get(f"/api/v1/templates/{tpl_id}", headers=env["ops_h"])).json()["data"]
+        template["concurrency_control_enabled"] = False
+        template.pop("id")
+        template.pop("created_at")
+        template.pop("updated_at")
+        template.pop("process_template")
+
+        updated = await client.put(f"/api/v1/templates/{tpl_id}", json=template, headers=env["ops_h"])
+        second = await client.post(
+            "/api/v1/tickets", json={"template_id": tpl_id, "params": {}}, headers=env["ops_h"],
+        )
+
+        assert updated.json()["code"] == 0
+        assert second.json()["code"] == 0
+        first_detail = (await client.get(f"/api/v1/tickets/{first['id']}", headers=env["ops_h"])).json()["data"]
+        assert first_detail["execution"]["status"] == "queued"
 
     async def test_submit_guard(self, client, seed):
         """禁用模板 40901；可见范围外 40302。"""

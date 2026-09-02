@@ -33,7 +33,7 @@ const generatorScript = computed({ get: () => form.generator_script || '', set: 
 function emptyForm(): api.TicketTemplateForm {
   return {
     name: '', type: 'daily_ops', description: '', job_host_id: undefined as unknown as number,
-    process_template_id: undefined as unknown as number, params_schema: [], generator_script: '', generator_timeout: 60, allow_withdraw: true,
+    process_template_id: undefined as unknown as number, params_schema: [], generator_script: '', generator_timeout: 60, allow_withdraw: true, concurrency_control_enabled: false,
     credential_refs: [], notify_rules: [], visible_role_ids: [], status: 'enabled',
   }
 }
@@ -98,6 +98,7 @@ async function load(): Promise<void> {
       generator_timeout: data.generator_timeout || 60,
       credential_refs: (data.credential_refs || []).map((ref) => ({ alias: ref.alias, credential_id: ref.credential_id, credential_name: ref.credential_name })),
       allow_withdraw: data.allow_withdraw,
+      concurrency_control_enabled: data.concurrency_control_enabled,
       notify_rules: (data.notify_rules || []).map((rule) => ({
         event: rule.event, receivers: [...rule.receivers], channels: [...rule.channels],
       })),
@@ -210,6 +211,7 @@ async function save(): Promise<void> {
               <a-button size="small" class="op-btn-green" @click="addCredentialRef"><PlusOutlined />添加脚本密钥</a-button>
             </template>
             <a-form-item><a-checkbox v-model:checked="form.allow_withdraw">允许创建人终止待处理工单</a-checkbox></a-form-item>
+            <a-form-item><a-checkbox v-model:checked="form.concurrency_control_enabled">启用同模板并发控制</a-checkbox></a-form-item>
           </a-form>
         </a-tab-pane>
         <a-tab-pane key="params" :tab="`参数与动态生成（${form.params_schema.length}）`">

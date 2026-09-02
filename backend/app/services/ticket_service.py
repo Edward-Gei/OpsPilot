@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from jinja2 import Environment, meta
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import redis as redis_mod
@@ -304,6 +304,7 @@ async def _start_execution(session: AsyncSession, ticket: Ticket) -> Execution:
     execution = Execution(ticket_id=ticket.id, status="queued", total_steps=len(steps))
     session.add(execution)
     await session.flush()
+    await _claim_template_concurrency_guard(session, ticket, execution)
     for step in steps:
         session.add(ExecutionStep(execution_id=execution.id, ticket_step_id=step.id, step_order=step.step_order))
     await session.flush()
@@ -312,6 +313,53 @@ async def _start_execution(session: AsyncSession, ticket: Ticket) -> Execution:
     except Exception:
         pass
     return execution
+
+
+async def _claim_template_concurrency_guard(
+    session: AsyncSession, ticket: Ticket, execution: Execution,
+) -> None:
+    """原子占用开启并发控制的模板，避免不同请求同时创建执行快照。"""
+    template = await session.get(TicketTemplate, ticket.template_id)
+    if template is None or not template.concurrency_control_enabled:
+        return
+    claimed = await session.execute(
+        update(TicketTemplate)
+        .where(
+            TicketTemplate.id == template.id,
+            TicketTemplate.concurrency_control_enabled.is_(True),
+            TicketTemplate.active_execution_id.is_(None),
+        )
+        .values(active_execution_id=execution.id)
+    )
+    if claimed.rowcount:
+        return
+
+    await session.refresh(template, attribute_names=["concurrency_control_enabled", "active_execution_id"])
+    if not template.concurrency_control_enabled:
+        return
+    owner = await session.get(Execution, template.active_execution_id)
+    if owner is not None:
+        owner_ticket = await session.get(Ticket, owner.ticket_id)
+        if owner_ticket is not None:
+            raise Errors.conflict(
+                f"工单 {owner_ticket.ticket_no} 正在执行中（{owner.status}），本次提交已拒绝"
+            )
+    raise Errors.conflict("工单模板已有执行中的工单，本次提交已拒绝")
+
+
+async def release_template_concurrency_guard(session: AsyncSession, execution: Execution) -> None:
+    """仅允许当前执行实例释放其占有的模板，避免旧执行误清新占用。"""
+    template_id = await session.scalar(select(Ticket.template_id).where(Ticket.id == execution.ticket_id))
+    if template_id is None:
+        return
+    await session.execute(
+        update(TicketTemplate)
+        .where(
+            TicketTemplate.id == template_id,
+            TicketTemplate.active_execution_id == execution.id,
+        )
+        .values(active_execution_id=None)
+    )
 
 
 async def _ensure_creator_or_admin(session: AsyncSession, ticket: Ticket, actor: User) -> None:
@@ -383,6 +431,7 @@ async def approve_ticket(session: AsyncSession, ticket_id: int, *, actor: User, 
             for execution_step in pending_steps:
                 execution_step.status = HostExecStatus.SKIPPED.value
                 execution_step.finished_at = datetime.now()
+            await release_template_concurrency_guard(session, execution)
         await _emit_ticket_event(
             session,
             ticket,
@@ -450,6 +499,7 @@ async def cancel_ticket(session: AsyncSession, ticket_id: int, *, actor: User) -
         for execution_step in pending_steps:
             execution_step.status = HostExecStatus.SKIPPED.value
             execution_step.finished_at = datetime.now()
+        await release_template_concurrency_guard(session, execution)
     await session.flush()
     return ticket
 

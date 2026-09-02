@@ -19,6 +19,7 @@ def _brief(t, credential_refs: list[dict] | None = None) -> dict:
         "params_schema": t.params_schema or [], "generator_script": t.generator_script,
         "generator_timeout": t.generator_timeout,
         "status": t.status, "allow_withdraw": t.allow_withdraw,
+        "concurrency_control_enabled": t.concurrency_control_enabled,
         "notify_rules": t.notify_rules or [], "visible_role_ids": t.visible_role_ids or [],
         "created_at": t.created_at.isoformat() if t.created_at else None,
         "updated_at": t.updated_at.isoformat() if t.updated_at else None,

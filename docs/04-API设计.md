@@ -139,9 +139,9 @@
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/templates` | `template:read` | 分页、关键字、类型、流程模板和状态筛选 |
-| POST | `/templates` | `template:write` | 创建工单入口和参数定义 |
+| POST | `/templates` | `template:write` | 创建工单入口、参数定义和可选同模板并发控制 |
 | GET | `/templates/{id}` | `template:read` | 入口详情和流程引用 |
-| PUT | `/templates/{id}` | `template:write` | 全量更新 |
+| PUT | `/templates/{id}` | `template:write` | 全量更新；并发控制开关对后续提交立即生效 |
 | PUT | `/templates/{id}/status` | `template:write` | 启停 |
 | DELETE | `/templates/{id}` | `template:delete` | 有进行中工单时拒绝 |
 
@@ -152,7 +152,7 @@
 | GET | `/tickets/templates` | `ticket:write` | 返回启用且当前角色可见的模板 |
 | GET | `/tickets/templates/{template_id}/form` | `ticket:write` | 参数表单和作业主机/步骤只读预览 |
 | POST | `/tickets/prepare` | `ticket:write` | 执行动态参数脚本并生成短期 `prepare_id` |
-| POST | `/tickets` | `ticket:write` | `{template_id,params,prepare_id?}` 提交工单 |
+| POST | `/tickets` | `ticket:write` | `{template_id,params,prepare_id?}` 提交工单；同模板并发控制开启且已有活跃执行时返回 `40901`、占用工单号和执行状态 |
 | GET | `/tickets` | `ticket:read` | 分页、工单状态、创建人、关键字（工单号/标题/提交人）、创建时间，以及最新执行实例的 `execution_status`、`has_execution`、`execution_active` 筛选；列表项包含可空 `execution` 摘要 |
 | GET | `/tickets/todo` | `ticket:approve` | 当前角色待审批列表 |
 | GET | `/tickets/todo/events` | `ticket:approve` | `since_seq`（整数，`>=0`，默认 `0`）回放当前用户的待办变更事件；无新事件最长等待 30 秒，返回 `{events:[{seq,kind:"todo.changed"}],last_seq}`，超时返回空 `events` 和原 `since_seq`。客户端必须直接赋值返回的 `last_seq`；若游标大于当前序号，返回一条合成 `todo.changed` 重同步事件和较小的 `last_seq` |
@@ -164,7 +164,7 @@
 | POST | `/tickets/{id}/resume` | `execution:control` | 恢复执行 |
 | POST | `/tickets/{id}/force-abort` | `execution:force_control` | 强制中止并记录高风险审计 |
 
-工单服务校验模板启用、可见角色、流程启用、参数定义和预生成结果；提交后只读快照。`GET /tickets` 中的 `execution` 是每张工单最新执行实例的 `{id,status,total_steps,started_at,finished_at}` 摘要；`has_execution=true` 仅返回已创建执行实例的工单，`execution_active=true` 匹配最新执行状态为 `queued`、`running` 或 `paused` 的工单。
+工单服务校验模板启用、可见角色、流程启用、参数定义、预生成结果和模板并发控制；提交后只读快照。开启同模板并发控制时，首个执行从 `queued` 起持有模板直到成功、失败、中止、撤回、驳回或崩溃恢复归档；关闭开关不影响已持有者，但后续提交不再受该模板互斥限制。`GET /tickets` 中的 `execution` 是每张工单最新执行实例的 `{id,status,total_steps,started_at,finished_at}` 摘要；`has_execution=true` 仅返回已创建执行实例的工单，`execution_active=true` 匹配最新执行状态为 `queued`、`running` 或 `paused` 的工单。
 
 ## 7. 执行和实时日志
 

@@ -14,6 +14,7 @@ import TicketTemplateEditor from './TicketTemplateEditor.vue'
 interface Row extends api.TemplateItem {
   process_template_id: number
   allow_withdraw: boolean
+  concurrency_control_enabled: boolean
   notify_rules: api.NotifyRule[]
   visible_role_ids: number[]
 }
@@ -210,6 +211,7 @@ onMounted(load)
             <a-descriptions-item v-if="detail.credential_refs?.length" label="脚本密钥"><a-space wrap><a-tag v-for="ref in detail.credential_refs" :key="ref.alias" color="purple">{{ ref.alias }} → {{ ref.credential_name }}</a-tag></a-space></a-descriptions-item>
             <a-descriptions-item label="可见角色"><template v-if="detail.visible_role_ids?.length"><a-space wrap><a-tag v-for="roleId in detail.visible_role_ids" :key="roleId" color="blue">{{ roleMap[roleId] || roleId }}</a-tag></a-space></template><span v-else>全部角色</span></a-descriptions-item>
             <a-descriptions-item label="允许终止">{{ detail.allow_withdraw ? '是' : '否' }}</a-descriptions-item>
+            <a-descriptions-item label="并发控制">{{ detail.concurrency_control_enabled ? '启用' : '关闭' }}</a-descriptions-item>
             <a-descriptions-item label="创建时间">{{ detail.created_at ? new Date(detail.created_at).toLocaleString() : '-' }}</a-descriptions-item>
             <a-descriptions-item label="更新时间">{{ detail.updated_at ? new Date(detail.updated_at).toLocaleString() : '-' }}</a-descriptions-item>
           </a-descriptions>

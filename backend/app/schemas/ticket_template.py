@@ -56,6 +56,7 @@ class TicketTemplateUpsertRequest(BaseModel):
     generator_timeout: int | None = Field(default=60, ge=1, le=3600)
     credential_refs: list[CredentialRefInput] = Field(default_factory=list, max_length=50)
     allow_withdraw: bool = True
+    concurrency_control_enabled: bool = False
     notify_rules: list[NotifyRuleInput] = Field(default_factory=list)
     visible_role_ids: list[int] = Field(default_factory=list)
     status: Literal["enabled", "disabled"] = "enabled"

@@ -107,6 +107,7 @@ export interface TicketTemplateForm {
   generator_timeout?: number | null
   credential_refs: CredentialRef[]
   allow_withdraw: boolean
+  concurrency_control_enabled: boolean
   notify_rules: NotifyRule[]
   visible_role_ids: number[]
   status?: TemplateStatus
@@ -166,6 +167,7 @@ export interface TemplateItem {
   generator_timeout?: number | null
   credential_refs?: CredentialRef[]
   allow_withdraw: boolean
+  concurrency_control_enabled: boolean
   notify_rules: NotifyRule[]
   visible_role_ids: number[]
   status: TemplateStatus
