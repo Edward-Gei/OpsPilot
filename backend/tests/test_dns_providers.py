@@ -2,6 +2,7 @@
 import copy
 
 import pytest
+from google.auth import exceptions as google_auth_exceptions
 
 from app.core.constants import DomainProvider
 from app.dns_providers.aws_route53 import AwsRoute53Adapter
@@ -409,8 +410,12 @@ async def test_google_uses_raw_page_routing_policy_metadata_to_protect_existing_
         "name": "weighted.example.com.",
         "type": "A",
         "ttl": 300,
-        "rrdatas": ["192.0.2.3"],
-        "routingPolicy": {"wrr": [{"weight": 10, "rrdatas": ["192.0.2.3"]}]},
+        "routingPolicy": {
+            "wrr": [
+                {"weight": 10, "rrdatas": ["192.0.2.3"]},
+                {"weight": 20, "rrdatas": ["192.0.2.4"]},
+            ],
+        },
     }
     zone = FakeGoogleZone(
         "public-zone",
@@ -425,33 +430,23 @@ async def test_google_uses_raw_page_routing_policy_metadata_to_protect_existing_
 
     assert records[0].read_only_reason == "高级路由记录不可编辑或删除"
     assert records[0].provider_meta["advanced_routing"] is True
+    assert records[0].provider_meta["locator"] == {"name": "weighted.example.com", "type": "A"}
+    assert records[0].values == ("192.0.2.3", "192.0.2.4")
 
 
 @pytest.mark.asyncio
-async def test_google_uses_distinct_locators_for_same_name_advanced_records():
-    raw_records = [
-        {
-            "name": "weighted.example.com.",
-            "type": "A",
-            "ttl": 300,
-            "rrdatas": ["192.0.2.3"],
-            "routingPolicy": {"wrr": [{"weight": 10, "rrdatas": ["192.0.2.3"]}]},
-        },
-        {
-            "name": "weighted.example.com.",
-            "type": "A",
-            "ttl": 300,
-            "rrdatas": ["192.0.2.4"],
-            "routingPolicy": {"wrr": [{"weight": 20, "rrdatas": ["192.0.2.4"]}]},
-        },
-    ]
-    zone = FakeGoogleZone("public-zone", "example.com.", "public", raw_pages=[{"rrsets": raw_records}])
-    adapter = GoogleCloudDnsAdapter(client_factory=lambda credential: FakeGoogleDnsClient([zone]))
+async def test_google_transport_error_is_sanitized_as_unavailable():
+    secret_marker = "service-account-json-should-not-leak"
 
-    records = await adapter.list_record_sets(GOOGLE_ZONE, GOOGLE_CREDENTIAL)
+    def raise_transport_error(credential: ProviderCredential):
+        raise google_auth_exceptions.TransportError(secret_marker)
 
-    assert len(records) == 2
-    assert len({record.record_key for record in records}) == 2
+    adapter = GoogleCloudDnsAdapter(client_factory=raise_transport_error)
+
+    with pytest.raises(ProviderUnavailableError, match="Google Cloud DNS 暂时不可用") as exc:
+        await adapter.discover_public_zones(GOOGLE_CREDENTIAL)
+
+    assert secret_marker not in str(exc.value)
 
 
 @pytest.mark.asyncio
@@ -573,6 +568,22 @@ async def test_route53_pages_hosted_zones_with_next_marker():
 
     assert [zone.remote_zone_id for zone in zones] == ["Z1", "Z2"]
     assert client.hosted_zone_calls == [{}, {"Marker": "Z1"}]
+
+
+@pytest.mark.asyncio
+async def test_route53_lists_existing_wildcard_record():
+    client = FakeRoute53Client(record_pages=[{
+        "ResourceRecordSets": [
+            {"Name": "*.example.com.", "Type": "A", "TTL": 300, "ResourceRecords": [{"Value": "192.0.2.1"}]},
+        ],
+        "IsTruncated": False,
+    }])
+    adapter = AwsRoute53Adapter(client_factory=lambda credential: client)
+
+    records = await adapter.list_record_sets(AWS_ZONE, AWS_CREDENTIAL)
+
+    assert records[0].record_name == "*.example.com"
+    assert records[0].read_only_reason is None
 
 
 @pytest.mark.asyncio

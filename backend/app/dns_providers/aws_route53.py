@@ -19,6 +19,7 @@ from app.dns_providers.base import (
     ZoneRef,
     decode_record_key,
     encode_record_key,
+    normalize_owner_name,
     normalize_record_values,
     normalize_zone_name,
     read_only_reason,
@@ -84,7 +85,7 @@ class AwsRoute53Adapter(DnsProviderAdapter):
         try:
             pages = await asyncio.to_thread(self._list_record_set_pages, zone, credential)
             return [
-                self._to_remote_record_set(record)
+                self._to_remote_record_set(record, zone)
                 for page in pages
                 for record in page.get("ResourceRecordSets", [])
             ]
@@ -148,8 +149,8 @@ class AwsRoute53Adapter(DnsProviderAdapter):
             if page.get("NextRecordIdentifier") is not None:
                 params["StartRecordIdentifier"] = page["NextRecordIdentifier"]
 
-    def _to_remote_record_set(self, resource: Mapping[str, Any]) -> RemoteRecordSet:
-        record_name = normalize_zone_name(str(resource["Name"]))
+    def _to_remote_record_set(self, resource: Mapping[str, Any], zone: ZoneRef) -> RemoteRecordSet:
+        record_name = normalize_owner_name(str(resource["Name"]), zone.zone_name)
         record_type = str(resource["Type"]).upper()
         locator = self._record_locator(resource, record_name, record_type)
         provider_meta: dict[str, object] = {"locator": locator}

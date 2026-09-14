@@ -43,6 +43,8 @@ def _google_client(credential: ProviderCredential):
 def _google_error(exc: Exception) -> ProviderRejectedError | ProviderUnavailableError:
     if isinstance(exc, (ProviderRejectedError, ProviderUnavailableError)):
         return exc
+    if isinstance(exc, auth_exceptions.TransportError):
+        return ProviderUnavailableError("Google Cloud DNS 暂时不可用")
     if isinstance(exc, (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError, KeyError, auth_exceptions.GoogleAuthError)):
         return ProviderRejectedError("Google Cloud DNS 拒绝该请求")
     status = getattr(exc, "code", None)
@@ -132,11 +134,11 @@ class GoogleCloudDnsAdapter(DnsProviderAdapter):
             record_type = str(resource.record_type).upper()
             ttl = int(resource.ttl) if resource.ttl is not None else None
             raw_values = tuple(str(value) for value in resource.rrdatas)
-        routing_policy = self._routing_policy_locator(resource)
-        advanced = bool(routing_policy)
+        has_routing_policy, routing_policy = self._routing_policy(resource)
+        if not raw_values and routing_policy is not None:
+            raw_values = self._routing_policy_values(routing_policy)
+        advanced = has_routing_policy
         locator: dict[str, object] = {"name": record_name, "type": record_type}
-        if routing_policy:
-            locator["routing_policy"] = routing_policy
         provider_meta: dict[str, object] = {"locator": locator}
         if advanced:
             provider_meta["advanced_routing"] = True
@@ -207,15 +209,37 @@ class GoogleCloudDnsAdapter(DnsProviderAdapter):
         raise TimeoutError("Google Cloud DNS 变更未在限定时间内完成")
 
     @staticmethod
-    def _routing_policy_locator(resource: Any) -> dict[str, object]:
+    def _routing_policy(resource: Any) -> tuple[bool, object | None]:
         fields = ("routingPolicy", "routing_policy", "rrsetRoutingPolicy", "geo_routing_policy", "weighted_routing_policy")
         if isinstance(resource, Mapping):
-            return {field: resource[field] for field in fields if field in resource}
-        return {
-            field: value
-            for field in fields
-            if (value := getattr(resource, field, None)) is not None
-        }
+            for field in fields:
+                if field in resource:
+                    return True, resource[field]
+            return False, None
+        for field in fields:
+            value = getattr(resource, field, None)
+            if value is not None:
+                return True, value
+        return False, None
+
+    @staticmethod
+    def _routing_policy_values(policy: object) -> tuple[str, ...]:
+        values: list[str] = []
+
+        def collect(value: object) -> None:
+            if isinstance(value, Mapping):
+                rrdatas = value.get("rrdatas")
+                if isinstance(rrdatas, (list, tuple)):
+                    values.extend(str(item) for item in rrdatas)
+                for field, nested in value.items():
+                    if field != "rrdatas":
+                        collect(nested)
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    collect(item)
+
+        collect(policy)
+        return tuple(values)
 
     @staticmethod
     def _to_google_record_set(managed_zone: Any, record: RecordSetDraft | RemoteRecordSet):
