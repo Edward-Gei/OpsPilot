@@ -13,6 +13,26 @@ async def test_me_returns_role_perms(client):
     assert [r["code"] for r in data["roles"]] == ["ops"]
 
 
+async def test_domain_permissions_are_admin_only_by_default(client):
+    """默认角色分配：管理员有域名权限，运维角色没有。"""
+    admin = (
+        await client.get(
+            "/api/v1/auth/me",
+            headers=auth_header(await login_for_tokens(client, "admin")),
+        )
+    ).json()["data"]
+    ops = (
+        await client.get(
+            "/api/v1/auth/me",
+            headers=auth_header(await login_for_tokens(client, "ops1")),
+        )
+    ).json()["data"]
+
+    domain_permissions = {"domain:read", "domain:write", "domain:delete"}
+    assert domain_permissions.issubset(admin["permissions"])
+    assert not domain_permissions.intersection(ops["permissions"])
+
+
 async def test_perm_denied(client):
     """无 user:read 的用户访问用户列表 -> 403 + 40301。"""
     tokens = await login_for_tokens(client, "ops1")
