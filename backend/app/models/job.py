@@ -50,6 +50,8 @@ class TicketTemplate(Base):
     generator_timeout: Mapped[int | None] = mapped_column(Integer)
     credential_refs: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     allow_withdraw: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    concurrency_control_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    active_execution_id: Mapped[int | None] = mapped_column(UBIGINT)
     notify_rules: Mapped[list | None] = mapped_column(JSON)
     visible_role_ids: Mapped[list | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="enabled")

@@ -326,7 +326,8 @@ class PipelineRunner:
         }
         event, label = event_map[ticket_status]
         # 复用工单通知规则装配（模板 notify_rules 优先，缺省通知创建人）
-        from app.services.ticket_service import _emit_ticket_event
+        from app.services.ticket_service import _emit_ticket_event, release_template_concurrency_guard
+        await release_template_concurrency_guard(self.session, self.execution)
         await _emit_ticket_event(
             self.session, self.ticket, event,
             title=f"工单 {self.ticket.ticket_no} {label}",

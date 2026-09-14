@@ -291,16 +291,7 @@ onMounted(() => {
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'job_host'">{{ record.job_host_name || '—' }}</template>
         <template v-else-if="column.key === 'status'">
-          <a-tag
-            v-if="record.execution"
-            :color="execStatusMeta[record.execution.status as keyof typeof execStatusMeta]?.color"
-          >
-            {{ execStatusMeta[record.execution.status as keyof typeof execStatusMeta]?.text || record.execution.status }}
-          </a-tag>
-          <a-tag
-            v-else
-            :color="statusMeta[record.status as ticketApi.TicketStatus]?.color"
-          >
+          <a-tag :color="statusMeta[record.status as ticketApi.TicketStatus]?.color">
             {{ statusMeta[record.status as ticketApi.TicketStatus]?.text || record.status }}
           </a-tag>
         </template>

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.core.constants import HostExecStatus, NotifyEvent, TicketStatus
 from app.core.security import encrypt_text
 from app.core.response import BizError
-from app.engine import todo_events
+from app.engine import recovery, todo_events
 from app.engine import pipeline
 from app.models.auth import User, UserRole
 from app.models.cmdb import JobHost
@@ -54,7 +54,9 @@ async def test_generator_renders_fixed_values_before_remote_execution(monkeypatc
     assert connection.script == "SERVICE=mt-web"
 
 
-async def _template(session, *, creator_id: int, role_id: int | None = None) -> TicketTemplate:
+async def _template(
+    session, *, creator_id: int, role_id: int | None = None, concurrency_control_enabled: bool = False,
+) -> TicketTemplate:
     """创建最小可执行模板，避免回归测试依赖 HTTP 层模板接口。"""
     credential = Credential(
         name="notify-test-credential", login_user="root", auth_type="password",
@@ -83,6 +85,7 @@ async def _template(session, *, creator_id: int, role_id: int | None = None) -> 
         name="notify-test-template", type="daily_ops", description="notify",
         job_host_id=host.id, process_template_id=process.id, allow_withdraw=True,
         params_schema=[], generator_script=None, generator_timeout=None,
+        concurrency_control_enabled=concurrency_control_enabled,
         notify_rules=[], visible_role_ids=[], status="enabled", created_by=creator_id,
     )
     session.add(template)
@@ -306,7 +309,7 @@ async def test_withdraw_queued_ticket_cancels_execution_and_skips_pending_steps(
     """撤回排队工单时关闭执行实例，Worker 后续不会继续处理步骤。"""
     async with db_factory() as session:
         creator = await session.get(User, seed["users"]["ops1"])
-        template = await _template(session, creator_id=creator.id)
+        template = await _template(session, creator_id=creator.id, concurrency_control_enabled=True)
         ticket = await ticket_service.create_ticket(session, creator=creator, template_id=template.id, params={})
         execution = (await session.execute(select(Execution).where(Execution.ticket_id == ticket.id))).scalar_one()
         steps = list((await session.execute(
@@ -320,6 +323,8 @@ async def test_withdraw_queued_ticket_cancels_execution_and_skips_pending_steps(
         assert execution.status == "cancelled"
         assert execution.finished_at is not None
         assert all(step.status == HostExecStatus.SKIPPED.value for step in steps)
+        await session.refresh(template)
+        assert template.active_execution_id is None
 
 
 @pytest.mark.asyncio
@@ -402,3 +407,37 @@ async def test_pipeline_terminal_lifecycle_emits_event(
         runner.execution = execution
         await runner._finalize_ticket(ticket_status, "test-reason" if ticket_status == TicketStatus.INTERRUPTED.value else None)
         assert await _notification_events(session) == [event]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_terminal_lifecycle_releases_template_concurrency_guard(db_factory, seed):
+    """执行归档后必须释放其本人占有的模板，后续提交才能继续执行。"""
+    async with db_factory() as session:
+        creator = await session.get(User, seed["users"]["ops1"])
+        template = await _template(session, creator_id=creator.id, concurrency_control_enabled=True)
+        ticket = await ticket_service.create_ticket(session, creator=creator, template_id=template.id, params={})
+        execution = (await session.execute(select(Execution).where(Execution.ticket_id == ticket.id))).scalar_one()
+        runner = pipeline.PipelineRunner(execution.id)
+        runner.session = session
+        runner.ticket = ticket
+        runner.execution = execution
+
+        await runner._finalize_ticket(TicketStatus.SUCCESS.value, None)
+
+        await session.refresh(template)
+        assert template.active_execution_id is None
+
+
+@pytest.mark.asyncio
+async def test_worker_recovery_releases_template_concurrency_guard(db_factory, seed):
+    """Worker 崩溃归档执行时，模板占用必须随该执行一起释放。"""
+    async with db_factory() as session:
+        creator = await session.get(User, seed["users"]["ops1"])
+        template = await _template(session, creator_id=creator.id, concurrency_control_enabled=True)
+        ticket = await ticket_service.create_ticket(session, creator=creator, template_id=template.id, params={})
+        execution = (await session.execute(select(Execution).where(Execution.ticket_id == ticket.id))).scalar_one()
+
+        await recovery._mark_interrupted(session, execution, "system_crash", "test")
+
+        await session.refresh(template)
+        assert template.active_execution_id is None

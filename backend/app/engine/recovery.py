@@ -75,6 +75,8 @@ async def _mark_interrupted(session, execution: Execution, reason: str, detail: 
                 "detail": detail,
             },
         )
+    from app.services.ticket_service import release_template_concurrency_guard
+    await release_template_concurrency_guard(session, execution)
     # 系统事件审计：崩溃恢复动作留痕
     audit.log(
         module="execution", action="worker_crash_recovered",
