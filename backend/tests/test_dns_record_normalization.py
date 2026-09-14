@@ -57,6 +57,7 @@ def test_zone_and_owner_normalization_accepts_at_relative_and_fqdn():
     assert normalize_owner_name("api", "example.com") == "api.example.com"
     assert normalize_owner_name("api.example.com.", "example.com") == "api.example.com"
     assert normalize_owner_name("API", "Example.COM.") == "api.example.com"
+    assert normalize_owner_name("_sip._tcp", "example.com") == "_sip._tcp.example.com"
 
 
 @pytest.mark.parametrize("owner", ["", ".", "bad..example.com", "api.other.example.", "example.net."])

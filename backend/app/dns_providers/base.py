@@ -18,6 +18,7 @@ MIN_EDITABLE_TTL = 300
 MAX_EDITABLE_TTL = 86400
 
 _DNS_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", re.ASCII)
+_OWNER_LABEL_RE = re.compile(r"[_a-z0-9](?:[_a-z0-9-]{0,61}[_a-z0-9])?", re.ASCII)
 _CAA_TAG_RE = re.compile(r"[a-z0-9-]{1,15}", re.ASCII)
 
 
@@ -130,6 +131,17 @@ def normalize_zone_name(zone_name: str) -> str:
     return _normalize_dns_name(zone_name, "Zone 名称")
 
 
+def _normalize_owner_dns_name(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("记录所有权名称无效")
+    name = value.strip().rstrip(".").lower()
+    if not name or len(name) > 253:
+        raise ValueError("记录所有权名称无效")
+    if any(not _OWNER_LABEL_RE.fullmatch(label) for label in name.split(".")):
+        raise ValueError("记录所有权名称无效")
+    return name
+
+
 def normalize_owner_name(owner: str, zone_name: str) -> str:
     """将 `@`、相对名称与 Zone 内完整名称统一为完整所有权名称。"""
     if not isinstance(owner, str):
@@ -148,8 +160,7 @@ def normalize_owner_name(owner: str, zone_name: str) -> str:
         raise ValueError("记录所有权名称必须位于当前 Zone 内")
     else:
         full_name = f"{name}.{zone}"
-    _normalize_dns_name(full_name, "记录所有权名称")
-    return full_name
+    return _normalize_owner_dns_name(full_name)
 
 
 def _normalize_target(value: str) -> str:
