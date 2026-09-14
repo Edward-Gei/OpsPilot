@@ -10,8 +10,10 @@ from app.dns_providers.base import (
     ProviderRejectedError,
     ProviderUnavailableError,
     RecordSetDraft,
+    RemoteRecordSet,
     ZoneRef,
 )
+from app.dns_providers.google_cloud_dns import GoogleCloudDnsAdapter
 from app.dns_providers.tencent_dnspod import TencentDnsPodAdapter
 
 
@@ -19,6 +21,8 @@ AWS_CREDENTIAL = ProviderCredential(DomainProvider.AWS_ROUTE53, 1, "AKIA_TEST", 
 AWS_ZONE = ZoneRef(DomainProvider.AWS_ROUTE53, "ZPUBLIC", "example.com")
 TENCENT_CREDENTIAL = ProviderCredential(DomainProvider.TENCENT_DNSPOD, 2, "SECRET_ID", "secret")
 TENCENT_ZONE = ZoneRef(DomainProvider.TENCENT_DNSPOD, "21", "example.com")
+GOOGLE_CREDENTIAL = ProviderCredential(DomainProvider.GOOGLE_CLOUD_DNS, 3, None, '{"project_id":"dns-test"}')
+GOOGLE_ZONE = ZoneRef(DomainProvider.GOOGLE_CLOUD_DNS, "public-zone", "example.com")
 
 
 class FakeRoute53Client:
@@ -85,6 +89,101 @@ class FakeDnsPodResponder:
         if isinstance(result, Exception):
             raise result
         return copy.deepcopy(result)
+
+
+class FakeGoogleRecord:
+    def __init__(self, name: str, record_type: str, ttl: int, rrdatas: list[str], **attributes):
+        self.name = name
+        self.record_type = record_type
+        self.ttl = ttl
+        self.rrdatas = rrdatas
+        for key, value in attributes.items():
+            setattr(self, key, value)
+
+
+class FakeGooglePage:
+    def __init__(self, raw_page: dict):
+        self.raw_page = raw_page
+
+
+class FakeGoogleRecordIterator:
+    def __init__(self, records: list[FakeGoogleRecord], raw_pages: list[dict]):
+        self._records = records
+        self.pages = [FakeGooglePage(raw_page) for raw_page in raw_pages]
+
+    def __iter__(self):
+        return iter(self._records)
+
+
+class FakeGoogleChange:
+    def __init__(self, statuses: list[str]):
+        self._statuses = list(statuses)
+        self.status = self._statuses.pop(0) if self._statuses else "done"
+        self.added: list[FakeGoogleRecord] = []
+        self.deleted: list[FakeGoogleRecord] = []
+        self.create_calls = 0
+        self.reload_calls = 0
+
+    def add_record_set(self, record: FakeGoogleRecord):
+        self.added.append(record)
+
+    def delete_record_set(self, record: FakeGoogleRecord):
+        self.deleted.append(record)
+
+    def create(self):
+        self.create_calls += 1
+
+    def reload(self):
+        self.reload_calls += 1
+        if self._statuses:
+            self.status = self._statuses.pop(0)
+
+
+class FakeGoogleZone:
+    def __init__(
+        self,
+        name: str,
+        dns_name: str,
+        visibility: str,
+        *,
+        records: list[FakeGoogleRecord] | None = None,
+        raw_pages: list[dict] | None = None,
+        change_statuses: list[str] | None = None,
+    ):
+        self.name = name
+        self.dns_name = dns_name
+        self.visibility = visibility
+        self.records = list(records or [])
+        self.raw_pages = raw_pages
+        self.change_statuses = list(change_statuses or ["done"])
+        self.changes_created: list[FakeGoogleChange] = []
+
+    def list_resource_record_sets(self):
+        if self.raw_pages is not None:
+            return FakeGoogleRecordIterator(self.records, self.raw_pages)
+        return list(self.records)
+
+    def resource_record_set(self, name: str, record_type: str, ttl: int, rrdatas: list[str]):
+        return FakeGoogleRecord(name, record_type, ttl, rrdatas)
+
+    def changes(self):
+        change = FakeGoogleChange(self.change_statuses)
+        self.changes_created.append(change)
+        return change
+
+
+class FakeGoogleDnsClient:
+    def __init__(self, managed_zones: list[FakeGoogleZone]):
+        self.managed_zones = managed_zones
+        self.zones = {zone.name: zone for zone in managed_zones}
+        self.zone_calls: list[str] = []
+
+    def list_zones(self):
+        return list(self.managed_zones)
+
+    def zone(self, name: str):
+        self.zone_calls.append(name)
+        return self.zones[name]
 
 
 def _dnspod_record(record_id: int, value: str, *, name: str = "@", record_type: str = "A", ttl: int = 300, **extra):
@@ -268,6 +367,178 @@ async def test_dnspod_sanitizes_initial_provider_rejection():
 
 
 @pytest.mark.asyncio
+async def test_google_discovers_public_managed_zones_only():
+    public_zone = FakeGoogleZone("public-zone", "example.com.", "public")
+    private_zone = FakeGoogleZone("private-zone", "corp.example.", "private")
+    client = FakeGoogleDnsClient([public_zone, private_zone])
+    adapter = GoogleCloudDnsAdapter(client_factory=lambda credential: client)
+
+    zones = await adapter.discover_public_zones(GOOGLE_CREDENTIAL)
+
+    assert zones == [GOOGLE_ZONE]
+
+
+@pytest.mark.asyncio
+async def test_google_normalizes_records_and_marks_system_ttl_and_routing_records_read_only():
+    zone = FakeGoogleZone("public-zone", "example.com.", "public", records=[
+        FakeGoogleRecord("api.example.com.", "A", 300, ["192.0.2.1"]),
+        FakeGoogleRecord("example.com.", "NS", 300, ["ns1.example.net."]),
+        FakeGoogleRecord("slow.example.com.", "A", 60, ["192.0.2.2"]),
+        FakeGoogleRecord(
+            "weighted.example.com.", "A", 300, ["192.0.2.3"], routing_policy={"wrr": {"weight": 10}},
+        ),
+    ])
+    adapter = GoogleCloudDnsAdapter(client_factory=lambda credential: FakeGoogleDnsClient([zone]))
+
+    records = await adapter.list_record_sets(GOOGLE_ZONE, GOOGLE_CREDENTIAL)
+
+    assert [record.record_name for record in records] == [
+        "api.example.com", "example.com", "slow.example.com", "weighted.example.com",
+    ]
+    assert [record.read_only_reason for record in records] == [
+        None,
+        "NS 记录不可编辑或删除",
+        "TTL 不在可编辑范围内",
+        "高级路由记录不可编辑或删除",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_google_uses_raw_page_routing_policy_metadata_to_protect_existing_record():
+    raw_record = {
+        "name": "weighted.example.com.",
+        "type": "A",
+        "ttl": 300,
+        "rrdatas": ["192.0.2.3"],
+        "routingPolicy": {"wrr": [{"weight": 10, "rrdatas": ["192.0.2.3"]}]},
+    }
+    zone = FakeGoogleZone(
+        "public-zone",
+        "example.com.",
+        "public",
+        records=[FakeGoogleRecord("weighted.example.com.", "A", 300, ["192.0.2.3"])],
+        raw_pages=[{"rrsets": [raw_record]}],
+    )
+    adapter = GoogleCloudDnsAdapter(client_factory=lambda credential: FakeGoogleDnsClient([zone]))
+
+    records = await adapter.list_record_sets(GOOGLE_ZONE, GOOGLE_CREDENTIAL)
+
+    assert records[0].read_only_reason == "高级路由记录不可编辑或删除"
+    assert records[0].provider_meta["advanced_routing"] is True
+
+
+@pytest.mark.asyncio
+async def test_google_uses_distinct_locators_for_same_name_advanced_records():
+    raw_records = [
+        {
+            "name": "weighted.example.com.",
+            "type": "A",
+            "ttl": 300,
+            "rrdatas": ["192.0.2.3"],
+            "routingPolicy": {"wrr": [{"weight": 10, "rrdatas": ["192.0.2.3"]}]},
+        },
+        {
+            "name": "weighted.example.com.",
+            "type": "A",
+            "ttl": 300,
+            "rrdatas": ["192.0.2.4"],
+            "routingPolicy": {"wrr": [{"weight": 20, "rrdatas": ["192.0.2.4"]}]},
+        },
+    ]
+    zone = FakeGoogleZone("public-zone", "example.com.", "public", raw_pages=[{"rrsets": raw_records}])
+    adapter = GoogleCloudDnsAdapter(client_factory=lambda credential: FakeGoogleDnsClient([zone]))
+
+    records = await adapter.list_record_sets(GOOGLE_ZONE, GOOGLE_CREDENTIAL)
+
+    assert len(records) == 2
+    assert len({record.record_key for record in records}) == 2
+
+
+@pytest.mark.asyncio
+async def test_google_create_replace_delete_submit_one_change_and_wait_for_done():
+    zone = FakeGoogleZone(
+        "public-zone",
+        "example.com.",
+        "public",
+        records=[FakeGoogleRecord("api.example.com.", "A", 300, ["192.0.2.1"])],
+        change_statuses=["pending", "done"],
+    )
+    adapter = GoogleCloudDnsAdapter(client_factory=lambda credential: FakeGoogleDnsClient([zone]))
+    before = (await adapter.list_record_sets(GOOGLE_ZONE, GOOGLE_CREDENTIAL))[0]
+    after = RecordSetDraft("api.example.com", "A", 300, ("192.0.2.2",))
+
+    await adapter.create_simple_record_set(
+        GOOGLE_ZONE, RecordSetDraft("new.example.com", "A", 300, ("192.0.2.3",)), GOOGLE_CREDENTIAL,
+    )
+    await adapter.replace_simple_record_set(GOOGLE_ZONE, before, after, GOOGLE_CREDENTIAL)
+    await adapter.delete_simple_record_set(
+        GOOGLE_ZONE,
+        RemoteRecordSet("api-key", "api.example.com", "A", 300, ("192.0.2.2",), None, {}),
+        GOOGLE_CREDENTIAL,
+    )
+
+    changes = zone.changes_created
+    assert [_google_record_fields(record) for record in changes[0].added] == [
+        ("new.example.com.", "A", 300, ["192.0.2.3"]),
+    ]
+    assert [_google_record_fields(record) for record in changes[1].deleted] == [
+        ("api.example.com.", "A", 300, ["192.0.2.1"]),
+    ]
+    assert [_google_record_fields(record) for record in changes[1].added] == [
+        ("api.example.com.", "A", 300, ["192.0.2.2"]),
+    ]
+    assert [_google_record_fields(record) for record in changes[2].deleted] == [
+        ("api.example.com.", "A", 300, ["192.0.2.2"]),
+    ]
+    assert all(change.create_calls == 1 and change.reload_calls == 1 for change in changes)
+
+
+@pytest.mark.asyncio
+async def test_google_writes_absolute_cname_mx_and_srv_targets():
+    zone = FakeGoogleZone("public-zone", "example.com.", "public", change_statuses=["pending", "done"])
+    adapter = GoogleCloudDnsAdapter(client_factory=lambda credential: FakeGoogleDnsClient([zone]))
+
+    await adapter.create_simple_record_set(
+        GOOGLE_ZONE, RecordSetDraft("www.example.com", "CNAME", 300, ("target.example.net",)), GOOGLE_CREDENTIAL,
+    )
+    await adapter.create_simple_record_set(
+        GOOGLE_ZONE, RecordSetDraft("example.com", "MX", 300, ("10 mail.example.net",)), GOOGLE_CREDENTIAL,
+    )
+    await adapter.create_simple_record_set(
+        GOOGLE_ZONE,
+        RecordSetDraft("_sip._tcp.example.com", "SRV", 300, ("10 5 443 target.example.net",)),
+        GOOGLE_CREDENTIAL,
+    )
+
+    values = [change.added[0].rrdatas[0] for change in zone.changes_created]
+    assert values == ["target.example.net.", "10 mail.example.net.", "10 5 443 target.example.net."]
+
+
+@pytest.mark.asyncio
+async def test_google_invalid_service_account_is_rejected_without_a_cloud_call():
+    adapter = GoogleCloudDnsAdapter()
+    invalid_credential = ProviderCredential(DomainProvider.GOOGLE_CLOUD_DNS, 3, None, "not-json")
+
+    with pytest.raises(ProviderRejectedError, match="Google Cloud DNS 拒绝该请求"):
+        await adapter.discover_public_zones(invalid_credential)
+
+
+@pytest.mark.asyncio
+async def test_google_change_poll_timeout_does_not_submit_a_second_change():
+    zone = FakeGoogleZone("public-zone", "example.com.", "public", change_statuses=["pending"])
+    adapter = GoogleCloudDnsAdapter(
+        client_factory=lambda credential: FakeGoogleDnsClient([zone]), poll_attempts=1, poll_interval=0,
+    )
+
+    with pytest.raises(ProviderUnavailableError, match="Google Cloud DNS 暂时不可用"):
+        await adapter.create_simple_record_set(
+            GOOGLE_ZONE, RecordSetDraft("api.example.com", "A", 300, ("192.0.2.1",)), GOOGLE_CREDENTIAL,
+        )
+
+    assert zone.changes_created[0].create_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_route53_discovers_only_public_zones_and_normalizes_name():
     client = FakeRoute53Client(hosted_zone_pages=[{
         "HostedZones": [
@@ -433,3 +704,7 @@ async def _remote_record(adapter: AwsRoute53Adapter, client: FakeRoute53Client, 
         "IsTruncated": False,
     }]
     return (await adapter.list_record_sets(AWS_ZONE, AWS_CREDENTIAL))[0]
+
+
+def _google_record_fields(record: FakeGoogleRecord) -> tuple[str, str, int, list[str]]:
+    return record.name, record.record_type, record.ttl, record.rrdatas
