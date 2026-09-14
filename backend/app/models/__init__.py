@@ -1,7 +1,8 @@
-"""模型聚合导出：确保 Base.metadata 收录全部 23 张表（Alembic 迁移依赖此处）。"""
+"""模型聚合导出：确保 Base.metadata 收录全部 28 张表（Alembic 迁移依赖此处）。"""
 from app.models.base import Base
 from app.models.auth import ApiToken, Permission, Role, RolePermission, User, UserRole
 from app.models.cmdb import AppHost, Application, Host, JobHost
+from app.models.domain import DnsRecordSet, DnsZone
 from app.models.job import Credential, ProcessStep, ProcessTemplate, TicketTemplate
 from app.models.ticket import (
     Ticket,
@@ -17,6 +18,7 @@ __all__ = [
     "Base",
     "User", "Role", "Permission", "UserRole", "RolePermission", "ApiToken",
     "Host", "Application", "AppHost", "JobHost",
+    "DnsZone", "DnsRecordSet",
     "Credential", "ProcessTemplate", "ProcessStep", "TicketTemplate",
     "Ticket", "TicketStep", "TicketApproval", "TicketParameterPrepare",
     "Execution", "ExecutionStep",

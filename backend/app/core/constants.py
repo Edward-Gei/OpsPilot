@@ -60,6 +60,18 @@ class CredentialAuthType(str, Enum):
     SECRET_FILE = "secret_file"
 
 
+class DomainProvider(str, Enum):
+    TENCENT_DNSPOD = "tencent_dnspod"
+    AWS_ROUTE53 = "aws_route53"
+    GOOGLE_CLOUD_DNS = "google_cloud_dns"
+
+
+class DnsSyncStatus(str, Enum):
+    SUCCESS = "success"
+    FAILED = "failed"
+    SYNCING = "syncing"
+
+
 class TicketStatus(str, Enum):
     """工单 9 态状态机（合法迁移见 03-数据库设计 §5.1；无草稿态，提交即生效）。
 
