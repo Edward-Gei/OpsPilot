@@ -441,7 +441,7 @@ async def update_record_set(
 ) -> DnsZone:
     """修改简单记录集；记录名称和类型不可变。"""
     zone = await get_zone(session, zone_id)
-    record = await _get_zone_record(session, zone.id, record_id)
+    record = await get_record_set(session, zone.id, record_id)
     _ensure_record_editable(record)
     after = _validate_record_draft(zone, draft, existing=record)
     credential = await resolve_provider_credential(
@@ -488,7 +488,7 @@ async def delete_record_set(
 ) -> DnsZone:
     """删除简单记录集，并在远端成功后立即刷新本地快照。"""
     zone = await get_zone(session, zone_id)
-    record = await _get_zone_record(session, zone.id, record_id)
+    record = await get_record_set(session, zone.id, record_id)
     _ensure_record_editable(record)
     credential = await resolve_provider_credential(
         session,
@@ -601,7 +601,8 @@ async def _sync_zone_under_lease(
     return zone
 
 
-async def _get_zone_record(session: AsyncSession, zone_id: int, record_id: int) -> DnsRecordSet:
+async def get_record_set(session: AsyncSession, zone_id: int, record_id: int) -> DnsRecordSet:
+    """读取指定 Zone 的本地记录快照，供更新接口保持名称与类型不变。"""
     record = await session.get(DnsRecordSet, record_id)
     if record is None or record.zone_id != zone_id:
         raise Errors.not_found("DNS 记录不存在")
