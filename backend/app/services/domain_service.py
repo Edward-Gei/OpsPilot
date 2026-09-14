@@ -437,7 +437,17 @@ async def create_record_set(
         await adapter.create_simple_record_set(zone_ref, after, credential)
     except Exception as exc:
         error = _record_provider_error(exc)
-        await _record_write_failed(session, zone, token, audit_context, "record.create", None, after, error)
+        await _record_write_failed(
+            session,
+            zone,
+            token,
+            audit_context,
+            "record.create",
+            None,
+            after,
+            error,
+            snapshot_may_be_stale=isinstance(exc, ProviderUnavailableError),
+        )
         raise error from None
     return await _complete_record_write(
         session,
@@ -485,7 +495,17 @@ async def update_record_set(
         await adapter.replace_simple_record_set(zone_ref, before, after, credential)
     except Exception as exc:
         error = _record_provider_error(exc)
-        await _record_write_failed(session, zone, token, audit_context, "record.update", before, after, error)
+        await _record_write_failed(
+            session,
+            zone,
+            token,
+            audit_context,
+            "record.update",
+            before,
+            after,
+            error,
+            snapshot_may_be_stale=isinstance(exc, ProviderUnavailableError),
+        )
         raise error from None
     return await _complete_record_write(
         session,
@@ -531,7 +551,17 @@ async def delete_record_set(
         await adapter.delete_simple_record_set(zone_ref, before, credential)
     except Exception as exc:
         error = _record_provider_error(exc)
-        await _record_write_failed(session, zone, token, audit_context, "record.delete", before, None, error)
+        await _record_write_failed(
+            session,
+            zone,
+            token,
+            audit_context,
+            "record.delete",
+            before,
+            None,
+            error,
+            snapshot_may_be_stale=isinstance(exc, ProviderUnavailableError),
+        )
         raise error from None
     return await _complete_record_write(
         session,
@@ -729,17 +759,40 @@ async def _record_write_failed(
     before: DnsRecordSet | RemoteRecordSet | None,
     after: RecordSetDraft | None,
     error: BizError,
+    *,
+    snapshot_may_be_stale: bool = False,
 ) -> None:
-    await _release_zone_lease(session, zone.id, lease_token)
+    await _release_zone_lease(
+        session,
+        zone.id,
+        lease_token,
+        snapshot_error="DNS 记录变更结果未知，请手动同步" if snapshot_may_be_stale else None,
+    )
     _audit_record(audit_context, action, zone, "failed", before, after, error.message)
 
 
-async def _release_zone_lease(session: AsyncSession, zone_id: int, lease_token: str) -> None:
+async def _release_zone_lease(
+    session: AsyncSession,
+    zone_id: int,
+    lease_token: str,
+    *,
+    snapshot_error: str | None = None,
+) -> None:
     await session.rollback()
+    values: dict[str, str | None] = {
+        "operation_token": None,
+        "operation_kind": None,
+        "operation_expires_at": None,
+    }
+    if snapshot_error:
+        values.update(
+            sync_status=DnsSyncStatus.FAILED.value,
+            last_sync_error=snapshot_error[:512],
+        )
     await session.execute(
         update(DnsZone)
         .where(DnsZone.id == zone_id, DnsZone.operation_token == lease_token)
-        .values(operation_token=None, operation_kind=None, operation_expires_at=None)
+        .values(**values)
     )
     await session.commit()
 

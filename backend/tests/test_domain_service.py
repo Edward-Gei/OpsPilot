@@ -554,7 +554,7 @@ async def test_update_rejects_record_identity_change_before_provider_read(db_fac
 
 
 @pytest.mark.asyncio
-async def test_remote_write_is_not_retried_and_releases_lease(db_factory, monkeypatch):
+async def test_unavailable_record_write_marks_snapshot_as_stale_without_retry(db_factory, monkeypatch):
     zone, _ = await _seed_editable_a_record(db_factory, ["192.0.2.1"])
     adapter = FakeAdapter(create_error=ProviderUnavailableError("network"))
     monkeypatch.setattr(domain_service, "get_adapter", lambda provider: adapter)
@@ -570,6 +570,8 @@ async def test_remote_write_is_not_retried_and_releases_lease(db_factory, monkey
 
     assert exc.value.code == 50201
     assert len(adapter.create_calls) == 1
+    assert refreshed_zone.sync_status == "failed"
+    assert refreshed_zone.last_sync_error == "DNS 记录变更结果未知，请手动同步"
     assert refreshed_zone.operation_token is None
 
 

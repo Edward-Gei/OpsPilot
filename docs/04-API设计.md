@@ -149,7 +149,7 @@
 | PUT | `/domains/zones/{zone_id}/records/{record_id}` | `domain:write` | 更新已有记录集的 `ttl` 和 `values`，名称与类型不可修改 |
 | DELETE | `/domains/zones/{zone_id}/records/{record_id}` | `domain:delete` | 删除可编辑记录集 |
 
-可写类型为 `A`、`AAAA`、`CNAME`、`MX`、`TXT`、`CAA`、`SRV`，`ttl` 必须介于 300 与 86400。SOA、NS 和高级路由记录返回 `read_only=true` 与原因，不能更新或删除。更新、删除前服务端核对远端记录和快照，远端已漂移时返回 `40901`；DNS 服务商暂时不可用时返回 `50201`。前端在所有记录写入前展示变更前后预览并要求确认。
+可写类型为 `A`、`AAAA`、`CNAME`、`MX`、`TXT`、`CAA`、`SRV`，`ttl` 必须介于 300 与 86400。SOA、NS 和高级路由记录返回 `read_only=true` 与原因，不能更新或删除。更新、删除前服务端核对远端记录和快照，远端已漂移时返回 `40901`；DNS 服务商暂时不可用时返回 `50201`。若写入结果未知，Zone 快照会标为失败，用户需手动同步确认。前端在所有记录写入前展示变更前后预览并要求确认。
 
 ### 6.3 Excel 导入导出
 
