@@ -1,7 +1,9 @@
 """域名管理 REST 接口的权限与响应边界测试。"""
 from dataclasses import replace
+from io import BytesIO
 
 import pytest
+from openpyxl import Workbook, load_workbook
 from sqlalchemy import select
 
 from app.core.constants import DomainProvider
@@ -32,6 +34,15 @@ REMOTE_NS = RemoteRecordSet(
     read_only_reason="NS 记录不可编辑或删除",
     provider_meta={"locator": {"name": "example.com", "type": "NS"}},
 )
+REMOTE_TXT = RemoteRecordSet(
+    record_key="verify-txt",
+    record_name="_verify.example.com",
+    record_type="TXT",
+    ttl=300,
+    values=("private-token-text", "keep-full-value"),
+    read_only_reason=None,
+    provider_meta={"locator": {"name": "_verify.example.com", "type": "TXT"}},
+)
 
 
 class FakeAdapter:
@@ -41,12 +52,14 @@ class FakeAdapter:
         self.records = [REMOTE_A, REMOTE_NS]
         self.discover_error: Exception | None = None
         self.list_error: Exception | None = None
+        self.discover_calls = 0
         self.list_calls = 0
         self.create_calls: list[RecordSetDraft] = []
         self.replace_calls: list[tuple[RemoteRecordSet, RecordSetDraft]] = []
         self.delete_calls: list[RemoteRecordSet] = []
 
     async def discover_public_zones(self, credential):
+        self.discover_calls += 1
         if self.discover_error:
             raise self.discover_error
         return [ZoneRef(DomainProvider.AWS_ROUTE53, "Z1", "example.com")]
@@ -185,6 +198,18 @@ async def _bind_zone(client, headers, credential_id: int) -> int:
     return body["data"]["items"][0]["zone_id"]
 
 
+def _make_zone_xlsx(rows: list[list]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Zone 导入"
+    ws.append(["服务商*", "凭据名称*", "Zone 名称*", "远端 Zone ID*", "描述"])
+    for row in rows:
+        ws.append(row)
+    content = BytesIO()
+    wb.save(content)
+    return content.getvalue()
+
+
 async def test_domain_api_discovers_binds_syncs_and_hides_internal_fields(client, db_factory, fake_adapter):
     headers = auth_header(await login_for_tokens(client, "admin"))
     credential = await _seed_cloud_credential(db_factory)
@@ -315,3 +340,65 @@ async def test_domain_api_rejects_mismatched_credentials_and_sanitizes_provider_
     )
     assert failed.json()["code"] == 50201
     assert "provider-secret" not in failed.json()["message"]
+
+
+async def test_zone_import_reports_success_duplicate_and_existing_rows(client, db_factory, fake_adapter):
+    headers = auth_header(await login_for_tokens(client, "admin"))
+    credential = await _seed_cloud_credential(db_factory)
+    content = _make_zone_xlsx([
+        ["aws_route53", credential.name, "example.com", "Z1", "首次说明"],
+        ["aws_route53", credential.name, "example.com", "Z1", "不得覆盖"],
+    ])
+
+    imported = await client.post(
+        "/api/v1/domains/zones/import",
+        files={"file": ("zones.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=headers,
+    )
+    assert imported.status_code == 200
+    data = imported.json()["data"]
+    assert data["success_count"] == 1
+    assert data["skipped_rows"] == [{"row": 3, "reason": "文件内 Zone 重复"}]
+    assert data["failed_rows"] == []
+    assert fake_adapter.discover_calls == 1
+
+    existing = await client.post(
+        "/api/v1/domains/zones/import",
+        files={"file": ("zones.xlsx", _make_zone_xlsx([
+            ["aws_route53", credential.name, "example.com", "Z1", "不得覆盖"],
+        ]), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=headers,
+    )
+    assert existing.json()["data"]["skipped_rows"] == [{"row": 2, "reason": "Zone 已绑定，已跳过"}]
+    zone = (await client.get("/api/v1/domains/zones", headers=headers)).json()["data"]["items"][0]
+    assert zone["description"] == "首次说明"
+
+
+async def test_zone_template_and_export_keep_full_txt_without_credentials(client, db_factory, fake_adapter):
+    headers = auth_header(await login_for_tokens(client, "admin"))
+    template = await client.get("/api/v1/domains/zones/import-template", headers=headers)
+    assert template.status_code == 200
+    template_sheet = load_workbook(BytesIO(template.content)).active
+    assert template_sheet.title == "Zone 导入"
+    assert [cell.value for cell in template_sheet[1]] == [
+        "服务商*", "凭据名称*", "Zone 名称*", "远端 Zone ID*", "描述",
+    ]
+
+    credential = await _seed_cloud_credential(db_factory)
+    fake_adapter.records.append(REMOTE_TXT)
+    await _bind_zone(client, headers, credential.id)
+    exported = await client.get("/api/v1/domains/zones/export", headers=headers)
+    assert exported.status_code == 200
+    workbook = load_workbook(BytesIO(exported.content), read_only=True)
+    assert workbook.sheetnames == ["Zone 台账", "记录集"]
+    record_rows = list(workbook["记录集"].iter_rows(min_row=2, values_only=True))
+    txt_row = next(row for row in record_rows if row[3] == "TXT")
+    assert txt_row[5] == "private-token-text\nkeep-full-value"
+    exported_values = "\n".join(
+        str(value or "")
+        for sheet in workbook.worksheets
+        for row in sheet.iter_rows(values_only=True)
+        for value in row
+    )
+    assert "provider-secret" not in exported_values
+    assert "access-key" not in exported_values

@@ -1,10 +1,14 @@
 """域名管理路由：仅暴露 Zone/记录快照和安全的变更入口。"""
-from fastapi import APIRouter, Depends, Query, Request
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, Query, Request, UploadFile
+from fastapi.responses import Response
 from sqlalchemy import select
 
+from app import audit
 from app.core.constants import DnsSyncStatus, DomainProvider
 from app.core.deps import DbSession, get_client_ip, require_perm
-from app.core.response import ok
+from app.core.response import Errors, ok
 from app.dns_providers.base import RecordSetDraft
 from app.models.auth import User
 from app.models.domain import DnsRecordSet, DnsZone
@@ -16,10 +20,21 @@ from app.schemas.domain import (
     ZoneDescriptionUpdateRequest,
     ZoneDiscoverRequest,
 )
-from app.services import domain_service
+from app.services import domain_excel, domain_service
 
 
 router = APIRouter(prefix="/domains", tags=["域名管理"])
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _xlsx_response(content: bytes, filename: str) -> Response:
+    """xlsx 下载统一使用 RFC 5987 编码中文文件名。"""
+    return Response(
+        content=content,
+        media_type=XLSX_MIME,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 def _timestamp(value) -> str | None:
@@ -115,6 +130,75 @@ async def bind_zones(
         audit_context=_audit_context(actor, request),
     )
     return ok({"items": [result.model_dump(mode="json") for result in results]})
+
+
+@router.get("/zones/import-template", summary="下载 Zone 导入模板")
+async def download_zone_import_template(
+    _: User = Depends(require_perm("domain:write")),
+) -> Response:
+    """模板仅包含 Zone 台账字段，不承载凭据密文。"""
+    return _xlsx_response(domain_excel.build_zone_import_template(), "Zone导入模板.xlsx")
+
+
+@router.post("/zones/import", summary="Excel 导入 Zone 台账")
+async def import_zones(
+    file: UploadFile,
+    request: Request,
+    session: DbSession,
+    actor: User = Depends(require_perm("domain:write")),
+) -> dict:
+    """按凭据发现可访问公网 Zone，并创建已有记录的本地快照。"""
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise Errors.param("仅支持 .xlsx 文件")
+    result = await domain_excel.import_zones(
+        session,
+        await file.read(),
+        created_by=actor.id,
+        audit_context=_audit_context(actor, request),
+    )
+    audit.log(
+        module="domain",
+        action="zone.import",
+        actor_id=actor.id,
+        actor_name=actor.username,
+        source_ip=get_client_ip(request),
+        target_type="dns_zone",
+        target_name=file.filename,
+        detail={
+            "success_count": result["success_count"],
+            "skipped_count": len(result["skipped_rows"]),
+            "failed_count": len(result["failed_rows"]),
+        },
+    )
+    return ok(result)
+
+
+@router.get("/zones/export", summary="导出 Zone 台账与记录集")
+async def export_zones(
+    request: Request,
+    session: DbSession,
+    actor: User = Depends(require_perm("domain:read")),
+    keyword: str | None = None,
+    provider: DomainProvider | None = None,
+    sync_status: DnsSyncStatus | None = None,
+) -> Response:
+    """导出与 Zone 台账列表一致筛选范围的完整记录快照。"""
+    zones, records = await domain_excel.load_zone_export_rows(
+        session,
+        keyword=keyword,
+        provider=provider.value if provider else None,
+        sync_status=sync_status.value if sync_status else None,
+    )
+    audit.log(
+        module="domain",
+        action="zone.export",
+        actor_id=actor.id,
+        actor_name=actor.username,
+        source_ip=get_client_ip(request),
+        target_type="dns_zone",
+        detail={"zone_count": len(zones), "record_count": len(records)},
+    )
+    return _xlsx_response(domain_excel.export_zones(zones, records), "Zone台账.xlsx")
 
 
 @router.get("/zones", summary="Zone 台账列表")

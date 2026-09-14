@@ -192,6 +192,23 @@ async def list_record_sets(
     return list(rows.scalars()), total
 
 
+async def search_zones(
+    session: AsyncSession,
+    keyword: str,
+    limit: int = 5,
+) -> tuple[list[DnsZone], int]:
+    """全局搜索仅命中 Zone 台账字段，绝不检索 DNS 记录值。"""
+    like = f"%{keyword}%"
+    query = select(DnsZone).where(
+        DnsZone.zone_name.like(like)
+        | DnsZone.description.like(like)
+        | DnsZone.provider.like(like)
+    )
+    total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
+    rows = await session.execute(query.order_by(DnsZone.id.desc()).limit(limit))
+    return list(rows.scalars()), total
+
+
 async def update_zone_description(
     session: AsyncSession,
     zone_id: int,
@@ -265,20 +282,22 @@ async def bind_zones(
     selections: list[ZoneBindSelection],
     created_by: int,
     audit_context: DomainAuditContext,
+    discovered: list[ZoneRef] | None = None,
 ) -> list[ZoneBindResult]:
-    """绑定已发现的公网 Zone；每个 Zone 的首次快照独立成败。"""
+    """绑定已发现的公网 Zone；Excel 导入可复用已发现清单避免重复远端读取。"""
     credential = await resolve_provider_credential(session, provider, credential_id)
     await session.commit()
     adapter = get_adapter(provider)
-    try:
-        discovered = await _discover_with_retries(adapter, credential)
-    except Exception as exc:
-        error = _provider_error(exc)
-        _audit(audit_context, "zone.bind", "failed", detail={"provider": provider.value, "reason": error.message})
-        return [
-            ZoneBindResult(remote_zone_id=item.remote_zone_id, status="failed", reason=error.message)
-            for item in selections
-        ]
+    if discovered is None:
+        try:
+            discovered = await _discover_with_retries(adapter, credential)
+        except Exception as exc:
+            error = _provider_error(exc)
+            _audit(audit_context, "zone.bind", "failed", detail={"provider": provider.value, "reason": error.message})
+            return [
+                ZoneBindResult(remote_zone_id=item.remote_zone_id, status="failed", reason=error.message)
+                for item in selections
+            ]
 
     available = {zone.remote_zone_id: zone for zone in discovered}
     results: list[ZoneBindResult] = []
