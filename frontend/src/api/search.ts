@@ -13,6 +13,7 @@ export interface SearchResult {
   apps: SearchSegment<{ id: number; name: string }> | null
   tickets: SearchSegment<{ id: number; ticket_no: string; title: string }> | null
   templates: SearchSegment<{ id: number; name: string; type: string }> | null
+  domains: SearchSegment<{ id: number; zone_name: string; provider: string; description: string | null }> | null
 }
 
 /** 聚合搜索：keyword 必填非空，每段限 5 条 */

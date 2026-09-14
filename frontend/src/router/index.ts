@@ -60,6 +60,18 @@ const router = createRouter({
           meta: { title: '应用管理', perm: 'cmdb:read' },
         },
         {
+          path: 'domains',
+          name: 'domains',
+          component: () => import('@/views/domain/DomainList.vue'),
+          meta: { title: '域名管理', perm: 'domain:read' },
+        },
+        {
+          path: 'domains/:id',
+          name: 'domain-detail',
+          component: () => import('@/views/domain/DomainDetail.vue'),
+          meta: { title: 'Zone 详情', perm: 'domain:read', menuKey: 'domains' },
+        },
+        {
           path: 'job/templates',
           name: 'job-templates',
           redirect: '/job/templates/tickets',
