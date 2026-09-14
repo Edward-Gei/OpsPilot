@@ -16,12 +16,18 @@ from app.core.response import BizError, Errors
 from app.core.security import decrypt_text
 from app.dns_providers import get_adapter
 from app.dns_providers.base import (
+    MAX_EDITABLE_TTL,
+    MIN_EDITABLE_TTL,
+    WRITABLE_RECORD_TYPES,
     DnsProviderAdapter,
     ProviderCredential,
     ProviderRejectedError,
     ProviderUnavailableError,
+    RecordSetDraft,
     RemoteRecordSet,
     ZoneRef,
+    normalize_owner_name,
+    normalize_record_values,
 )
 from app.models.domain import DnsRecordSet, DnsZone
 from app.models.job import Credential
@@ -100,7 +106,7 @@ async def discover_zones(
     await session.commit()
     try:
         zones = await _discover_with_retries(get_adapter(provider), credential)
-    except (ProviderRejectedError, ProviderUnavailableError) as exc:
+    except Exception as exc:
         error = _provider_error(exc)
         _audit(
             audit_context,
@@ -266,7 +272,7 @@ async def bind_zones(
     adapter = get_adapter(provider)
     try:
         discovered = await _discover_with_retries(adapter, credential)
-    except (ProviderRejectedError, ProviderUnavailableError) as exc:
+    except Exception as exc:
         error = _provider_error(exc)
         _audit(audit_context, "zone.bind", "failed", detail={"provider": provider.value, "reason": error.message})
         return [
@@ -314,7 +320,7 @@ async def bind_zones(
         try:
             remote_records = await _list_with_retries(adapter, zone_ref, credential)
             snapshots = [_snapshot_fields(record) for record in remote_records]
-        except (ProviderRejectedError, ProviderUnavailableError, ValueError) as exc:
+        except Exception as exc:
             error = _provider_error(exc)
             _audit(
                 audit_context,
@@ -380,6 +386,146 @@ async def sync_zone(session: AsyncSession, zone_id: int, audit_context: DomainAu
     return await _sync_zone_under_lease(session, zone, token, credential, audit_context)
 
 
+async def create_record_set(
+    session: AsyncSession,
+    zone_id: int,
+    draft: RecordSetDraft,
+    audit_context: DomainAuditContext,
+) -> DnsZone:
+    """创建简单记录集，并在远端成功后立即刷新本地快照。"""
+    zone = await get_zone(session, zone_id)
+    after = _validate_record_draft(zone, draft)
+    credential = await resolve_provider_credential(
+        session,
+        DomainProvider(zone.provider),
+        zone.credential_id,
+    )
+    token = await acquire_zone_lease(session, zone.id, "record.create")
+    adapter = get_adapter(credential.provider)
+    zone_ref = ZoneRef(credential.provider, zone.remote_zone_id, zone.zone_name)
+    try:
+        existing = await _find_record_by_identity(adapter, zone_ref, after, credential)
+    except Exception as exc:
+        error = _record_provider_error(exc)
+        await _record_write_failed(session, zone, token, audit_context, "record.create", None, after, error)
+        raise error from None
+    if existing is not None:
+        error = Errors.conflict("DNS 记录已在服务商侧存在，请先手动同步")
+        await _record_write_failed(session, zone, token, audit_context, "record.create", None, after, error)
+        raise error
+
+    try:
+        await adapter.create_simple_record_set(zone_ref, after, credential)
+    except Exception as exc:
+        error = _record_provider_error(exc)
+        await _record_write_failed(session, zone, token, audit_context, "record.create", None, after, error)
+        raise error from None
+    return await _complete_record_write(
+        session,
+        zone,
+        token,
+        credential,
+        audit_context,
+        "record.create",
+        None,
+        after,
+    )
+
+
+async def update_record_set(
+    session: AsyncSession,
+    zone_id: int,
+    record_id: int,
+    draft: RecordSetDraft,
+    audit_context: DomainAuditContext,
+) -> DnsZone:
+    """修改简单记录集；记录名称和类型不可变。"""
+    zone = await get_zone(session, zone_id)
+    record = await _get_zone_record(session, zone.id, record_id)
+    _ensure_record_editable(record)
+    after = _validate_record_draft(zone, draft, existing=record)
+    credential = await resolve_provider_credential(
+        session,
+        DomainProvider(zone.provider),
+        zone.credential_id,
+    )
+    token = await acquire_zone_lease(session, zone.id, "record.update")
+    adapter = get_adapter(credential.provider)
+    zone_ref = ZoneRef(credential.provider, zone.remote_zone_id, zone.zone_name)
+    try:
+        before = await _ensure_remote_matches_snapshot(adapter, zone_ref, record, credential)
+    except BizError as error:
+        await _record_write_failed(session, zone, token, audit_context, "record.update", record, after, error)
+        raise
+    except Exception as exc:
+        error = _record_provider_error(exc)
+        await _record_write_failed(session, zone, token, audit_context, "record.update", record, after, error)
+        raise error from None
+
+    try:
+        await adapter.replace_simple_record_set(zone_ref, before, after, credential)
+    except Exception as exc:
+        error = _record_provider_error(exc)
+        await _record_write_failed(session, zone, token, audit_context, "record.update", before, after, error)
+        raise error from None
+    return await _complete_record_write(
+        session,
+        zone,
+        token,
+        credential,
+        audit_context,
+        "record.update",
+        before,
+        after,
+    )
+
+
+async def delete_record_set(
+    session: AsyncSession,
+    zone_id: int,
+    record_id: int,
+    audit_context: DomainAuditContext,
+) -> DnsZone:
+    """删除简单记录集，并在远端成功后立即刷新本地快照。"""
+    zone = await get_zone(session, zone_id)
+    record = await _get_zone_record(session, zone.id, record_id)
+    _ensure_record_editable(record)
+    credential = await resolve_provider_credential(
+        session,
+        DomainProvider(zone.provider),
+        zone.credential_id,
+    )
+    token = await acquire_zone_lease(session, zone.id, "record.delete")
+    adapter = get_adapter(credential.provider)
+    zone_ref = ZoneRef(credential.provider, zone.remote_zone_id, zone.zone_name)
+    try:
+        before = await _ensure_remote_matches_snapshot(adapter, zone_ref, record, credential)
+    except BizError as error:
+        await _record_write_failed(session, zone, token, audit_context, "record.delete", record, None, error)
+        raise
+    except Exception as exc:
+        error = _record_provider_error(exc)
+        await _record_write_failed(session, zone, token, audit_context, "record.delete", record, None, error)
+        raise error from None
+
+    try:
+        await adapter.delete_simple_record_set(zone_ref, before, credential)
+    except Exception as exc:
+        error = _record_provider_error(exc)
+        await _record_write_failed(session, zone, token, audit_context, "record.delete", before, None, error)
+        raise error from None
+    return await _complete_record_write(
+        session,
+        zone,
+        token,
+        credential,
+        audit_context,
+        "record.delete",
+        before,
+        None,
+    )
+
+
 async def _sync_zone_under_lease(
     session: AsyncSession,
     zone: DnsZone,
@@ -393,7 +539,7 @@ async def _sync_zone_under_lease(
     try:
         remote_records = await _list_with_retries(adapter, zone_ref, credential)
         snapshots = [_snapshot_fields(record) for record in remote_records]
-    except (ProviderRejectedError, ProviderUnavailableError, ValueError) as exc:
+    except Exception as exc:
         error = _provider_error(exc)
         await _mark_sync_failed(session, zone, lease_token, error.message, audit_context)
         raise error from None
@@ -453,6 +599,173 @@ async def _sync_zone_under_lease(
         detail={"provider": zone.provider, "remote_zone_id": zone.remote_zone_id, "record_count": zone.record_count},
     )
     return zone
+
+
+async def _get_zone_record(session: AsyncSession, zone_id: int, record_id: int) -> DnsRecordSet:
+    record = await session.get(DnsRecordSet, record_id)
+    if record is None or record.zone_id != zone_id:
+        raise Errors.not_found("DNS 记录不存在")
+    return record
+
+
+def _ensure_record_editable(record: DnsRecordSet) -> None:
+    if record.read_only:
+        raise Errors.rejected(record.read_only_reason or "该 DNS 记录不可编辑或删除")
+
+
+def _validate_record_draft(
+    zone: DnsZone,
+    draft: RecordSetDraft,
+    *,
+    existing: DnsRecordSet | None = None,
+) -> RecordSetDraft:
+    try:
+        record_type = draft.record_type.upper()
+        if record_type not in WRITABLE_RECORD_TYPES:
+            raise ValueError("记录类型暂不支持")
+        if (
+            isinstance(draft.ttl, bool)
+            or not isinstance(draft.ttl, int)
+            or not MIN_EDITABLE_TTL <= draft.ttl <= MAX_EDITABLE_TTL
+        ):
+            raise ValueError("TTL 必须在 300 至 86400 秒之间")
+        record_name = normalize_owner_name(draft.record_name, zone.zone_name)
+        values = normalize_record_values(record_type, draft.values)
+    except (AttributeError, ValueError) as exc:
+        raise Errors.param(str(exc)) from None
+    if existing and (record_name != existing.record_name or record_type != existing.record_type):
+        raise Errors.param("修改记录不能变更名称或类型")
+    return RecordSetDraft(record_name, record_type, draft.ttl, values)
+
+
+async def _find_record_by_identity(
+    adapter: DnsProviderAdapter,
+    zone: ZoneRef,
+    draft: RecordSetDraft,
+    credential: ProviderCredential,
+) -> RemoteRecordSet | None:
+    records = await _list_with_retries(adapter, zone, credential)
+    return next(
+        (
+            record
+            for record in records
+            if record.record_name == draft.record_name and record.record_type == draft.record_type
+        ),
+        None,
+    )
+
+
+async def _ensure_remote_matches_snapshot(
+    adapter: DnsProviderAdapter,
+    zone: ZoneRef,
+    record: DnsRecordSet,
+    credential: ProviderCredential,
+) -> RemoteRecordSet:
+    remote = await adapter.get_record_set(zone, record.record_key, credential)
+    if remote is None or not _same_record_snapshot(remote, record):
+        raise Errors.conflict("DNS 记录已在服务商侧变更，请先手动同步")
+    return remote
+
+
+def _same_record_snapshot(remote: RemoteRecordSet, snapshot: DnsRecordSet) -> bool:
+    return (
+        remote.record_name == snapshot.record_name
+        and remote.record_type == snapshot.record_type
+        and remote.ttl == snapshot.ttl
+        and set(remote.values) == set(snapshot.values)
+        and remote.read_only_reason == snapshot.read_only_reason
+        and _record_locator(remote.provider_meta) == _record_locator(snapshot.provider_meta)
+    )
+
+
+def _record_locator(provider_meta: dict) -> dict:
+    locator = provider_meta.get("locator") if isinstance(provider_meta, dict) else None
+    return locator if isinstance(locator, dict) else {}
+
+
+async def _complete_record_write(
+    session: AsyncSession,
+    zone: DnsZone,
+    lease_token: str,
+    credential: ProviderCredential,
+    audit_context: DomainAuditContext,
+    action: str,
+    before: DnsRecordSet | RemoteRecordSet | None,
+    after: RecordSetDraft | None,
+) -> DnsZone:
+    _audit_record(audit_context, action, zone, "success", before, after)
+    try:
+        return await _sync_zone_under_lease(session, zone, lease_token, credential, audit_context)
+    except BizError:
+        raise Errors.upstream("远端记录已变更，但快照同步失败，请手动同步") from None
+
+
+async def _record_write_failed(
+    session: AsyncSession,
+    zone: DnsZone,
+    lease_token: str,
+    audit_context: DomainAuditContext,
+    action: str,
+    before: DnsRecordSet | RemoteRecordSet | None,
+    after: RecordSetDraft | None,
+    error: BizError,
+) -> None:
+    await _release_zone_lease(session, zone.id, lease_token)
+    _audit_record(audit_context, action, zone, "failed", before, after, error.message)
+
+
+async def _release_zone_lease(session: AsyncSession, zone_id: int, lease_token: str) -> None:
+    await session.rollback()
+    await session.execute(
+        update(DnsZone)
+        .where(DnsZone.id == zone_id, DnsZone.operation_token == lease_token)
+        .values(operation_token=None, operation_kind=None, operation_expires_at=None)
+    )
+    await session.commit()
+
+
+def _record_provider_error(exc: Exception) -> BizError:
+    if isinstance(exc, ProviderRejectedError):
+        return Errors.rejected("DNS 服务商拒绝该记录变更")
+    return Errors.upstream("DNS 服务商暂时不可用，请稍后重试")
+
+
+def _audit_record(
+    context: DomainAuditContext,
+    action: str,
+    zone: DnsZone,
+    result: str,
+    before: DnsRecordSet | RemoteRecordSet | None,
+    after: RecordSetDraft | None,
+    error: str | None = None,
+) -> None:
+    detail = {
+        "provider": zone.provider,
+        "remote_zone_id": zone.remote_zone_id,
+        "before": _record_audit_payload(before),
+        "after": _record_audit_payload(after),
+    }
+    if error:
+        detail["error"] = error
+    _audit(
+        context,
+        action,
+        result,
+        target_id=str(zone.id),
+        target_name=zone.zone_name,
+        detail=detail,
+    )
+
+
+def _record_audit_payload(record: DnsRecordSet | RemoteRecordSet | RecordSetDraft | None) -> dict | None:
+    if record is None:
+        return None
+    return {
+        "record_name": record.record_name,
+        "record_type": record.record_type,
+        "ttl": record.ttl,
+        "values": list(record.values),
+    }
 
 
 async def _mark_sync_failed(
