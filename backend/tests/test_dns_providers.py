@@ -12,10 +12,13 @@ from app.dns_providers.base import (
     RecordSetDraft,
     ZoneRef,
 )
+from app.dns_providers.tencent_dnspod import TencentDnsPodAdapter
 
 
 AWS_CREDENTIAL = ProviderCredential(DomainProvider.AWS_ROUTE53, 1, "AKIA_TEST", "secret")
 AWS_ZONE = ZoneRef(DomainProvider.AWS_ROUTE53, "ZPUBLIC", "example.com")
+TENCENT_CREDENTIAL = ProviderCredential(DomainProvider.TENCENT_DNSPOD, 2, "SECRET_ID", "secret")
+TENCENT_ZONE = ZoneRef(DomainProvider.TENCENT_DNSPOD, "21", "example.com")
 
 
 class FakeRoute53Client:
@@ -56,6 +59,196 @@ class FakeRoute53Client:
 class FakeClientError(Exception):
     def __init__(self, code: str):
         self.response = {"Error": {"Code": code}}
+
+
+class FakeTencentError(Exception):
+    def __init__(self, code: str):
+        self._code = code
+
+    def get_code(self) -> str:
+        return self._code
+
+
+class FakeDnsPodResponder:
+    def __init__(self, responses: dict[str, list[dict | Exception]]):
+        self.responses = {action: list(items) for action, items in responses.items()}
+        self.actions: list[str] = []
+        self.calls: list[tuple[str, dict]] = []
+
+    def __call__(self, action: str, payload: dict, credential: ProviderCredential) -> dict:
+        self.actions.append(action)
+        self.calls.append((action, copy.deepcopy(payload)))
+        queue = self.responses.get(action)
+        if not queue:
+            return {}
+        result = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(result, Exception):
+            raise result
+        return copy.deepcopy(result)
+
+
+def _dnspod_record(record_id: int, value: str, *, name: str = "@", record_type: str = "A", ttl: int = 300, **extra):
+    return {
+        "RecordId": record_id,
+        "Name": name,
+        "Type": record_type,
+        "TTL": ttl,
+        "Value": value,
+        "Status": "ENABLE",
+        "Line": "默认",
+        **extra,
+    }
+
+
+@pytest.mark.asyncio
+async def test_dnspod_groups_simple_records_as_one_record_set():
+    responder = FakeDnsPodResponder({
+        "DescribeRecordList": [{"RecordList": [
+            _dnspod_record(10, "192.0.2.1"),
+            _dnspod_record(11, "192.0.2.2"),
+        ]}],
+    })
+    adapter = TencentDnsPodAdapter(requester=responder)
+
+    records = await adapter.list_record_sets(TENCENT_ZONE, TENCENT_CREDENTIAL)
+
+    assert records[0].record_name == "example.com"
+    assert records[0].values == ("192.0.2.1", "192.0.2.2")
+    assert records[0].provider_meta["record_ids"] == [10, 11]
+
+
+@pytest.mark.asyncio
+async def test_dnspod_uses_only_public_domain_api():
+    responder = FakeDnsPodResponder({
+        "DescribeDomainList": [{"DomainList": [{"DomainId": 21, "Name": "example.com"}]}],
+    })
+    adapter = TencentDnsPodAdapter(requester=responder)
+
+    zones = await adapter.discover_public_zones(TENCENT_CREDENTIAL)
+
+    assert zones == [ZoneRef(DomainProvider.TENCENT_DNSPOD, "21", "example.com")]
+    assert responder.actions == ["DescribeDomainList"]
+
+
+@pytest.mark.asyncio
+async def test_dnspod_marks_disabled_line_and_mixed_ttl_groups_read_only():
+    responder = FakeDnsPodResponder({
+        "DescribeRecordList": [{"RecordList": [
+            _dnspod_record(10, "192.0.2.1", name="blue", Status="DISABLE"),
+            _dnspod_record(11, "192.0.2.2", name="line", Line="境外"),
+            _dnspod_record(12, "192.0.2.3", name="mixed", ttl=300),
+            _dnspod_record(13, "192.0.2.4", name="mixed", ttl=600),
+        ]}],
+    })
+    adapter = TencentDnsPodAdapter(requester=responder)
+
+    records = await adapter.list_record_sets(TENCENT_ZONE, TENCENT_CREDENTIAL)
+
+    assert [record.read_only_reason for record in records] == [
+        "高级路由记录不可编辑或删除",
+        "高级路由记录不可编辑或删除",
+        "高级路由记录不可编辑或删除",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dnspod_create_replace_delete_use_public_record_api_and_converge():
+    before_rows = {"RecordList": [_dnspod_record(10, "192.0.2.1"), _dnspod_record(11, "192.0.2.2")]}
+    created_rows = {"RecordList": [_dnspod_record(12, "192.0.2.3"), _dnspod_record(13, "192.0.2.4")]}
+    replaced_rows = {"RecordList": [_dnspod_record(14, "192.0.2.5")]}
+    responder = FakeDnsPodResponder({
+        "DescribeRecordList": [before_rows, created_rows, replaced_rows, {"RecordList": []}],
+        "CreateRecord": [{}, {}, {}, {}, {}],
+        "DeleteRecordBatch": [{}, {}],
+    })
+    adapter = TencentDnsPodAdapter(requester=responder, poll_interval=0)
+    before = (await adapter.list_record_sets(TENCENT_ZONE, TENCENT_CREDENTIAL))[0]
+
+    await adapter.create_simple_record_set(
+        TENCENT_ZONE, RecordSetDraft("example.com", "A", 300, ("192.0.2.3", "192.0.2.4")), TENCENT_CREDENTIAL,
+    )
+    await adapter.replace_simple_record_set(
+        TENCENT_ZONE, before, RecordSetDraft("example.com", "A", 300, ("192.0.2.5",)), TENCENT_CREDENTIAL,
+    )
+    await adapter.delete_simple_record_set(TENCENT_ZONE, before, TENCENT_CREDENTIAL)
+
+    assert responder.actions == [
+        "DescribeRecordList",
+        "CreateRecord", "CreateRecord", "DescribeRecordList",
+        "DeleteRecordBatch", "CreateRecord", "DescribeRecordList",
+        "DeleteRecordBatch", "DescribeRecordList",
+    ]
+    create_payloads = [payload for action, payload in responder.calls if action == "CreateRecord"]
+    assert [payload["Value"] for payload in create_payloads] == ["192.0.2.3", "192.0.2.4", "192.0.2.5"]
+    assert all(payload["RecordLine"] == "默认" for payload in create_payloads)
+    assert responder.calls[4] == ("DeleteRecordBatch", {"RecordIdList": [10, 11]})
+
+
+@pytest.mark.asyncio
+async def test_dnspod_creates_mx_with_separate_priority():
+    responder = FakeDnsPodResponder({
+        "CreateRecord": [{}],
+        "DescribeRecordList": [{"RecordList": [
+            _dnspod_record(12, "mail.example.net", record_type="MX", MX=10),
+        ]}],
+    })
+    adapter = TencentDnsPodAdapter(requester=responder, poll_interval=0)
+
+    await adapter.create_simple_record_set(
+        TENCENT_ZONE, RecordSetDraft("example.com", "MX", 300, ("10 mail.example.net",)), TENCENT_CREDENTIAL,
+    )
+
+    assert responder.calls[0] == ("CreateRecord", {
+        "DomainId": 21,
+        "SubDomain": "@",
+        "RecordType": "MX",
+        "RecordLine": "默认",
+        "TTL": 300,
+        "MX": 10,
+        "Value": "mail.example.net",
+    })
+
+
+@pytest.mark.asyncio
+async def test_dnspod_convergence_timeout_does_not_retry_write():
+    responder = FakeDnsPodResponder({
+        "CreateRecord": [{}],
+        "DescribeRecordList": [{"RecordList": []}],
+    })
+    adapter = TencentDnsPodAdapter(requester=responder, poll_attempts=1, poll_interval=0)
+
+    with pytest.raises(ProviderUnavailableError, match="腾讯云 DNSPod 暂时不可用"):
+        await adapter.create_simple_record_set(
+            TENCENT_ZONE, RecordSetDraft("example.com", "A", 300, ("192.0.2.1",)), TENCENT_CREDENTIAL,
+        )
+
+    assert responder.actions == ["CreateRecord", "DescribeRecordList"]
+
+
+@pytest.mark.asyncio
+async def test_dnspod_partial_known_write_failure_is_sanitized_and_not_retried():
+    responder = FakeDnsPodResponder({
+        "CreateRecord": [{}, FakeTencentError("AuthFailure")],
+    })
+    adapter = TencentDnsPodAdapter(requester=responder, poll_interval=0)
+
+    with pytest.raises(ProviderUnavailableError, match="腾讯云 DNSPod 暂时不可用"):
+        await adapter.create_simple_record_set(
+            TENCENT_ZONE, RecordSetDraft("example.com", "A", 300, ("192.0.2.1", "192.0.2.2")), TENCENT_CREDENTIAL,
+        )
+
+    assert responder.actions == ["CreateRecord", "CreateRecord"]
+
+
+@pytest.mark.asyncio
+async def test_dnspod_sanitizes_initial_provider_rejection():
+    responder = FakeDnsPodResponder({
+        "DescribeDomainList": [FakeTencentError("AuthFailure")],
+    })
+    adapter = TencentDnsPodAdapter(requester=responder)
+
+    with pytest.raises(ProviderRejectedError, match="腾讯云 DNSPod 拒绝该请求"):
+        await adapter.discover_public_zones(TENCENT_CREDENTIAL)
 
 
 @pytest.mark.asyncio
