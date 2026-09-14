@@ -60,7 +60,15 @@ def test_zone_and_owner_normalization_accepts_at_relative_and_fqdn():
     assert normalize_owner_name("_sip._tcp", "example.com") == "_sip._tcp.example.com"
 
 
-@pytest.mark.parametrize("owner", ["", ".", "bad..example.com", "api.other.example.", "example.net."])
+def test_owner_normalization_accepts_only_leftmost_wildcard_label():
+    assert normalize_owner_name("*", "example.com") == "*.example.com"
+    assert normalize_owner_name("*.api", "example.com") == "*.api.example.com"
+    assert normalize_owner_name("*.example.com.", "example.com") == "*.example.com"
+
+
+@pytest.mark.parametrize("owner", [
+    "", ".", "bad..example.com", "api.other.example.", "example.net.", "api.*.example.com",
+])
 def test_owner_outside_zone_or_malformed_is_rejected(owner):
     with pytest.raises(ValueError):
         normalize_owner_name(owner, "example.com")

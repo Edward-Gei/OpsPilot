@@ -118,6 +118,19 @@ async def test_dnspod_groups_simple_records_as_one_record_set():
 
 
 @pytest.mark.asyncio
+async def test_dnspod_lists_existing_wildcard_record():
+    responder = FakeDnsPodResponder({
+        "DescribeRecordList": [{"RecordList": [_dnspod_record(10, "192.0.2.1", name="*")]}],
+    })
+    adapter = TencentDnsPodAdapter(requester=responder)
+
+    records = await adapter.list_record_sets(TENCENT_ZONE, TENCENT_CREDENTIAL)
+
+    assert records[0].record_name == "*.example.com"
+    assert records[0].read_only_reason is None
+
+
+@pytest.mark.asyncio
 async def test_dnspod_uses_only_public_domain_api():
     responder = FakeDnsPodResponder({
         "DescribeDomainList": [{"DomainList": [{"DomainId": 21, "Name": "example.com"}]}],
@@ -157,7 +170,7 @@ async def test_dnspod_create_replace_delete_use_public_record_api_and_converge()
     created_rows = {"RecordList": [_dnspod_record(12, "192.0.2.3"), _dnspod_record(13, "192.0.2.4")]}
     replaced_rows = {"RecordList": [_dnspod_record(14, "192.0.2.5")]}
     responder = FakeDnsPodResponder({
-        "DescribeRecordList": [before_rows, created_rows, replaced_rows, {"RecordList": []}],
+        "DescribeRecordList": [before_rows, created_rows, replaced_rows, replaced_rows, {"RecordList": []}],
         "CreateRecord": [{}, {}, {}, {}, {}],
         "DeleteRecordBatch": [{}, {}],
     })
@@ -170,18 +183,21 @@ async def test_dnspod_create_replace_delete_use_public_record_api_and_converge()
     await adapter.replace_simple_record_set(
         TENCENT_ZONE, before, RecordSetDraft("example.com", "A", 300, ("192.0.2.5",)), TENCENT_CREDENTIAL,
     )
-    await adapter.delete_simple_record_set(TENCENT_ZONE, before, TENCENT_CREDENTIAL)
+    replaced = (await adapter.list_record_sets(TENCENT_ZONE, TENCENT_CREDENTIAL))[0]
+    await adapter.delete_simple_record_set(TENCENT_ZONE, replaced, TENCENT_CREDENTIAL)
 
     assert responder.actions == [
         "DescribeRecordList",
         "CreateRecord", "CreateRecord", "DescribeRecordList",
         "DeleteRecordBatch", "CreateRecord", "DescribeRecordList",
+        "DescribeRecordList",
         "DeleteRecordBatch", "DescribeRecordList",
     ]
     create_payloads = [payload for action, payload in responder.calls if action == "CreateRecord"]
     assert [payload["Value"] for payload in create_payloads] == ["192.0.2.3", "192.0.2.4", "192.0.2.5"]
     assert all(payload["RecordLine"] == "默认" for payload in create_payloads)
     assert responder.calls[4] == ("DeleteRecordBatch", {"RecordIdList": [10, 11]})
+    assert responder.calls[8] == ("DeleteRecordBatch", {"RecordIdList": [14]})
 
 
 @pytest.mark.asyncio

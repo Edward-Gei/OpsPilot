@@ -137,7 +137,10 @@ def _normalize_owner_dns_name(value: str) -> str:
     name = value.strip().rstrip(".").lower()
     if not name or len(name) > 253:
         raise ValueError("记录所有权名称无效")
-    if any(not _OWNER_LABEL_RE.fullmatch(label) for label in name.split(".")):
+    labels = name.split(".")
+    if labels[0] == "*":
+        labels = labels[1:]
+    if not labels or any(not _OWNER_LABEL_RE.fullmatch(label) for label in labels):
         raise ValueError("记录所有权名称无效")
     return name
 
