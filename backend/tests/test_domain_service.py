@@ -9,6 +9,7 @@ from app.core.constants import DomainProvider
 from app.core.response import BizError
 from app.core.security import encrypt_text
 from app.dns_providers.base import (
+    ProviderRejectedError,
     ProviderUnavailableError,
     RecordSetDraft,
     RemoteRecordSet,
@@ -573,6 +574,32 @@ async def test_unavailable_record_write_marks_snapshot_as_stale_without_retry(db
     assert refreshed_zone.sync_status == "failed"
     assert refreshed_zone.last_sync_error == "DNS 记录变更结果未知，请手动同步"
     assert refreshed_zone.operation_token is None
+
+
+@pytest.mark.asyncio
+async def test_rejected_record_write_audits_safe_provider_diagnostic(db_factory, monkeypatch):
+    zone, _ = await _seed_editable_a_record(db_factory, ["192.0.2.1"])
+    rejected = ProviderRejectedError(
+        "AWS Route 53 拒绝该请求",
+        operation="GetChange",
+        provider_error_code="AccessDenied",
+    )
+    adapter = FakeAdapter(create_error=rejected)
+    audit_events = []
+    monkeypatch.setattr(domain_service, "get_adapter", lambda provider: adapter)
+    monkeypatch.setattr(domain_service.audit, "log", lambda **event: audit_events.append(event))
+    async with db_factory() as session:
+        with pytest.raises(BizError) as exc:
+            await domain_service.create_record_set(
+                session,
+                zone.id,
+                RecordSetDraft("new", "A", 300, ("192.0.2.2",)),
+                AUDIT_CONTEXT,
+            )
+
+    assert exc.value.code == 42201
+    assert audit_events[-1]["detail"]["provider_operation"] == "GetChange"
+    assert audit_events[-1]["detail"]["provider_error_code"] == "AccessDenied"
 
 
 @pytest.mark.asyncio

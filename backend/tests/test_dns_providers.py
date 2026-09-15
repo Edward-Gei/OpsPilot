@@ -27,11 +27,14 @@ GOOGLE_ZONE = ZoneRef(DomainProvider.GOOGLE_CLOUD_DNS, "public-zone", "example.c
 
 
 class FakeRoute53Client:
-    def __init__(self, *, hosted_zone_pages=None, record_pages=None, change_statuses=None, error=None):
+    def __init__(
+        self, *, hosted_zone_pages=None, record_pages=None, change_statuses=None, error=None, change_error=None,
+    ):
         self.hosted_zone_pages = list(hosted_zone_pages or [{"HostedZones": [], "IsTruncated": False}])
         self.record_pages = list(record_pages or [{"ResourceRecordSets": [], "IsTruncated": False}])
         self.change_statuses = list(change_statuses or ["INSYNC"])
         self.error = error
+        self.change_error = change_error
         self.hosted_zone_calls: list[dict] = []
         self.record_calls: list[dict] = []
         self.change_requests: list[dict] = []
@@ -57,6 +60,8 @@ class FakeRoute53Client:
 
     def get_change(self, **kwargs):
         self.change_reads.append(kwargs["Id"])
+        if self.change_error:
+            raise self.change_error
         status = self.change_statuses.pop(0) if len(self.change_statuses) > 1 else self.change_statuses[0]
         return {"ChangeInfo": {"Status": status}}
 
@@ -717,6 +722,20 @@ async def test_route53_waits_for_slow_change_to_reach_insync():
     )
 
     assert client.change_reads == ["/change/C1"] * 21
+
+
+@pytest.mark.asyncio
+async def test_route53_get_change_rejection_carries_safe_diagnostic():
+    client = FakeRoute53Client(change_error=FakeClientError("AccessDenied"))
+    adapter = AwsRoute53Adapter(client_factory=lambda credential: client, poll_interval=0)
+
+    with pytest.raises(ProviderRejectedError) as exc:
+        await adapter.create_simple_record_set(
+            AWS_ZONE, RecordSetDraft("api.example.com", "A", 300, ("192.0.2.1",)), AWS_CREDENTIAL,
+        )
+
+    assert exc.value.operation == "GetChange"
+    assert exc.value.provider_error_code == "AccessDenied"
 
 
 async def _remote_record(adapter: AwsRoute53Adapter, client: FakeRoute53Client, value: str):

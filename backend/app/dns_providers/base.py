@@ -23,7 +23,18 @@ _CAA_TAG_RE = re.compile(r"[a-z0-9-]{1,15}", re.ASCII)
 
 
 class ProviderRejectedError(Exception):
-    """服务商已明确拒绝认证、权限或参数请求。"""
+    """服务商已明确拒绝认证、权限或参数请求，仅携带安全审计诊断。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        operation: str | None = None,
+        provider_error_code: str | None = None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.provider_error_code = provider_error_code
 
 
 class ProviderUnavailableError(Exception):

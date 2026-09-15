@@ -426,7 +426,17 @@ async def create_record_set(
         existing = await _find_record_by_identity(adapter, zone_ref, after, credential)
     except Exception as exc:
         error = _record_provider_error(exc)
-        await _record_write_failed(session, zone, token, audit_context, "record.create", None, after, error)
+        await _record_write_failed(
+            session,
+            zone,
+            token,
+            audit_context,
+            "record.create",
+            None,
+            after,
+            error,
+            provider_exception=exc,
+        )
         raise error from None
     if existing is not None:
         error = Errors.conflict("DNS 记录已在服务商侧存在，请先手动同步")
@@ -446,6 +456,7 @@ async def create_record_set(
             None,
             after,
             error,
+            provider_exception=exc,
             snapshot_may_be_stale=isinstance(exc, ProviderUnavailableError),
         )
         raise error from None
@@ -488,7 +499,17 @@ async def update_record_set(
         raise
     except Exception as exc:
         error = _record_provider_error(exc)
-        await _record_write_failed(session, zone, token, audit_context, "record.update", record, after, error)
+        await _record_write_failed(
+            session,
+            zone,
+            token,
+            audit_context,
+            "record.update",
+            record,
+            after,
+            error,
+            provider_exception=exc,
+        )
         raise error from None
 
     try:
@@ -504,6 +525,7 @@ async def update_record_set(
             before,
             after,
             error,
+            provider_exception=exc,
             snapshot_may_be_stale=isinstance(exc, ProviderUnavailableError),
         )
         raise error from None
@@ -544,7 +566,17 @@ async def delete_record_set(
         raise
     except Exception as exc:
         error = _record_provider_error(exc)
-        await _record_write_failed(session, zone, token, audit_context, "record.delete", record, None, error)
+        await _record_write_failed(
+            session,
+            zone,
+            token,
+            audit_context,
+            "record.delete",
+            record,
+            None,
+            error,
+            provider_exception=exc,
+        )
         raise error from None
 
     try:
@@ -560,6 +592,7 @@ async def delete_record_set(
             before,
             None,
             error,
+            provider_exception=exc,
             snapshot_may_be_stale=isinstance(exc, ProviderUnavailableError),
         )
         raise error from None
@@ -760,6 +793,7 @@ async def _record_write_failed(
     after: RecordSetDraft | None,
     error: BizError,
     *,
+    provider_exception: Exception | None = None,
     snapshot_may_be_stale: bool = False,
 ) -> None:
     await _release_zone_lease(
@@ -768,7 +802,16 @@ async def _record_write_failed(
         lease_token,
         snapshot_error="DNS 记录变更结果未知，请手动同步" if snapshot_may_be_stale else None,
     )
-    _audit_record(audit_context, action, zone, "failed", before, after, error.message)
+    _audit_record(
+        audit_context,
+        action,
+        zone,
+        "failed",
+        before,
+        after,
+        error.message,
+        provider_exception=provider_exception,
+    )
 
 
 async def _release_zone_lease(
@@ -803,6 +846,22 @@ def _record_provider_error(exc: Exception) -> BizError:
     return Errors.upstream("DNS 服务商暂时不可用，请稍后重试")
 
 
+def _provider_rejection_diagnostic(exc: Exception | None) -> dict[str, str] | None:
+    """只将服务商 API 名和错误码写入审计，避免记录原始异常内容。"""
+    if not isinstance(exc, ProviderRejectedError):
+        return None
+    operation = exc.operation
+    provider_error_code = exc.provider_error_code
+    if not isinstance(operation, str) or not isinstance(provider_error_code, str):
+        return None
+    if not operation or not provider_error_code:
+        return None
+    return {
+        "provider_operation": operation[:64],
+        "provider_error_code": provider_error_code[:128],
+    }
+
+
 def _audit_record(
     context: DomainAuditContext,
     action: str,
@@ -811,6 +870,8 @@ def _audit_record(
     before: DnsRecordSet | RemoteRecordSet | None,
     after: RecordSetDraft | None,
     error: str | None = None,
+    *,
+    provider_exception: Exception | None = None,
 ) -> None:
     detail = {
         "provider": zone.provider,
@@ -820,6 +881,9 @@ def _audit_record(
     }
     if error:
         detail["error"] = error
+    diagnostic = _provider_rejection_diagnostic(provider_exception)
+    if diagnostic:
+        detail.update(diagnostic)
     _audit(
         context,
         action,

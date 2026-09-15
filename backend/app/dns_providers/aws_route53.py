@@ -39,15 +39,24 @@ def _route53_client(credential: ProviderCredential):
     )
 
 
-def _route53_error(exc: Exception) -> ProviderRejectedError | ProviderUnavailableError:
+def _route53_error(
+    exc: Exception,
+    *,
+    operation: str | None = None,
+) -> ProviderRejectedError | ProviderUnavailableError:
     response = getattr(exc, "response", None)
-    code = ""
+    provider_error_code = ""
     if isinstance(response, Mapping):
         error = response.get("Error")
         if isinstance(error, Mapping):
-            code = str(error.get("Code", "")).lower()
+            provider_error_code = str(error.get("Code", "")).strip()
+    code = provider_error_code.lower()
     if any(marker in code for marker in _REJECTED_ERROR_MARKERS):
-        return ProviderRejectedError("AWS Route 53 拒绝该请求")
+        return ProviderRejectedError(
+            "AWS Route 53 拒绝该请求",
+            operation=operation,
+            provider_error_code=provider_error_code or None,
+        )
     return ProviderUnavailableError("AWS Route 53 暂时不可用")
 
 
@@ -80,7 +89,7 @@ class AwsRoute53Adapter(DnsProviderAdapter):
                 if not zone.get("Config", {}).get("PrivateZone", False)
             ]
         except Exception as exc:
-            raise _route53_error(exc) from None
+            raise _route53_error(exc, operation="ListHostedZones") from None
 
     async def list_record_sets(self, zone: ZoneRef, credential: ProviderCredential) -> list[RemoteRecordSet]:
         try:
@@ -91,7 +100,7 @@ class AwsRoute53Adapter(DnsProviderAdapter):
                 for record in page.get("ResourceRecordSets", [])
             ]
         except Exception as exc:
-            raise _route53_error(exc) from None
+            raise _route53_error(exc, operation="ListResourceRecordSets") from None
 
     async def get_record_set(
         self, zone: ZoneRef, record_key: str, credential: ProviderCredential,
@@ -204,6 +213,7 @@ class AwsRoute53Adapter(DnsProviderAdapter):
     async def _change_record_set(
         self, zone: ZoneRef, action: str, record_set: dict[str, object], credential: ProviderCredential,
     ) -> None:
+        operation = "ChangeResourceRecordSets"
         try:
             client = await asyncio.to_thread(self._client_factory, credential)
             response = await asyncio.to_thread(
@@ -215,9 +225,10 @@ class AwsRoute53Adapter(DnsProviderAdapter):
             change_id = change.get("Id")
             if not change_id:
                 raise RuntimeError("Route 53 变更编号缺失")
+            operation = "GetChange"
             await asyncio.to_thread(self._wait_for_change, client, str(change_id))
         except Exception as exc:
-            raise _route53_error(exc) from None
+            raise _route53_error(exc, operation=operation) from None
 
     def _wait_for_change(self, client: Any, change_id: str) -> None:
         for attempt in range(self._poll_attempts):
