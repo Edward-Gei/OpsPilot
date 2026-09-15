@@ -27,18 +27,13 @@ GOOGLE_ZONE = ZoneRef(DomainProvider.GOOGLE_CLOUD_DNS, "public-zone", "example.c
 
 
 class FakeRoute53Client:
-    def __init__(
-        self, *, hosted_zone_pages=None, record_pages=None, change_statuses=None, error=None, change_error=None,
-    ):
+    def __init__(self, *, hosted_zone_pages=None, record_pages=None, error=None):
         self.hosted_zone_pages = list(hosted_zone_pages or [{"HostedZones": [], "IsTruncated": False}])
         self.record_pages = list(record_pages or [{"ResourceRecordSets": [], "IsTruncated": False}])
-        self.change_statuses = list(change_statuses or ["INSYNC"])
         self.error = error
-        self.change_error = change_error
         self.hosted_zone_calls: list[dict] = []
         self.record_calls: list[dict] = []
         self.change_requests: list[dict] = []
-        self.change_reads: list[str] = []
 
     def list_hosted_zones(self, **kwargs):
         self.hosted_zone_calls.append(kwargs)
@@ -57,13 +52,6 @@ class FakeRoute53Client:
         if self.error:
             raise self.error
         return {"ChangeInfo": {"Id": "/change/C1"}}
-
-    def get_change(self, **kwargs):
-        self.change_reads.append(kwargs["Id"])
-        if self.change_error:
-            raise self.change_error
-        status = self.change_statuses.pop(0) if len(self.change_statuses) > 1 else self.change_statuses[0]
-        return {"ChangeInfo": {"Status": status}}
 
 
 class FakeClientError(Exception):
@@ -644,31 +632,95 @@ async def test_route53_get_record_set_uses_stable_locator():
 
 
 @pytest.mark.asyncio
-async def test_route53_create_replace_delete_submit_one_change_and_wait_for_insync():
-    client = FakeRoute53Client(change_statuses=["PENDING", "INSYNC"])
-    adapter = AwsRoute53Adapter(client_factory=lambda credential: client, poll_interval=0)
+async def test_route53_create_replace_delete_confirm_target_record_with_list_permission():
+    client = FakeRoute53Client()
+    adapter = AwsRoute53Adapter(client_factory=lambda credential: client, poll_attempts=1, poll_interval=0)
     before = await _remote_record(adapter, client, "192.0.2.1")
+    client.record_calls.clear()
+    created = RecordSetDraft("new.example.com", "A", 300, ("192.0.2.3",))
     after = RecordSetDraft("api.example.com", "A", 300, ("192.0.2.2",))
+    client.record_pages = [
+        {
+            "ResourceRecordSets": [
+                {"Name": "new.example.com.", "Type": "A", "TTL": 300, "ResourceRecords": [{"Value": "192.0.2.3"}]},
+            ],
+            "IsTruncated": False,
+        },
+        {
+            "ResourceRecordSets": [
+                {"Name": "api.example.com.", "Type": "A", "TTL": 300, "ResourceRecords": [{"Value": "192.0.2.2"}]},
+            ],
+            "IsTruncated": False,
+        },
+        {"ResourceRecordSets": [], "IsTruncated": False},
+    ]
 
-    await adapter.create_simple_record_set(AWS_ZONE, after, AWS_CREDENTIAL)
+    await adapter.create_simple_record_set(AWS_ZONE, created, AWS_CREDENTIAL)
     await adapter.replace_simple_record_set(AWS_ZONE, before, after, AWS_CREDENTIAL)
     await adapter.delete_simple_record_set(AWS_ZONE, before, AWS_CREDENTIAL)
 
     changes = [request["ChangeBatch"]["Changes"][0] for request in client.change_requests]
     assert [change["Action"] for change in changes] == ["CREATE", "UPSERT", "DELETE"]
     assert changes[0]["ResourceRecordSet"] == {
-        "Name": "api.example.com.", "Type": "A", "TTL": 300,
-        "ResourceRecords": [{"Value": "192.0.2.2"}],
+        "Name": "new.example.com.", "Type": "A", "TTL": 300,
+        "ResourceRecords": [{"Value": "192.0.2.3"}],
     }
     assert changes[1]["ResourceRecordSet"]["ResourceRecords"] == [{"Value": "192.0.2.2"}]
     assert changes[2]["ResourceRecordSet"]["ResourceRecords"] == [{"Value": "192.0.2.1"}]
-    assert client.change_reads == ["/change/C1", "/change/C1", "/change/C1", "/change/C1"]
+    assert client.record_calls == [
+        {
+            "HostedZoneId": "ZPUBLIC",
+            "StartRecordName": "new.example.com.",
+            "StartRecordType": "A",
+            "MaxItems": "1",
+        },
+        {
+            "HostedZoneId": "ZPUBLIC",
+            "StartRecordName": "api.example.com.",
+            "StartRecordType": "A",
+            "MaxItems": "1",
+        },
+        {
+            "HostedZoneId": "ZPUBLIC",
+            "StartRecordName": "api.example.com.",
+            "StartRecordType": "A",
+            "MaxItems": "1",
+        },
+    ]
 
 
 @pytest.mark.asyncio
 async def test_route53_writes_absolute_cname_mx_and_srv_targets():
-    client = FakeRoute53Client()
-    adapter = AwsRoute53Adapter(client_factory=lambda credential: client, poll_interval=0)
+    client = FakeRoute53Client(record_pages=[
+        {
+            "ResourceRecordSets": [
+                {
+                    "Name": "www.example.com.", "Type": "CNAME", "TTL": 300,
+                    "ResourceRecords": [{"Value": "target.example.net."}],
+                },
+            ],
+            "IsTruncated": False,
+        },
+        {
+            "ResourceRecordSets": [
+                {
+                    "Name": "example.com.", "Type": "MX", "TTL": 300,
+                    "ResourceRecords": [{"Value": "10 mail.example.net."}],
+                },
+            ],
+            "IsTruncated": False,
+        },
+        {
+            "ResourceRecordSets": [
+                {
+                    "Name": "_sip._tcp.example.com.", "Type": "SRV", "TTL": 300,
+                    "ResourceRecords": [{"Value": "10 5 443 target.example.net."}],
+                },
+            ],
+            "IsTruncated": False,
+        },
+    ])
+    adapter = AwsRoute53Adapter(client_factory=lambda credential: client, poll_attempts=1, poll_interval=0)
 
     await adapter.create_simple_record_set(
         AWS_ZONE, RecordSetDraft("www.example.com", "CNAME", 300, ("target.example.net",)), AWS_CREDENTIAL,
@@ -699,8 +751,8 @@ async def test_route53_sanitizes_provider_rejection_and_unavailability():
 
 
 @pytest.mark.asyncio
-async def test_route53_change_poll_timeout_returns_sanitized_unavailable_without_retry():
-    client = FakeRoute53Client(change_statuses=["PENDING"])
+async def test_route53_record_confirmation_timeout_returns_sanitized_unavailable_without_retry():
+    client = FakeRoute53Client(record_pages=[{"ResourceRecordSets": [], "IsTruncated": False}])
     adapter = AwsRoute53Adapter(client_factory=lambda credential: client, poll_attempts=1, poll_interval=0)
 
     with pytest.raises(ProviderUnavailableError, match="AWS Route 53 暂时不可用"):
@@ -709,75 +761,32 @@ async def test_route53_change_poll_timeout_returns_sanitized_unavailable_without
         )
 
     assert len(client.change_requests) == 1
-    assert client.change_reads == ["/change/C1"]
+    assert client.record_calls == [{
+        "HostedZoneId": "ZPUBLIC",
+        "StartRecordName": "api.example.com.",
+        "StartRecordType": "A",
+        "MaxItems": "1",
+    }]
 
 
 @pytest.mark.asyncio
-async def test_route53_waits_for_slow_change_to_reach_insync():
-    client = FakeRoute53Client(change_statuses=["PENDING"] * 20 + ["INSYNC"])
+async def test_route53_waits_for_slow_target_record_confirmation():
+    client = FakeRoute53Client(record_pages=[
+        *[{"ResourceRecordSets": [], "IsTruncated": False} for _ in range(20)],
+        {
+            "ResourceRecordSets": [
+                {"Name": "api.example.com.", "Type": "A", "TTL": 300, "ResourceRecords": [{"Value": "192.0.2.1"}]},
+            ],
+            "IsTruncated": False,
+        },
+    ])
     adapter = AwsRoute53Adapter(client_factory=lambda credential: client, poll_interval=0)
 
     await adapter.create_simple_record_set(
         AWS_ZONE, RecordSetDraft("api.example.com", "A", 300, ("192.0.2.1",)), AWS_CREDENTIAL,
     )
 
-    assert client.change_reads == ["/change/C1"] * 21
-
-
-@pytest.mark.asyncio
-async def test_route53_falls_back_to_record_reads_when_get_change_is_denied():
-    client = FakeRoute53Client(
-        change_error=FakeClientError("AccessDenied"),
-        record_pages=[
-            {
-                "ResourceRecordSets": [
-                    {"Name": "new.example.com.", "Type": "A", "TTL": 300, "ResourceRecords": [{"Value": "192.0.2.3"}]},
-                ],
-                "IsTruncated": False,
-            },
-            {
-                "ResourceRecordSets": [
-                    {"Name": "api.example.com.", "Type": "A", "TTL": 300, "ResourceRecords": [{"Value": "192.0.2.2"}]},
-                ],
-                "IsTruncated": False,
-            },
-            {"ResourceRecordSets": [], "IsTruncated": False},
-        ],
-    )
-    adapter = AwsRoute53Adapter(client_factory=lambda credential: client, poll_attempts=1, poll_interval=0)
-    before = RemoteRecordSet("api-key", "api.example.com", "A", 300, ("192.0.2.1",), None, {})
-    after = RecordSetDraft("api.example.com", "A", 300, ("192.0.2.2",))
-
-    await adapter.create_simple_record_set(
-        AWS_ZONE, RecordSetDraft("new.example.com", "A", 300, ("192.0.2.3",)), AWS_CREDENTIAL,
-    )
-    await adapter.replace_simple_record_set(AWS_ZONE, before, after, AWS_CREDENTIAL)
-    await adapter.delete_simple_record_set(AWS_ZONE, after, AWS_CREDENTIAL)
-
-    assert [request["ChangeBatch"]["Changes"][0]["Action"] for request in client.change_requests] == [
-        "CREATE", "UPSERT", "DELETE",
-    ]
-    assert client.change_reads == ["/change/C1"] * 3
-    assert client.record_calls == [
-        {
-            "HostedZoneId": "ZPUBLIC",
-            "StartRecordName": "new.example.com.",
-            "StartRecordType": "A",
-            "MaxItems": "1",
-        },
-        {
-            "HostedZoneId": "ZPUBLIC",
-            "StartRecordName": "api.example.com.",
-            "StartRecordType": "A",
-            "MaxItems": "1",
-        },
-        {
-            "HostedZoneId": "ZPUBLIC",
-            "StartRecordName": "api.example.com.",
-            "StartRecordType": "A",
-            "MaxItems": "1",
-        },
-    ]
+    assert len(client.record_calls) == 21
 
 
 async def _remote_record(adapter: AwsRoute53Adapter, client: FakeRoute53Client, value: str):

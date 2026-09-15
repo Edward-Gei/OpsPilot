@@ -215,40 +215,19 @@ class AwsRoute53Adapter(DnsProviderAdapter):
     ) -> None:
         try:
             client = await asyncio.to_thread(self._client_factory, credential)
-            response = await asyncio.to_thread(
+            await asyncio.to_thread(
                 client.change_resource_record_sets,
                 HostedZoneId=zone.remote_zone_id,
                 ChangeBatch={"Changes": [{"Action": action, "ResourceRecordSet": record_set}]},
             )
-            change = response.get("ChangeInfo", {})
-            change_id = change.get("Id")
-            if not change_id:
-                raise RuntimeError("Route 53 变更编号缺失")
         except Exception as exc:
             raise _route53_error(exc, operation="ChangeResourceRecordSets") from None
 
-        try:
-            await asyncio.to_thread(self._wait_for_change, client, str(change_id))
-            return
-        except Exception as exc:
-            error = _route53_error(exc, operation="GetChange")
-            if not self._is_access_denied(error):
-                raise error from None
-
-        # 变更已被接受；若无 change 资源权限，则用已有的记录读取权限确认结果。
+        # 写入已被 Route 53 接受，以目标记录的可读状态确认最终结果。
         try:
             await asyncio.to_thread(self._wait_for_record_change, client, zone, action, record_set)
         except Exception as exc:
             raise _route53_error(exc, operation="ListResourceRecordSets") from None
-
-    def _wait_for_change(self, client: Any, change_id: str) -> None:
-        for attempt in range(self._poll_attempts):
-            response = client.get_change(Id=change_id)
-            if response.get("ChangeInfo", {}).get("Status") == "INSYNC":
-                return
-            if attempt < self._poll_attempts - 1 and self._poll_interval:
-                time.sleep(self._poll_interval)
-        raise TimeoutError("Route 53 变更未在限定时间内完成")
 
     def _wait_for_record_change(
         self, client: Any, zone: ZoneRef, action: str, expected: Mapping[str, object],
@@ -280,12 +259,6 @@ class AwsRoute53Adapter(DnsProviderAdapter):
             if attempt < self._poll_attempts - 1 and self._poll_interval:
                 time.sleep(self._poll_interval)
         raise TimeoutError("Route 53 变更未在限定时间内完成")
-
-    @staticmethod
-    def _is_access_denied(error: ProviderRejectedError | ProviderUnavailableError) -> bool:
-        return isinstance(error, ProviderRejectedError) and (error.provider_error_code or "").lower().startswith(
-            "accessdenied"
-        )
 
     @staticmethod
     def _same_simple_record_set(current: Mapping[str, Any], expected: Mapping[str, object]) -> bool:
