@@ -27,11 +27,14 @@ GOOGLE_ZONE = ZoneRef(DomainProvider.GOOGLE_CLOUD_DNS, "public-zone", "example.c
 
 
 class FakeRoute53Client:
-    def __init__(self, *, hosted_zone_pages=None, record_pages=None, change_statuses=None, error=None):
+    def __init__(
+        self, *, hosted_zone_pages=None, record_pages=None, change_statuses=None, error=None, change_error=None,
+    ):
         self.hosted_zone_pages = list(hosted_zone_pages or [{"HostedZones": [], "IsTruncated": False}])
         self.record_pages = list(record_pages or [{"ResourceRecordSets": [], "IsTruncated": False}])
         self.change_statuses = list(change_statuses or ["INSYNC"])
         self.error = error
+        self.change_error = change_error
         self.hosted_zone_calls: list[dict] = []
         self.record_calls: list[dict] = []
         self.change_requests: list[dict] = []
@@ -57,6 +60,8 @@ class FakeRoute53Client:
 
     def get_change(self, **kwargs):
         self.change_reads.append(kwargs["Id"])
+        if self.change_error:
+            raise self.change_error
         status = self.change_statuses.pop(0) if len(self.change_statuses) > 1 else self.change_statuses[0]
         return {"ChangeInfo": {"Status": status}}
 
@@ -697,6 +702,20 @@ async def test_route53_sanitizes_provider_rejection_and_unavailability():
 async def test_route53_change_poll_timeout_returns_sanitized_unavailable_without_retry():
     client = FakeRoute53Client(change_statuses=["PENDING"])
     adapter = AwsRoute53Adapter(client_factory=lambda credential: client, poll_attempts=1, poll_interval=0)
+
+    with pytest.raises(ProviderUnavailableError, match="AWS Route 53 暂时不可用"):
+        await adapter.create_simple_record_set(
+            AWS_ZONE, RecordSetDraft("api.example.com", "A", 300, ("192.0.2.1",)), AWS_CREDENTIAL,
+        )
+
+    assert len(client.change_requests) == 1
+    assert client.change_reads == ["/change/C1"]
+
+
+@pytest.mark.asyncio
+async def test_route53_write_after_submit_change_poll_error_is_unavailable():
+    client = FakeRoute53Client(change_error=FakeClientError("AccessDenied"))
+    adapter = AwsRoute53Adapter(client_factory=lambda credential: client, poll_interval=0)
 
     with pytest.raises(ProviderUnavailableError, match="AWS Route 53 暂时不可用"):
         await adapter.create_simple_record_set(
