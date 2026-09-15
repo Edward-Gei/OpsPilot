@@ -473,7 +473,7 @@ onMounted(() => {
       title="绑定公网 Zone"
       :width="820"
       :footer="null"
-      :body-style="{ maxHeight: 'calc(100vh - 176px)', overflowY: 'auto' }"
+      :body-style="{ maxHeight: 'calc(100vh - 176px)', overflowX: 'hidden', overflowY: 'auto' }"
     >
       <a-form layout="vertical" class="bind-form">
         <div class="form-row">
