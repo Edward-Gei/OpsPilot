@@ -213,7 +213,6 @@ class AwsRoute53Adapter(DnsProviderAdapter):
     async def _change_record_set(
         self, zone: ZoneRef, action: str, record_set: dict[str, object], credential: ProviderCredential,
     ) -> None:
-        operation = "ChangeResourceRecordSets"
         try:
             client = await asyncio.to_thread(self._client_factory, credential)
             response = await asyncio.to_thread(
@@ -225,10 +224,22 @@ class AwsRoute53Adapter(DnsProviderAdapter):
             change_id = change.get("Id")
             if not change_id:
                 raise RuntimeError("Route 53 变更编号缺失")
-            operation = "GetChange"
-            await asyncio.to_thread(self._wait_for_change, client, str(change_id))
         except Exception as exc:
-            raise _route53_error(exc, operation=operation) from None
+            raise _route53_error(exc, operation="ChangeResourceRecordSets") from None
+
+        try:
+            await asyncio.to_thread(self._wait_for_change, client, str(change_id))
+            return
+        except Exception as exc:
+            error = _route53_error(exc, operation="GetChange")
+            if not self._is_access_denied(error):
+                raise error from None
+
+        # 变更已被接受；若无 change 资源权限，则用已有的记录读取权限确认结果。
+        try:
+            await asyncio.to_thread(self._wait_for_record_change, client, zone, action, record_set)
+        except Exception as exc:
+            raise _route53_error(exc, operation="ListResourceRecordSets") from None
 
     def _wait_for_change(self, client: Any, change_id: str) -> None:
         for attempt in range(self._poll_attempts):
@@ -238,6 +249,59 @@ class AwsRoute53Adapter(DnsProviderAdapter):
             if attempt < self._poll_attempts - 1 and self._poll_interval:
                 time.sleep(self._poll_interval)
         raise TimeoutError("Route 53 变更未在限定时间内完成")
+
+    def _wait_for_record_change(
+        self, client: Any, zone: ZoneRef, action: str, expected: Mapping[str, object],
+    ) -> None:
+        expected_name = str(expected["Name"])
+        expected_type = str(expected["Type"]).upper()
+        for attempt in range(self._poll_attempts):
+            response = client.list_resource_record_sets(
+                HostedZoneId=zone.remote_zone_id,
+                StartRecordName=expected_name,
+                StartRecordType=expected_type,
+                MaxItems="1",
+            )
+            current = next(
+                (
+                    record
+                    for record in response.get("ResourceRecordSets", [])
+                    if isinstance(record, Mapping)
+                    and str(record.get("Name")) == expected_name
+                    and str(record.get("Type")).upper() == expected_type
+                ),
+                None,
+            )
+            if action == "DELETE":
+                if current is None:
+                    return
+            elif isinstance(current, Mapping) and self._same_simple_record_set(current, expected):
+                return
+            if attempt < self._poll_attempts - 1 and self._poll_interval:
+                time.sleep(self._poll_interval)
+        raise TimeoutError("Route 53 变更未在限定时间内完成")
+
+    @staticmethod
+    def _is_access_denied(error: ProviderRejectedError | ProviderUnavailableError) -> bool:
+        return isinstance(error, ProviderRejectedError) and (error.provider_error_code or "").lower().startswith(
+            "accessdenied"
+        )
+
+    @staticmethod
+    def _same_simple_record_set(current: Mapping[str, Any], expected: Mapping[str, object]) -> bool:
+        if current.get("TTL") != expected.get("TTL"):
+            return False
+        current_records = current.get("ResourceRecords")
+        expected_records = expected.get("ResourceRecords")
+        if not isinstance(current_records, list) or not isinstance(expected_records, list):
+            return False
+        if not all(isinstance(record, Mapping) and "Value" in record for record in current_records):
+            return False
+        if not all(isinstance(record, Mapping) and "Value" in record for record in expected_records):
+            return False
+        return sorted(str(record["Value"]) for record in current_records) == sorted(
+            str(record["Value"]) for record in expected_records
+        )
 
     @staticmethod
     def _to_route53_record_set(record: RecordSetDraft | RemoteRecordSet) -> dict[str, object]:

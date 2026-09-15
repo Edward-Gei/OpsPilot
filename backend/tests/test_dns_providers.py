@@ -725,17 +725,59 @@ async def test_route53_waits_for_slow_change_to_reach_insync():
 
 
 @pytest.mark.asyncio
-async def test_route53_get_change_rejection_carries_safe_diagnostic():
-    client = FakeRoute53Client(change_error=FakeClientError("AccessDenied"))
-    adapter = AwsRoute53Adapter(client_factory=lambda credential: client, poll_interval=0)
+async def test_route53_falls_back_to_record_reads_when_get_change_is_denied():
+    client = FakeRoute53Client(
+        change_error=FakeClientError("AccessDenied"),
+        record_pages=[
+            {
+                "ResourceRecordSets": [
+                    {"Name": "new.example.com.", "Type": "A", "TTL": 300, "ResourceRecords": [{"Value": "192.0.2.3"}]},
+                ],
+                "IsTruncated": False,
+            },
+            {
+                "ResourceRecordSets": [
+                    {"Name": "api.example.com.", "Type": "A", "TTL": 300, "ResourceRecords": [{"Value": "192.0.2.2"}]},
+                ],
+                "IsTruncated": False,
+            },
+            {"ResourceRecordSets": [], "IsTruncated": False},
+        ],
+    )
+    adapter = AwsRoute53Adapter(client_factory=lambda credential: client, poll_attempts=1, poll_interval=0)
+    before = RemoteRecordSet("api-key", "api.example.com", "A", 300, ("192.0.2.1",), None, {})
+    after = RecordSetDraft("api.example.com", "A", 300, ("192.0.2.2",))
 
-    with pytest.raises(ProviderRejectedError) as exc:
-        await adapter.create_simple_record_set(
-            AWS_ZONE, RecordSetDraft("api.example.com", "A", 300, ("192.0.2.1",)), AWS_CREDENTIAL,
-        )
+    await adapter.create_simple_record_set(
+        AWS_ZONE, RecordSetDraft("new.example.com", "A", 300, ("192.0.2.3",)), AWS_CREDENTIAL,
+    )
+    await adapter.replace_simple_record_set(AWS_ZONE, before, after, AWS_CREDENTIAL)
+    await adapter.delete_simple_record_set(AWS_ZONE, after, AWS_CREDENTIAL)
 
-    assert exc.value.operation == "GetChange"
-    assert exc.value.provider_error_code == "AccessDenied"
+    assert [request["ChangeBatch"]["Changes"][0]["Action"] for request in client.change_requests] == [
+        "CREATE", "UPSERT", "DELETE",
+    ]
+    assert client.change_reads == ["/change/C1"] * 3
+    assert client.record_calls == [
+        {
+            "HostedZoneId": "ZPUBLIC",
+            "StartRecordName": "new.example.com.",
+            "StartRecordType": "A",
+            "MaxItems": "1",
+        },
+        {
+            "HostedZoneId": "ZPUBLIC",
+            "StartRecordName": "api.example.com.",
+            "StartRecordType": "A",
+            "MaxItems": "1",
+        },
+        {
+            "HostedZoneId": "ZPUBLIC",
+            "StartRecordName": "api.example.com.",
+            "StartRecordType": "A",
+            "MaxItems": "1",
+        },
+    ]
 
 
 async def _remote_record(adapter: AwsRoute53Adapter, client: FakeRoute53Client, value: str):
