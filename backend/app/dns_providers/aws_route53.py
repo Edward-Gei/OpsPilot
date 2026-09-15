@@ -203,7 +203,6 @@ class AwsRoute53Adapter(DnsProviderAdapter):
     async def _change_record_set(
         self, zone: ZoneRef, action: str, record_set: dict[str, object], credential: ProviderCredential,
     ) -> None:
-        submitted = False
         try:
             client = await asyncio.to_thread(self._client_factory, credential)
             response = await asyncio.to_thread(
@@ -211,15 +210,12 @@ class AwsRoute53Adapter(DnsProviderAdapter):
                 HostedZoneId=zone.remote_zone_id,
                 ChangeBatch={"Changes": [{"Action": action, "ResourceRecordSet": record_set}]},
             )
-            submitted = True
             change = response.get("ChangeInfo", {})
             change_id = change.get("Id")
             if not change_id:
                 raise RuntimeError("Route 53 变更编号缺失")
             await asyncio.to_thread(self._wait_for_change, client, str(change_id))
         except Exception as exc:
-            if submitted:
-                raise ProviderUnavailableError("AWS Route 53 暂时不可用") from None
             raise _route53_error(exc) from None
 
     def _wait_for_change(self, client: Any, change_id: str) -> None:
