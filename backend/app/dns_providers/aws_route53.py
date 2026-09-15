@@ -58,8 +58,9 @@ class AwsRoute53Adapter(DnsProviderAdapter):
         self,
         client_factory: Callable[[ProviderCredential], Any] | None = None,
         *,
-        poll_attempts: int = 20,
-        poll_interval: float = 0.2,
+        # Route 53 变更通常需要几十秒，轮询窗口需覆盖异步传播时间。
+        poll_attempts: int = 60,
+        poll_interval: float = 1.0,
     ):
         self._client_factory = client_factory or _route53_client
         self._poll_attempts = poll_attempts

@@ -707,6 +707,18 @@ async def test_route53_change_poll_timeout_returns_sanitized_unavailable_without
     assert client.change_reads == ["/change/C1"]
 
 
+@pytest.mark.asyncio
+async def test_route53_waits_for_slow_change_to_reach_insync():
+    client = FakeRoute53Client(change_statuses=["PENDING"] * 20 + ["INSYNC"])
+    adapter = AwsRoute53Adapter(client_factory=lambda credential: client, poll_interval=0)
+
+    await adapter.create_simple_record_set(
+        AWS_ZONE, RecordSetDraft("api.example.com", "A", 300, ("192.0.2.1",)), AWS_CREDENTIAL,
+    )
+
+    assert client.change_reads == ["/change/C1"] * 21
+
+
 async def _remote_record(adapter: AwsRoute53Adapter, client: FakeRoute53Client, value: str):
     client.record_pages = [{
         "ResourceRecordSets": [
