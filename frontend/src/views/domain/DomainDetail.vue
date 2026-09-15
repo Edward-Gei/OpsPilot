@@ -47,7 +47,7 @@ const records = ref<domainApi.DnsRecordSet[]>([])
 const recordTotal = ref(0)
 const recordQuery = reactive({
   page: 1,
-  page_size: 20,
+  page_size: 10,
   keyword: '',
   record_type: undefined as string | undefined,
   read_only: undefined as boolean | undefined,

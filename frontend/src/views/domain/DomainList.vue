@@ -430,11 +430,12 @@ onMounted(() => {
         <template v-else-if="column.key === 'action'">
           <a-space :size="6">
             <a-button size="small" class="op-btn-cyan" @click="openDetail(record as domainApi.DomainItem)">
-              <EyeOutlined />详情
+              <EyeOutlined />DNS 管理
             </a-button>
             <a-button
               v-if="canWrite"
               size="small"
+              class="op-btn-green"
               :loading="syncLoadingId === record.id"
               @click="onSync(record as domainApi.DomainItem)"
             >
@@ -467,7 +468,13 @@ onMounted(() => {
       </a-form>
     </a-modal>
 
-    <a-modal v-model:open="bindVisible" title="绑定公网 Zone" :width="820" :footer="null">
+    <a-modal
+      v-model:open="bindVisible"
+      title="绑定公网 Zone"
+      :width="820"
+      :footer="null"
+      :body-style="{ maxHeight: 'calc(100vh - 176px)', overflowY: 'auto' }"
+    >
       <a-form layout="vertical" class="bind-form">
         <div class="form-row">
           <a-form-item label="服务商" required class="form-col">
@@ -508,6 +515,7 @@ onMounted(() => {
         row-key="remote_zone_id"
         size="small"
         :pagination="false"
+        :scroll="{ y: 360 }"
         :locale="{ emptyText: bindForm.credential_id ? '点击发现 Zone 获取可绑定的公网 Zone' : '请先选择服务商和凭据' }"
       />
       <div class="modal-actions">
@@ -528,6 +536,7 @@ onMounted(() => {
         row-key="remote_zone_id"
         size="small"
         :pagination="false"
+        :scroll="{ y: 180 }"
       >
         <template #bodyCell="{ column, record }">
           <a-tag v-if="column.key === 'status'" :color="record.status === 'success' ? 'success' : record.status === 'skipped' ? 'warning' : 'error'">
