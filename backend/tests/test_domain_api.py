@@ -1,5 +1,6 @@
 """域名管理 REST 接口的权限与响应边界测试。"""
 from dataclasses import replace
+from datetime import datetime, timedelta
 from io import BytesIO
 
 import pytest
@@ -8,11 +9,12 @@ from sqlalchemy import select
 
 from app.core.constants import DomainProvider
 from app.core.security import encrypt_text
-from app.dns_providers.base import RecordSetDraft, RemoteRecordSet, ZoneRef
+from app.dns_providers.base import ProviderUnavailableError, RecordSetDraft, RemoteRecordSet, ZoneRef
 from app.models.auth import Permission, Role, RolePermission, User, UserRole
-from app.models.domain import DnsZone
+from app.models.domain import DnsZone, DnsZoneBindTask, DnsZoneBindTaskItem
 from app.models.job import Credential
-from app.services import domain_service
+from app.schemas.domain import ZoneBindResult
+from app.services import domain_bind_task_service, domain_service
 from tests.conftest import TEST_PASSWORD_HASH, auth_header, login_for_tokens
 
 
@@ -183,7 +185,7 @@ async def test_domain_routes_enforce_separate_read_write_delete_permissions(clie
     assert (await client.delete("/api/v1/domains/zones/1", headers=headers)).json()["code"] == 40301
 
 
-async def _bind_zone(client, headers, credential_id: int) -> int:
+async def _bind_zone(client, db_factory, headers, credential_id: int) -> int:
     response = await client.post(
         "/api/v1/domains/zones",
         json={
@@ -194,17 +196,22 @@ async def _bind_zone(client, headers, credential_id: int) -> int:
         headers=headers,
     )
     body = response.json()
+    assert response.status_code == 202
     assert body["code"] == 0, body
-    assert body["data"]["items"][0]["status"] == "success"
-    return body["data"]["items"][0]["zone_id"]
+    async with db_factory() as session:
+        assert await domain_bind_task_service.process_next_zone_bind_task(session) is True
+    detail = await client.get(f"/api/v1/domains/zone-bind-tasks/{body['data']['id']}", headers=headers)
+    item = detail.json()["data"]["items"][0]
+    assert item["status"] == "success"
+    return item["zone_id"]
 
 
-async def test_zone_bind_accepts_more_than_one_hundred_selections(client, db_factory, fake_adapter):
+async def test_zone_bind_enqueues_one_hundred_ninety_selections(client, db_factory, fake_adapter):
     headers = auth_header(await login_for_tokens(client, "admin"))
     credential = await _seed_cloud_credential(db_factory)
     fake_adapter.discovered_zones = [
         ZoneRef(DomainProvider.AWS_ROUTE53, f"Z{index}", f"zone-{index}.example.com")
-        for index in range(101)
+        for index in range(190)
     ]
 
     response = await client.post(
@@ -221,10 +228,161 @@ async def test_zone_bind_accepts_more_than_one_hundred_selections(client, db_fac
     )
 
     body = response.json()
-    assert response.status_code == 200
+    assert response.status_code == 202
     assert body["code"] == 0, body
-    assert len(body["data"]["items"]) == 101
-    assert {item["status"] for item in body["data"]["items"]} == {"success"}
+    task = body["data"]
+    assert task["status"] == "queued"
+    assert task["total_count"] == 190
+    assert task["success_count"] == task["skipped_count"] == task["failed_count"] == 0
+    assert fake_adapter.discover_calls == fake_adapter.list_calls == 0
+
+    detail = await client.get(f"/api/v1/domains/zone-bind-tasks/{task['id']}", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["data"]["id"] == task["id"]
+    assert len(detail.json()["data"]["items"]) == 190
+    assert {item["status"] for item in detail.json()["data"]["items"]} == {"pending"}
+
+
+async def test_zone_bind_task_processes_each_pending_zone(client, db_factory, fake_adapter):
+    headers = auth_header(await login_for_tokens(client, "admin"))
+    credential = await _seed_cloud_credential(db_factory)
+    fake_adapter.discovered_zones = [
+        ZoneRef(DomainProvider.AWS_ROUTE53, "Z1", "one.example.com"),
+        ZoneRef(DomainProvider.AWS_ROUTE53, "Z2", "two.example.com"),
+    ]
+
+    response = await client.post(
+        "/api/v1/domains/zones",
+        json={
+            "provider": "aws_route53",
+            "credential_id": credential.id,
+            "selections": [
+                {"remote_zone_id": "Z1", "description": "首批 Zone"},
+                {"remote_zone_id": "Z2", "description": "首批 Zone"},
+            ],
+        },
+        headers=headers,
+    )
+    task_id = response.json()["data"]["id"]
+
+    async with db_factory() as session:
+        assert await domain_bind_task_service.process_next_zone_bind_task(session) is True
+
+    assert fake_adapter.discover_calls == 1
+    assert fake_adapter.list_calls == 2
+    detail = await client.get(f"/api/v1/domains/zone-bind-tasks/{task_id}", headers=headers)
+    task = detail.json()["data"]
+    assert task["status"] == "success"
+    assert task["success_count"] == 2
+    assert task["skipped_count"] == task["failed_count"] == 0
+    assert {item["zone_name"] for item in task["items"]} == {"one.example.com", "two.example.com"}
+    assert {item["status"] for item in task["items"]} == {"success"}
+
+
+async def test_zone_bind_task_reclaims_expired_lease(client, db_factory, fake_adapter):
+    headers = auth_header(await login_for_tokens(client, "admin"))
+    credential = await _seed_cloud_credential(db_factory)
+    fake_adapter.discovered_zones = [
+        ZoneRef(DomainProvider.AWS_ROUTE53, "Z1", "one.example.com"),
+        ZoneRef(DomainProvider.AWS_ROUTE53, "Z2", "two.example.com"),
+    ]
+    response = await client.post(
+        "/api/v1/domains/zones",
+        json={
+            "provider": "aws_route53",
+            "credential_id": credential.id,
+            "selections": [{"remote_zone_id": "Z1"}, {"remote_zone_id": "Z2"}],
+        },
+        headers=headers,
+    )
+    task_id = response.json()["data"]["id"]
+
+    async with db_factory() as session:
+        task = await session.get(DnsZoneBindTask, task_id)
+        task.status = "running"
+        task.lease_token = "expired-worker"
+        task.lease_expires_at = datetime.now() - timedelta(seconds=1)
+        first_item = (await session.execute(
+            select(DnsZoneBindTaskItem)
+            .where(DnsZoneBindTaskItem.task_id == task_id)
+            .order_by(DnsZoneBindTaskItem.id)
+            .limit(1)
+        )).scalar_one()
+        first_item.status = "running"
+        first_item.lease_token = "expired-worker"
+        await session.commit()
+
+    async with db_factory() as session:
+        assert await domain_bind_task_service.process_next_zone_bind_task(session) is True
+
+    detail = await client.get(f"/api/v1/domains/zone-bind-tasks/{task_id}", headers=headers)
+    task = detail.json()["data"]
+    assert task["status"] == "success"
+    assert task["success_count"] == 2
+    assert {item["status"] for item in task["items"]} == {"success"}
+
+
+async def test_zone_bind_task_marks_pending_items_failed_when_discovery_fails(client, db_factory, fake_adapter):
+    headers = auth_header(await login_for_tokens(client, "admin"))
+    credential = await _seed_cloud_credential(db_factory)
+    fake_adapter.discover_error = ProviderUnavailableError()
+    response = await client.post(
+        "/api/v1/domains/zones",
+        json={
+            "provider": "aws_route53",
+            "credential_id": credential.id,
+            "selections": [{"remote_zone_id": "Z1"}, {"remote_zone_id": "Z2"}],
+        },
+        headers=headers,
+    )
+    task_id = response.json()["data"]["id"]
+
+    async with db_factory() as session:
+        assert await domain_bind_task_service.process_next_zone_bind_task(session) is True
+
+    detail = await client.get(f"/api/v1/domains/zone-bind-tasks/{task_id}", headers=headers)
+    task = detail.json()["data"]
+    assert task["status"] == "failed"
+    assert task["failed_count"] == 2
+    assert task["last_error"] == "DNS 服务商暂时不可用，请稍后重试"
+    assert {item["status"] for item in task["items"]} == {"failed"}
+    assert fake_adapter.list_calls == 0
+
+
+async def test_zone_bind_task_completes_when_item_binding_rolls_back(client, db_factory, fake_adapter, monkeypatch):
+    headers = auth_header(await login_for_tokens(client, "admin"))
+    credential = await _seed_cloud_credential(db_factory)
+
+    async def bind_then_roll_back(session, **kwargs):
+        await session.execute(select(DnsZone.id))
+        await session.rollback()
+        selection = kwargs["selections"][0]
+        return [ZoneBindResult(
+            remote_zone_id=selection.remote_zone_id,
+            status="skipped",
+            reason="Zone 已绑定，已跳过",
+        )]
+
+    monkeypatch.setattr(domain_bind_task_service.domain_service, "bind_zones", bind_then_roll_back)
+    response = await client.post(
+        "/api/v1/domains/zones",
+        json={
+            "provider": "aws_route53",
+            "credential_id": credential.id,
+            "selections": [{"remote_zone_id": "Z1"}],
+        },
+        headers=headers,
+    )
+    task_id = response.json()["data"]["id"]
+
+    async with db_factory() as session:
+        assert await domain_bind_task_service.process_next_zone_bind_task(session) is True
+
+    detail = await client.get(f"/api/v1/domains/zone-bind-tasks/{task_id}", headers=headers)
+    task = detail.json()["data"]
+    assert task["status"] == "success"
+    assert task["skipped_count"] == 1
+    assert task["items"][0]["status"] == "skipped"
 
 
 def _make_zone_xlsx(rows: list[list]) -> bytes:
@@ -250,7 +408,7 @@ async def test_domain_api_discovers_binds_syncs_and_hides_internal_fields(client
     )
     assert discovered.json()["data"]["items"] == [{"remote_zone_id": "Z1", "zone_name": "example.com"}]
 
-    zone_id = await _bind_zone(client, headers, credential.id)
+    zone_id = await _bind_zone(client, db_factory, headers, credential.id)
     zones = await client.get("/api/v1/domains/zones", params={"keyword": "生产"}, headers=headers)
     zone = zones.json()["data"]["items"][0]
     assert zone["id"] == zone_id
@@ -283,7 +441,7 @@ async def test_domain_api_discovers_binds_syncs_and_hides_internal_fields(client
 async def test_record_api_writes_only_simple_current_records(client, db_factory, fake_adapter):
     headers = auth_header(await login_for_tokens(client, "admin"))
     credential = await _seed_cloud_credential(db_factory)
-    zone_id = await _bind_zone(client, headers, credential.id)
+    zone_id = await _bind_zone(client, db_factory, headers, credential.id)
     records = (await client.get(f"/api/v1/domains/zones/{zone_id}/records", headers=headers)).json()["data"]["items"]
     a_record = next(record for record in records if record["record_type"] == "A")
     ns_record = next(record for record in records if record["record_type"] == "NS")
@@ -333,7 +491,7 @@ async def test_record_api_writes_only_simple_current_records(client, db_factory,
 async def test_unbind_removes_only_local_snapshots(client, db_factory, fake_adapter):
     headers = auth_header(await login_for_tokens(client, "admin"))
     credential = await _seed_cloud_credential(db_factory)
-    zone_id = await _bind_zone(client, headers, credential.id)
+    zone_id = await _bind_zone(client, db_factory, headers, credential.id)
 
     response = await client.delete(f"/api/v1/domains/zones/{zone_id}", headers=headers)
     assert response.json()["code"] == 0
@@ -415,7 +573,7 @@ async def test_zone_template_and_export_keep_full_txt_without_credentials(client
 
     credential = await _seed_cloud_credential(db_factory)
     fake_adapter.records.append(REMOTE_TXT)
-    await _bind_zone(client, headers, credential.id)
+    await _bind_zone(client, db_factory, headers, credential.id)
     exported = await client.get("/api/v1/domains/zones/export", headers=headers)
     assert exported.status_code == 200
     workbook = load_workbook(BytesIO(exported.content), read_only=True)

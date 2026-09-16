@@ -79,7 +79,7 @@ def test_system_config_defaults_wrapped():
 
 
 def test_metadata_contains_all_tables():
-    """ORM 元数据必须收录当前定义的全部 28 张表。"""
+    """ORM 元数据必须收录当前定义的全部 30 张表。"""
     from app.models import Base
 
     expected = {
@@ -93,6 +93,7 @@ def test_metadata_contains_all_tables():
         "user_notification",
         "audit_log", "system_config",
         "dns_zone", "dns_record_set",
+        "dns_zone_bind_task", "dns_zone_bind_task_item",
     }
     assert set(Base.metadata.tables.keys()) == expected
 

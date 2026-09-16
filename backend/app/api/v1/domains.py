@@ -1,7 +1,7 @@
 """域名管理路由：仅暴露 Zone/记录快照和安全的变更入口。"""
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, Query, Request, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import select
 
@@ -20,7 +20,7 @@ from app.schemas.domain import (
     ZoneDescriptionUpdateRequest,
     ZoneDiscoverRequest,
 )
-from app.services import domain_excel, domain_service
+from app.services import domain_bind_task_service, domain_excel, domain_service
 
 
 router = APIRouter(prefix="/domains", tags=["域名管理"])
@@ -113,23 +113,33 @@ async def discover_zones(
     return ok({"items": [{"remote_zone_id": zone.remote_zone_id, "zone_name": zone.zone_name} for zone in zones]})
 
 
-@router.post("/zones", summary="绑定已发现的 Zone")
+@router.post("/zones", summary="创建 Zone 绑定任务", status_code=status.HTTP_202_ACCEPTED)
 async def bind_zones(
     req: ZoneBindRequest,
     request: Request,
     session: DbSession,
     actor: User = Depends(require_perm("domain:write")),
 ) -> dict:
-    """绑定并创建现有远端记录的本地快照。"""
-    results = await domain_service.bind_zones(
+    """创建后台任务，避免批量快照读取占用浏览器请求。"""
+    task = await domain_bind_task_service.create_zone_bind_task(
         session,
         provider=req.provider,
         credential_id=req.credential_id,
         selections=req.selections,
-        created_by=actor.id,
         audit_context=_audit_context(actor, request),
     )
-    return ok({"items": [result.model_dump(mode="json") for result in results]})
+    return ok(domain_bind_task_service.task_to_dict(task))
+
+
+@router.get("/zone-bind-tasks/{task_id}", summary="查询 Zone 绑定任务进度")
+async def get_zone_bind_task(
+    task_id: int,
+    session: DbSession,
+    _: User = Depends(require_perm("domain:read")),
+) -> dict:
+    """读取持久化任务进度，不会触发 DNS 服务商调用。"""
+    task, items = await domain_bind_task_service.get_zone_bind_task(session, task_id)
+    return ok(domain_bind_task_service.task_to_dict(task, items))
 
 
 @router.get("/zones/import-template", summary="下载 Zone 导入模板")

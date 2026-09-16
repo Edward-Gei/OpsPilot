@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Zone 台账：筛选、绑定、快照同步、Excel 导入导出与本地解绑。
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import {
@@ -181,12 +181,45 @@ const credentials = ref<domainApi.ProviderCredential[]>([])
 const discovered = ref<domainApi.DiscoveredZone[]>([])
 const discoveredKeyword = ref('')
 const selectedRemoteZoneIds = ref<string[]>([])
-const bindResults = ref<domainApi.ZoneBindResult[]>([])
+const bindTask = ref<domainApi.ZoneBindTask | null>(null)
+let bindPollTimer: number | null = null
 const bindForm = reactive({
   provider: undefined as domainApi.DomainProvider | undefined,
   credential_id: undefined as number | undefined,
   description: '',
 })
+
+const bindTaskFinished = computed(() => (
+  bindTask.value?.status === 'success' ||
+  bindTask.value?.status === 'partial_failed' ||
+  bindTask.value?.status === 'failed'
+))
+const bindTaskProgress = computed(() => {
+  const task = bindTask.value
+  if (!task || !task.total_count) return 0
+  return Math.round((task.success_count + task.skipped_count + task.failed_count) / task.total_count * 100)
+})
+const bindTaskStatusText: Record<domainApi.ZoneBindTaskStatus, string> = {
+  queued: '等待处理',
+  running: '绑定中',
+  success: '已完成',
+  partial_failed: '部分失败',
+  failed: '绑定失败',
+}
+const bindItemStatusText: Record<domainApi.ZoneBindTaskItemStatus, string> = {
+  pending: '等待处理',
+  running: '处理中',
+  success: '成功',
+  skipped: '跳过',
+  failed: '失败',
+}
+const bindItemStatusColor: Record<domainApi.ZoneBindTaskItemStatus, string> = {
+  pending: 'default',
+  running: 'processing',
+  success: 'success',
+  skipped: 'warning',
+  failed: 'error',
+}
 
 /** 已发现的 Zone 在本地筛选，避免输入搜索词时重复请求 DNS 服务商。 */
 const filteredDiscovered = computed(() => {
@@ -206,6 +239,7 @@ const discoveredRowSelection = computed(() => ({
 }))
 
 function openBind() {
+  stopBindPolling()
   bindForm.provider = undefined
   bindForm.credential_id = undefined
   bindForm.description = ''
@@ -213,8 +247,13 @@ function openBind() {
   discovered.value = []
   discoveredKeyword.value = ''
   selectedRemoteZoneIds.value = []
-  bindResults.value = []
+  bindTask.value = null
   bindVisible.value = true
+}
+
+function closeBind() {
+  stopBindPolling()
+  bindVisible.value = false
 }
 
 async function onProviderChange() {
@@ -223,7 +262,7 @@ async function onProviderChange() {
   discovered.value = []
   discoveredKeyword.value = ''
   selectedRemoteZoneIds.value = []
-  bindResults.value = []
+  bindTask.value = null
   if (!bindForm.provider) return
   credentialLoading.value = true
   try {
@@ -250,7 +289,7 @@ async function onDiscover() {
     discovered.value = data.items
     discoveredKeyword.value = ''
     selectedRemoteZoneIds.value = []
-    bindResults.value = []
+    bindTask.value = null
   } catch {
     /* 错误提示由拦截器统一弹出 */
   } finally {
@@ -265,7 +304,7 @@ async function onBind() {
   }
   bindLoading.value = true
   try {
-    const data = await domainApi.bindZones({
+    bindTask.value = await domainApi.bindZones({
       provider: bindForm.provider,
       credential_id: bindForm.credential_id,
       selections: selectedRemoteZoneIds.value.map((remote_zone_id) => ({
@@ -273,14 +312,53 @@ async function onBind() {
         description: bindForm.description || undefined,
       })),
     })
-    bindResults.value = data.items
-    const successCount = data.items.filter((item) => item.status === 'success').length
-    if (successCount) message.success(`已绑定 ${successCount} 个 Zone`)
-    refreshAll()
+    void pollBindTask(bindTask.value.id)
   } catch {
     /* 错误提示由拦截器统一弹出 */
   } finally {
     bindLoading.value = false
+  }
+}
+
+function stopBindPolling() {
+  if (bindPollTimer !== null) {
+    window.clearTimeout(bindPollTimer)
+    bindPollTimer = null
+  }
+}
+
+function scheduleBindTaskPoll(taskId: number, delay = 1200) {
+  stopBindPolling()
+  bindPollTimer = window.setTimeout(() => {
+    bindPollTimer = null
+    void pollBindTask(taskId)
+  }, delay)
+}
+
+function notifyBindTaskFinished(task: domainApi.ZoneBindTask) {
+  if (task.status === 'success') {
+    message.success(`已绑定 ${task.success_count} 个 Zone`)
+  } else if (task.status === 'partial_failed') {
+    message.warning(`已绑定 ${task.success_count} 个 Zone，失败 ${task.failed_count} 个`)
+  } else {
+    message.error(`绑定失败 ${task.failed_count} 个 Zone`)
+  }
+}
+
+async function pollBindTask(taskId: number) {
+  if (!bindVisible.value || bindTask.value?.id !== taskId) return
+  try {
+    const task = await domainApi.getZoneBindTask(taskId)
+    if (!bindVisible.value || bindTask.value?.id !== taskId) return
+    bindTask.value = task
+    if (task.status === 'success' || task.status === 'partial_failed' || task.status === 'failed') {
+      notifyBindTaskFinished(task)
+      refreshAll()
+      return
+    }
+    scheduleBindTaskPoll(taskId)
+  } catch {
+    if (bindVisible.value && bindTask.value?.id === taskId) scheduleBindTaskPoll(taskId, 5000)
   }
 }
 
@@ -355,6 +433,8 @@ onMounted(() => {
   }
   refreshAll()
 })
+
+onBeforeUnmount(stopBindPolling)
 </script>
 
 <template>
@@ -488,86 +568,114 @@ onMounted(() => {
       :width="820"
       :footer="null"
       :body-style="{ maxHeight: 'calc(100vh - 176px)', overflowX: 'hidden', overflowY: 'auto' }"
+      @cancel="closeBind"
     >
-      <a-form layout="vertical" class="bind-form">
-        <div class="form-row">
-          <a-form-item label="服务商" required class="form-col">
-            <a-select
-              v-model:value="bindForm.provider"
-              placeholder="选择服务商"
-              :options="providerOptions"
-              @change="onProviderChange"
-            />
-          </a-form-item>
-          <a-form-item label="凭据" required class="form-col">
-            <a-select
-              v-model:value="bindForm.credential_id"
-              placeholder="先选择服务商"
-              :loading="credentialLoading"
-              :disabled="!bindForm.provider"
-              :options="credentials.map((item) => ({ value: item.id, label: item.description ? `${item.name} (${item.description})` : item.name }))"
-            />
-          </a-form-item>
-          <a-form-item label=" " class="discover-action">
-            <a-button :loading="discoverLoading" :disabled="!bindForm.credential_id" @click="onDiscover">
-              <SearchOutlined />发现 Zone
-            </a-button>
-          </a-form-item>
-        </div>
-        <a-form-item label="绑定说明">
-          <a-input v-model:value="bindForm.description" :maxlength="255" placeholder="将应用到本次选择的 Zone，可留空" />
-        </a-form-item>
-      </a-form>
-
-      <a-input
-        v-if="discovered.length"
-        v-model:value="discoveredKeyword"
-        class="discovered-search"
-        allow-clear
-        placeholder="搜索 Zone 名称或远端 Zone ID"
-      >
-        <template #prefix><SearchOutlined /></template>
-      </a-input>
-      <a-table
-        :columns="[
-          { title: 'Zone 名称', dataIndex: 'zone_name', key: 'zone_name' },
-          { title: '远端 Zone ID', dataIndex: 'remote_zone_id', key: 'remote_zone_id', width: 300 },
-        ]"
-        :data-source="filteredDiscovered"
-        :row-selection="discoveredRowSelection"
-        row-key="remote_zone_id"
-        size="small"
-        :pagination="false"
-        :scroll="{ y: 360 }"
-        :locale="{ emptyText: discovered.length ? '未找到匹配的 Zone' : bindForm.credential_id ? '点击发现 Zone 获取可绑定的公网 Zone' : '请先选择服务商和凭据' }"
-      />
-      <div class="modal-actions">
-        <span>已选择 {{ selectedRemoteZoneIds.length }} 个 Zone</span>
-        <a-button type="primary" :loading="bindLoading" :disabled="!selectedRemoteZoneIds.length" @click="onBind">
-          <LinkOutlined />绑定所选 Zone
-        </a-button>
-      </div>
-      <a-table
-        v-if="bindResults.length"
-        class="result-table"
-        :columns="[
-          { title: '远端 Zone ID', dataIndex: 'remote_zone_id', key: 'remote_zone_id', width: 260 },
-          { title: '结果', key: 'status', width: 100 },
-          { title: '说明', dataIndex: 'reason', key: 'reason' },
-        ]"
-        :data-source="bindResults"
-        row-key="remote_zone_id"
-        size="small"
-        :pagination="false"
-        :scroll="{ y: 180 }"
-      >
-        <template #bodyCell="{ column, record }">
-          <a-tag v-if="column.key === 'status'" :color="record.status === 'success' ? 'success' : record.status === 'skipped' ? 'warning' : 'error'">
-            {{ record.status === 'success' ? '成功' : record.status === 'skipped' ? '跳过' : '失败' }}
+      <template v-if="bindTask">
+        <div class="bind-task-head">
+          <span>已处理 {{ bindTask.success_count + bindTask.skipped_count + bindTask.failed_count }} / {{ bindTask.total_count }} 个 Zone</span>
+          <a-tag :color="bindTask.status === 'success' ? 'success' : bindTask.status === 'partial_failed' ? 'warning' : bindTask.status === 'failed' ? 'error' : 'processing'">
+            {{ bindTaskStatusText[bindTask.status] }}
           </a-tag>
-          <template v-else-if="column.key === 'reason'">{{ record.reason || '—' }}</template>
-        </template>
-      </a-table>
+        </div>
+        <a-progress
+          class="bind-task-progress"
+          :percent="bindTaskProgress"
+          :status="bindTask.status === 'partial_failed' || bindTask.status === 'failed' ? 'exception' : bindTaskFinished ? 'success' : 'active'"
+        />
+        <a-descriptions bordered size="small" :column="3" class="bind-task-summary">
+          <a-descriptions-item label="成功">{{ bindTask.success_count }}</a-descriptions-item>
+          <a-descriptions-item label="跳过">{{ bindTask.skipped_count }}</a-descriptions-item>
+          <a-descriptions-item label="失败">{{ bindTask.failed_count }}</a-descriptions-item>
+        </a-descriptions>
+        <a-alert v-if="bindTask.last_error" class="bind-task-error" type="warning" show-icon :message="bindTask.last_error" />
+        <a-table
+          v-if="bindTask.items?.length"
+          class="result-table"
+          :columns="[
+            { title: 'Zone 名称', dataIndex: 'zone_name', key: 'zone_name', width: 200, ellipsis: true },
+            { title: '远端 Zone ID', dataIndex: 'remote_zone_id', key: 'remote_zone_id', width: 210, ellipsis: true },
+            { title: '状态', key: 'status', width: 100 },
+            { title: '说明', dataIndex: 'reason', key: 'reason', ellipsis: true },
+          ]"
+          :data-source="bindTask.items"
+          row-key="remote_zone_id"
+          size="small"
+          :pagination="false"
+          :scroll="{ y: 260 }"
+        >
+          <template #bodyCell="{ column, record }">
+            <a-tag v-if="column.key === 'status'" :color="bindItemStatusColor[record.status as domainApi.ZoneBindTaskItemStatus]">
+              {{ bindItemStatusText[record.status as domainApi.ZoneBindTaskItemStatus] }}
+            </a-tag>
+            <template v-else-if="column.key === 'zone_name'">{{ record.zone_name || '—' }}</template>
+            <template v-else-if="column.key === 'reason'">{{ record.reason || '—' }}</template>
+          </template>
+        </a-table>
+        <div class="modal-actions">
+          <span>{{ bindTaskFinished ? '任务已完成' : '后台处理中' }}</span>
+          <a-button @click="closeBind">关闭</a-button>
+        </div>
+      </template>
+      <template v-else>
+        <a-form layout="vertical" class="bind-form">
+          <div class="form-row">
+            <a-form-item label="服务商" required class="form-col">
+              <a-select
+                v-model:value="bindForm.provider"
+                placeholder="选择服务商"
+                :options="providerOptions"
+                @change="onProviderChange"
+              />
+            </a-form-item>
+            <a-form-item label="凭据" required class="form-col">
+              <a-select
+                v-model:value="bindForm.credential_id"
+                placeholder="先选择服务商"
+                :loading="credentialLoading"
+                :disabled="!bindForm.provider"
+                :options="credentials.map((item) => ({ value: item.id, label: item.description ? `${item.name} (${item.description})` : item.name }))"
+              />
+            </a-form-item>
+            <a-form-item label=" " class="discover-action">
+              <a-button :loading="discoverLoading" :disabled="!bindForm.credential_id" @click="onDiscover">
+                <SearchOutlined />发现 Zone
+              </a-button>
+            </a-form-item>
+          </div>
+          <a-form-item label="绑定说明">
+            <a-input v-model:value="bindForm.description" :maxlength="255" placeholder="将应用到本次选择的 Zone，可留空" />
+          </a-form-item>
+        </a-form>
+
+        <a-input
+          v-if="discovered.length"
+          v-model:value="discoveredKeyword"
+          class="discovered-search"
+          allow-clear
+          placeholder="搜索 Zone 名称或远端 Zone ID"
+        >
+          <template #prefix><SearchOutlined /></template>
+        </a-input>
+        <a-table
+          :columns="[
+            { title: 'Zone 名称', dataIndex: 'zone_name', key: 'zone_name' },
+            { title: '远端 Zone ID', dataIndex: 'remote_zone_id', key: 'remote_zone_id', width: 300 },
+          ]"
+          :data-source="filteredDiscovered"
+          :row-selection="discoveredRowSelection"
+          row-key="remote_zone_id"
+          size="small"
+          :pagination="false"
+          :scroll="{ y: 360 }"
+          :locale="{ emptyText: discovered.length ? '未找到匹配的 Zone' : bindForm.credential_id ? '点击发现 Zone 获取可绑定的公网 Zone' : '请先选择服务商和凭据' }"
+        />
+        <div class="modal-actions">
+          <span>已选择 {{ selectedRemoteZoneIds.length }} 个 Zone</span>
+          <a-button type="primary" :loading="bindLoading" :disabled="!selectedRemoteZoneIds.length" @click="onBind">
+            <LinkOutlined />绑定所选 Zone
+          </a-button>
+        </div>
+      </template>
     </a-modal>
 
     <a-modal v-model:open="importVisible" title="导入 Zone 台账" :width="720" :footer="null">
@@ -641,6 +749,23 @@ onMounted(() => {
 .discovered-search {
   width: 100%;
   margin-bottom: 12px;
+}
+.bind-task-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.bind-task-progress {
+  margin: 12px 0;
+}
+.bind-task-summary {
+  margin-top: 12px;
+}
+.bind-task-error {
+  margin-top: 12px;
 }
 .modal-actions {
   display: flex;

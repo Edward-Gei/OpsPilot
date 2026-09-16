@@ -45,11 +45,33 @@ export interface ZoneBindSelection {
   description?: string
 }
 
-export interface ZoneBindResult {
+export type ZoneBindTaskStatus = 'queued' | 'running' | 'success' | 'partial_failed' | 'failed'
+export type ZoneBindTaskItemStatus = 'pending' | 'running' | 'success' | 'skipped' | 'failed'
+
+export interface ZoneBindTaskItem {
   remote_zone_id: string
   zone_id: number | null
-  status: 'success' | 'skipped' | 'failed'
+  zone_name: string | null
+  status: ZoneBindTaskItemStatus
   reason: string | null
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface ZoneBindTask {
+  id: number
+  provider: DomainProvider
+  credential_id: number
+  status: ZoneBindTaskStatus
+  total_count: number
+  success_count: number
+  skipped_count: number
+  failed_count: number
+  last_error: string | null
+  created_at: string | null
+  started_at: string | null
+  finished_at: string | null
+  items?: ZoneBindTaskItem[]
 }
 
 export interface ZoneImportResult {
@@ -132,7 +154,15 @@ export function bindZones(data: {
   credential_id: number
   selections: ZoneBindSelection[]
 }) {
-  return request<{ items: ZoneBindResult[] }>({ url: '/domains/zones', method: 'post', data })
+  return request<ZoneBindTask>({ url: '/domains/zones', method: 'post', data })
+}
+
+export function getZoneBindTask(taskId: number) {
+  return request<ZoneBindTask>({
+    url: `/domains/zone-bind-tasks/${taskId}`,
+    method: 'get',
+    silentTransportError: true,
+  })
 }
 
 export function listRecords(zoneId: number, params: RecordQuery) {

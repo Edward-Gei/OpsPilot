@@ -131,14 +131,15 @@
 | --- | --- | --- | --- |
 | GET | `/domains/credentials?provider=` | `domain:write` | 返回指定服务商兼容凭据的 ID、名称、认证类型和描述，不返回认证明文 |
 | POST | `/domains/zones/discover` | `domain:write` | 使用 `{provider, credential_id}` 发现可访问的公网 Zone |
-| POST | `/domains/zones` | `domain:write` | 绑定用户勾选的远端 Zone，并同步已有记录快照；请求含 `provider`、`credential_id` 和 `selections` |
+| POST | `/domains/zones` | `domain:write` | 创建 Zone 绑定任务并返回 `202`；请求含 `provider`、`credential_id` 和 `selections` |
+| GET | `/domains/zone-bind-tasks/{task_id}` | `domain:read` | 查询绑定任务及每个 Zone 的处理进度与结果 |
 | GET | `/domains/zones` | `domain:read` | 分页读取 Zone 台账，支持 `keyword`、`provider`、`sync_status` 筛选 |
 | GET | `/domains/zones/{zone_id}` | `domain:read` | 查询单个 Zone 快照详情 |
 | PUT | `/domains/zones/{zone_id}` | `domain:write` | 仅更新本地 `description` |
 | DELETE | `/domains/zones/{zone_id}` | `domain:delete` | 解除本地绑定并删除本地记录快照，不删除远端 Zone 或记录 |
 | POST | `/domains/zones/{zone_id}/sync` | `domain:write` | 手动刷新单个 Zone 的本地记录快照 |
 
-服务商取值为 `tencent_dnspod`、`aws_route53`、`google_cloud_dns`。Route 53 和 DNSPod 复用 `username_password` 凭据类型，Google Cloud DNS 复用 `secret_file` 凭据类型；服务端会拒绝服务商与凭据类型不匹配的组合。绑定请求只接受前一发现结果中的公网 Zone。
+服务商取值为 `tencent_dnspod`、`aws_route53`、`google_cloud_dns`。Route 53 和 DNSPod 复用 `username_password` 凭据类型，Google Cloud DNS 复用 `secret_file` 凭据类型；服务端会拒绝服务商与凭据类型不匹配的组合。绑定请求只接受前一发现结果中的公网 Zone。创建任务后由 Worker 串行处理，每个 Zone 的已有记录快照和任务计数逐项持久化；任务状态为 `queued`、`running`、`success`、`partial_failed` 或 `failed`，子项状态为 `pending`、`running`、`success`、`skipped` 或 `failed`。
 
 ### 6.2 DNS 记录集
 

@@ -72,6 +72,22 @@ class DnsSyncStatus(str, Enum):
     SYNCING = "syncing"
 
 
+class DnsBindTaskStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCESS = "success"
+    PARTIAL_FAILED = "partial_failed"
+    FAILED = "failed"
+
+
+class DnsBindTaskItemStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCESS = "success"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
 class TicketStatus(str, Enum):
     """工单 9 态状态机（合法迁移见 03-数据库设计 §5.1；无草稿态，提交即生效）。
 
