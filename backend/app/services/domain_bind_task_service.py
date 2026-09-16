@@ -6,12 +6,13 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import audit
-from app.core.constants import DnsBindTaskItemStatus, DnsBindTaskStatus, DomainProvider
+from app.core.constants import DnsBindTaskItemStatus, DnsBindTaskStatus, DnsSyncStatus, DomainProvider
 from app.core.response import BizError, Errors
-from app.models.domain import DnsZoneBindTask, DnsZoneBindTaskItem
+from app.models.domain import DnsZone, DnsZoneBindTask, DnsZoneBindTaskItem
 from app.schemas.domain import ZoneBindResult, ZoneBindSelection
 from app.services import domain_service
 
@@ -44,6 +45,7 @@ class _ZoneBindTaskItemContext:
 
     id: int
     remote_zone_id: str
+    zone_name: str | None
     description: str | None
 
 
@@ -81,6 +83,7 @@ async def create_zone_bind_task(
         DnsZoneBindTaskItem(
             task_id=task.id,
             remote_zone_id=selection.remote_zone_id,
+            zone_name=selection.zone_name,
             description=selection.description,
             status=DnsBindTaskItemStatus.PENDING.value,
         )
@@ -181,13 +184,27 @@ async def process_next_zone_bind_task(session: AsyncSession) -> bool:
                     reason=_error_message(exc),
                 )
 
+        zone_name = zone_ref.zone_name if zone_ref else item.zone_name
+        if result.status == DnsBindTaskItemStatus.FAILED.value:
+            zone_ids = await _persist_failed_zones(
+                session,
+                task,
+                [(item, zone_name, result.reason)],
+            )
+            result = ZoneBindResult(
+                remote_zone_id=result.remote_zone_id,
+                zone_id=zone_ids.get(item.remote_zone_id),
+                status=result.status,
+                reason=result.reason,
+            )
+
         if not await _complete_task_item(
             session,
             task,
             item,
             lease_token,
             result,
-            zone_name=zone_ref.zone_name if zone_ref else None,
+            zone_name=zone_name,
         ):
             return True
 
@@ -291,6 +308,7 @@ async def _claim_next_task_item(
     context = _ZoneBindTaskItemContext(
         id=item.id,
         remote_zone_id=item.remote_zone_id,
+        zone_name=item.zone_name,
         description=item.description,
     )
     claimed = await session.execute(
@@ -363,6 +381,23 @@ async def _fail_unprocessed_items(
     if not await _renew_task_lease(session, task.id, lease_token):
         return
     now = datetime.now()
+    items = [
+        _ZoneBindTaskItemContext(
+            id=item.id,
+            remote_zone_id=item.remote_zone_id,
+            zone_name=item.zone_name,
+            description=item.description,
+        )
+        for item in (await session.execute(
+            select(DnsZoneBindTaskItem).where(
+                DnsZoneBindTaskItem.task_id == task.id,
+                DnsZoneBindTaskItem.status.in_([
+                    DnsBindTaskItemStatus.PENDING.value,
+                    DnsBindTaskItemStatus.RUNNING.value,
+                ]),
+            )
+        )).scalars()
+    ]
     await session.execute(
         update(DnsZoneBindTaskItem)
         .where(
@@ -380,7 +415,69 @@ async def _fail_unprocessed_items(
         )
     )
     await session.commit()
+    await _persist_failed_zones(
+        session,
+        task,
+        [(item, item.zone_name, reason) for item in items],
+    )
     await _refresh_task_progress(session, task, lease_token, latest_error=reason)
+
+
+async def _persist_failed_zones(
+    session: AsyncSession,
+    task: _ZoneBindTaskContext,
+    failures: list[tuple[_ZoneBindTaskItemContext, str | None, str | None]],
+) -> dict[str, int]:
+    """为初次绑定失败的 Zone 创建空快照，已有快照保持原样。"""
+    if not failures:
+        return {}
+
+    remote_zone_ids = {item.remote_zone_id for item, _, _ in failures}
+    for _ in range(2):
+        existing = dict((await session.execute(
+            select(DnsZone.remote_zone_id, DnsZone.id).where(
+                DnsZone.provider == task.provider,
+                DnsZone.remote_zone_id.in_(remote_zone_ids),
+            )
+        )).all())
+        missing = [failure for failure in failures if failure[0].remote_zone_id not in existing]
+        if not missing:
+            await session.commit()
+            return existing
+
+        now = datetime.now()
+        zones = [
+            DnsZone(
+                provider=task.provider,
+                remote_zone_id=item.remote_zone_id,
+                zone_name=zone_name or item.remote_zone_id[:253],
+                credential_id=task.credential_id,
+                description=item.description,
+                record_count=0,
+                sync_status=DnsSyncStatus.FAILED.value,
+                last_synced_at=now,
+                last_sync_error=_trim_message(reason) or "DNS 服务商暂时不可用，请稍后重试",
+                created_by=task.created_by,
+            )
+            for item, zone_name, reason in missing
+        ]
+        session.add_all(zones)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            continue
+        existing.update({zone.remote_zone_id: zone.id for zone in zones})
+        return existing
+
+    existing = dict((await session.execute(
+        select(DnsZone.remote_zone_id, DnsZone.id).where(
+            DnsZone.provider == task.provider,
+            DnsZone.remote_zone_id.in_(remote_zone_ids),
+        )
+    )).all())
+    await session.commit()
+    return existing
 
 
 async def _renew_task_lease(session: AsyncSession, task_id: int, lease_token: str) -> bool:

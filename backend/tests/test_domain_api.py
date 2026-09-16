@@ -322,7 +322,7 @@ async def test_zone_bind_task_reclaims_expired_lease(client, db_factory, fake_ad
     assert {item["status"] for item in task["items"]} == {"success"}
 
 
-async def test_zone_bind_task_marks_pending_items_failed_when_discovery_fails(client, db_factory, fake_adapter):
+async def test_zone_bind_task_keeps_failed_zones_in_ledger_when_discovery_fails(client, db_factory, fake_adapter):
     headers = auth_header(await login_for_tokens(client, "admin"))
     credential = await _seed_cloud_credential(db_factory)
     fake_adapter.discover_error = ProviderUnavailableError()
@@ -331,7 +331,10 @@ async def test_zone_bind_task_marks_pending_items_failed_when_discovery_fails(cl
         json={
             "provider": "aws_route53",
             "credential_id": credential.id,
-            "selections": [{"remote_zone_id": "Z1"}, {"remote_zone_id": "Z2"}],
+            "selections": [
+                {"remote_zone_id": "Z1", "zone_name": "one.example.com"},
+                {"remote_zone_id": "Z2", "zone_name": "two.example.com"},
+            ],
         },
         headers=headers,
     )
@@ -346,7 +349,18 @@ async def test_zone_bind_task_marks_pending_items_failed_when_discovery_fails(cl
     assert task["failed_count"] == 2
     assert task["last_error"] == "DNS 服务商暂时不可用，请稍后重试"
     assert {item["status"] for item in task["items"]} == {"failed"}
+    assert {item["zone_name"] for item in task["items"]} == {"one.example.com", "two.example.com"}
     assert fake_adapter.list_calls == 0
+
+    zones = await client.get("/api/v1/domains/zones", headers=headers)
+    assert zones.status_code == 200
+    assert {
+        (item["zone_name"], item["record_count"], item["sync_status"], item["last_sync_error"])
+        for item in zones.json()["data"]["items"]
+    } == {
+        ("one.example.com", 0, "failed", "DNS 服务商暂时不可用，请稍后重试"),
+        ("two.example.com", 0, "failed", "DNS 服务商暂时不可用，请稍后重试"),
+    }
 
 
 async def test_zone_bind_task_completes_when_item_binding_rolls_back(client, db_factory, fake_adapter, monkeypatch):

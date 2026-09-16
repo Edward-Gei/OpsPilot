@@ -79,6 +79,7 @@ async function loadList() {
     })
     items.value = data.items
     total.value = data.total
+    selectedKeys.value = []
   } finally {
     loading.value = false
   }
@@ -170,6 +171,34 @@ async function onUnbind(row: domainApi.DomainItem) {
     refreshAll()
   } catch {
     /* 错误提示由拦截器统一弹出 */
+  }
+}
+
+// ---------- 批量删除（仅删除本地 Zone 台账和记录快照） ----------
+const selectedKeys = ref<number[]>([])
+const rowSelection = computed(() =>
+  canDelete
+    ? {
+        fixed: true,
+        selectedRowKeys: selectedKeys.value,
+        onChange: (keys: Array<string | number>) => (selectedKeys.value = keys as number[]),
+      }
+    : undefined,
+)
+const batchLoading = ref(false)
+
+async function onBatchUnbind() {
+  if (!selectedKeys.value.length) return
+  batchLoading.value = true
+  try {
+    const results = await Promise.allSettled(selectedKeys.value.map((id) => domainApi.deleteDomain(id)))
+    const successCount = results.filter((result) => result.status === 'fulfilled').length
+    if (successCount < results.length) message.warning(`已删除 ${successCount} 个 Zone 台账，${results.length - successCount} 个失败`)
+    else message.success(`已删除 ${successCount} 个 Zone 台账`)
+    if (successCount === items.value.length && query.page > 1) query.page -= 1
+    refreshAll()
+  } finally {
+    batchLoading.value = false
   }
 }
 
@@ -304,11 +333,13 @@ async function onBind() {
   }
   bindLoading.value = true
   try {
+    const zoneNames = new Map(discovered.value.map((zone) => [zone.remote_zone_id, zone.zone_name]))
     bindTask.value = await domainApi.bindZones({
       provider: bindForm.provider,
       credential_id: bindForm.credential_id,
       selections: selectedRemoteZoneIds.value.map((remote_zone_id) => ({
         remote_zone_id,
+        zone_name: zoneNames.get(remote_zone_id),
         description: bindForm.description || undefined,
       })),
     })
@@ -479,6 +510,16 @@ onBeforeUnmount(stopBindPolling)
         @change="onSearch"
       />
       <div class="toolbar-actions">
+        <a-popconfirm
+          v-if="canDelete"
+          :title="`确认删除选中的 ${selectedKeys.length} 个 Zone 台账？远端 Zone 和 DNS 记录不会被删除。`"
+          :disabled="!selectedKeys.length"
+          @confirm="onBatchUnbind"
+        >
+          <a-button danger :disabled="!selectedKeys.length" :loading="batchLoading">
+            <DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
+          </a-button>
+        </a-popconfirm>
         <a-button @click="onExport"><DownloadOutlined />导出</a-button>
         <a-button v-if="canWrite" @click="openImport"><UploadOutlined />导入</a-button>
         <a-button v-if="canWrite" type="primary" @click="openBind"><LinkOutlined />绑定 Zone</a-button>
@@ -492,6 +533,7 @@ onBeforeUnmount(stopBindPolling)
       row-key="id"
       bordered
       :scroll="{ x: 1510 }"
+      :row-selection="rowSelection"
       @resize-column="onResizeColumn"
       :pagination="{
         current: query.page,

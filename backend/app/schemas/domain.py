@@ -45,6 +45,7 @@ class ZoneBindSelection(BaseModel):
     """用户从已发现的公网 Zone 中选择的绑定项。"""
 
     remote_zone_id: str = Field(min_length=1, max_length=255)
+    zone_name: str | None = Field(default=None, min_length=1, max_length=253)
     description: str | None = Field(default=None, max_length=255)
 
 

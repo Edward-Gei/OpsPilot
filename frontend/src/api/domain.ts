@@ -42,6 +42,7 @@ export interface DiscoveredZone {
 
 export interface ZoneBindSelection {
   remote_zone_id: string
+  zone_name?: string
   description?: string
 }
 
