@@ -50,6 +50,7 @@ class FakeAdapter:
 
     def __init__(self):
         self.records = [REMOTE_A, REMOTE_NS]
+        self.discovered_zones = [ZoneRef(DomainProvider.AWS_ROUTE53, "Z1", "example.com")]
         self.discover_error: Exception | None = None
         self.list_error: Exception | None = None
         self.discover_calls = 0
@@ -62,7 +63,7 @@ class FakeAdapter:
         self.discover_calls += 1
         if self.discover_error:
             raise self.discover_error
-        return [ZoneRef(DomainProvider.AWS_ROUTE53, "Z1", "example.com")]
+        return list(self.discovered_zones)
 
     async def list_record_sets(self, zone, credential):
         self.list_calls += 1
@@ -196,6 +197,34 @@ async def _bind_zone(client, headers, credential_id: int) -> int:
     assert body["code"] == 0, body
     assert body["data"]["items"][0]["status"] == "success"
     return body["data"]["items"][0]["zone_id"]
+
+
+async def test_zone_bind_accepts_more_than_one_hundred_selections(client, db_factory, fake_adapter):
+    headers = auth_header(await login_for_tokens(client, "admin"))
+    credential = await _seed_cloud_credential(db_factory)
+    fake_adapter.discovered_zones = [
+        ZoneRef(DomainProvider.AWS_ROUTE53, f"Z{index}", f"zone-{index}.example.com")
+        for index in range(101)
+    ]
+
+    response = await client.post(
+        "/api/v1/domains/zones",
+        json={
+            "provider": "aws_route53",
+            "credential_id": credential.id,
+            "selections": [
+                {"remote_zone_id": zone.remote_zone_id}
+                for zone in fake_adapter.discovered_zones
+            ],
+        },
+        headers=headers,
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["code"] == 0, body
+    assert len(body["data"]["items"]) == 101
+    assert {item["status"] for item in body["data"]["items"]} == {"success"}
 
 
 def _make_zone_xlsx(rows: list[list]) -> bytes:

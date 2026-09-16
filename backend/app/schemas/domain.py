@@ -16,7 +16,7 @@ class ZoneDiscoverRequest(BaseModel):
 class ZoneBindRequest(ZoneDiscoverRequest):
     """批量绑定用户已勾选的公网 Zone。"""
 
-    selections: list["ZoneBindSelection"] = Field(min_length=1, max_length=100)
+    selections: list["ZoneBindSelection"] = Field(min_length=1)
 
 
 class ZoneDescriptionUpdateRequest(BaseModel):
