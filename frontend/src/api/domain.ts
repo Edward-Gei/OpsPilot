@@ -4,6 +4,16 @@ import type { PageResult } from './system'
 
 export type DomainProvider = 'tencent_dnspod' | 'aws_route53' | 'google_cloud_dns'
 export type DomainSyncStatus = 'success' | 'failed' | 'syncing'
+export type DomainSortField =
+  | 'zone_name'
+  | 'provider'
+  | 'credential_name'
+  | 'description'
+  | 'record_count'
+  | 'sync_status'
+  | 'last_synced_at'
+  | 'last_sync_error'
+export type DomainSortOrder = 'asc' | 'desc'
 
 export interface DomainItem {
   id: number
@@ -26,6 +36,8 @@ export interface DomainQuery {
   keyword?: string
   provider?: DomainProvider
   sync_status?: DomainSyncStatus
+  sort_by?: DomainSortField
+  sort_order?: DomainSortOrder
 }
 
 export interface ProviderCredential {

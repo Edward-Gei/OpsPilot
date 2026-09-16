@@ -53,19 +53,26 @@ const query = reactive({
   keyword: '',
   provider: undefined as domainApi.DomainProvider | undefined,
   sync_status: undefined as domainApi.DomainSyncStatus | undefined,
+  sort_by: undefined as domainApi.DomainSortField | undefined,
+  sort_order: undefined as domainApi.DomainSortOrder | undefined,
 })
 
 const columns = ref(makeResizable([
-  { title: 'Zone 名称', dataIndex: 'zone_name', key: 'zone_name', width: 210, ellipsis: true },
-  { title: '服务商', key: 'provider', width: 150 },
-  { title: '凭据名称', key: 'credential_name', width: 150, ellipsis: true },
-  { title: '描述', key: 'description', width: 180, ellipsis: true },
-  { title: '记录数', dataIndex: 'record_count', key: 'record_count', width: 88, align: 'right' as const },
-  { title: '同步状态', key: 'sync_status', width: 105 },
-  { title: '最近同步时间', key: 'last_synced_at', width: 170 },
-  { title: '错误摘要', key: 'last_sync_error', width: 220, ellipsis: true },
+  { title: 'Zone 名称', dataIndex: 'zone_name', key: 'zone_name', width: 210, ellipsis: true, sorter: true },
+  { title: '服务商', dataIndex: 'provider', key: 'provider', width: 150, sorter: true },
+  { title: '凭据名称', dataIndex: 'credential_name', key: 'credential_name', width: 150, ellipsis: true, sorter: true },
+  { title: '描述', dataIndex: 'description', key: 'description', width: 180, ellipsis: true, sorter: true },
+  { title: '记录数', dataIndex: 'record_count', key: 'record_count', width: 88, align: 'right' as const, sorter: true },
+  { title: '同步状态', dataIndex: 'sync_status', key: 'sync_status', width: 105, sorter: true },
+  { title: '最近同步时间', dataIndex: 'last_synced_at', key: 'last_synced_at', width: 170, sorter: true },
+  { title: '错误摘要', dataIndex: 'last_sync_error', key: 'last_sync_error', width: 220, ellipsis: true, sorter: true },
   { title: '操作', key: 'action', width: canDelete ? 292 : canWrite ? 224 : 72, fixed: 'right' as const },
 ]))
+
+const sortableFields: domainApi.DomainSortField[] = [
+  'zone_name', 'provider', 'credential_name', 'description', 'record_count',
+  'sync_status', 'last_synced_at', 'last_sync_error',
+]
 
 async function loadList() {
   loading.value = true
@@ -76,6 +83,8 @@ async function loadList() {
       keyword: query.keyword || undefined,
       provider: query.provider,
       sync_status: query.sync_status,
+      sort_by: query.sort_by,
+      sort_order: query.sort_order,
     })
     items.value = data.items
     total.value = data.total
@@ -108,9 +117,21 @@ function onSearch() {
   void loadList()
 }
 
-function onPageChange(page: number, pageSize: number) {
-  query.page = page
-  query.page_size = pageSize
+function onTableChange(
+  pagination: { current?: number; pageSize?: number },
+  _: unknown,
+  sorter: { field?: string; order?: 'ascend' | 'descend' | null } | { field?: string; order?: 'ascend' | 'descend' | null }[],
+) {
+  const current = Array.isArray(sorter) ? sorter[0] : sorter
+  const sortBy = current.order && sortableFields.includes(current.field as domainApi.DomainSortField)
+    ? current.field as domainApi.DomainSortField
+    : undefined
+  const sortOrder = current.order === 'ascend' ? 'asc' : current.order === 'descend' ? 'desc' : undefined
+  const sortChanged = query.sort_by !== sortBy || query.sort_order !== sortOrder
+  query.sort_by = sortBy
+  query.sort_order = sortOrder
+  query.page = sortChanged ? 1 : pagination.current || 1
+  query.page_size = pagination.pageSize || query.page_size
   void loadList()
 }
 
@@ -517,7 +538,7 @@ onBeforeUnmount(stopBindPolling)
           @confirm="onBatchUnbind"
         >
           <a-button danger :disabled="!selectedKeys.length" :loading="batchLoading">
-            <DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
+            <DeleteOutlined />批量解绑{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
           </a-button>
         </a-popconfirm>
         <a-button @click="onExport"><DownloadOutlined />导出</a-button>
@@ -529,12 +550,14 @@ onBeforeUnmount(stopBindPolling)
     <a-table
       :columns="columns"
       :data-source="items"
+      :show-sorter-tooltip="false"
       :loading="loading"
       row-key="id"
       bordered
       :scroll="{ x: 1510 }"
       :row-selection="rowSelection"
       @resize-column="onResizeColumn"
+      @change="onTableChange"
       :pagination="{
         current: query.page,
         pageSize: query.page_size,
@@ -542,7 +565,6 @@ onBeforeUnmount(stopBindPolling)
         showSizeChanger: true,
         showQuickJumper: true,
         showTotal: (count: number) => `共 ${count} 个 Zone`,
-        onChange: onPageChange,
       }"
     >
       <template #bodyCell="{ column, record }">

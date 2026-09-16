@@ -1,4 +1,5 @@
 """域名管理路由：仅暴露 Zone/记录快照和安全的变更入口。"""
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request, UploadFile, status
@@ -220,6 +221,11 @@ async def list_zones(
     keyword: str | None = None,
     provider: DomainProvider | None = None,
     sync_status: DnsSyncStatus | None = None,
+    sort_by: Literal[
+        "zone_name", "provider", "credential_name", "description", "record_count",
+        "sync_status", "last_synced_at", "last_sync_error",
+    ] | None = None,
+    sort_order: Literal["asc", "desc"] | None = None,
 ) -> dict:
     """查询本地 Zone 台账，不因列表操作访问服务商。"""
     zones, total = await domain_service.list_zones(
@@ -229,6 +235,8 @@ async def list_zones(
         keyword=keyword,
         provider=provider,
         sync_status=sync_status.value if sync_status else None,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
     credential_names = await _credential_names(session, [zone.credential_id for zone in zones])
     return ok({

@@ -139,6 +139,8 @@ async def list_zones(
     keyword: str | None = None,
     provider: DomainProvider | str | None = None,
     sync_status: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
 ) -> tuple[list[DnsZone], int]:
     """分页读取本地 Zone 台账，按名称、说明和状态筛选。"""
     query = select(DnsZone)
@@ -151,11 +153,30 @@ async def list_zones(
         )
     if sync_status:
         query = query.where(DnsZone.sync_status == sync_status)
+    if sort_by == "credential_name" and sort_order:
+        query = query.outerjoin(Credential, Credential.id == DnsZone.credential_id)
     total = (await session.execute(
         select(func.count()).select_from(query.subquery())
     )).scalar_one()
+    sort_column = {
+        "zone_name": DnsZone.zone_name,
+        "provider": DnsZone.provider,
+        "credential_name": Credential.name,
+        "description": DnsZone.description,
+        "record_count": DnsZone.record_count,
+        "sync_status": DnsZone.sync_status,
+        "last_synced_at": DnsZone.last_synced_at,
+        "last_sync_error": DnsZone.last_sync_error,
+    }.get(sort_by) if sort_order else None
+    order_by = (DnsZone.id.desc(),)
+    if sort_column is not None:
+        order_by = (
+            sort_column.is_(None).asc(),
+            sort_column.asc() if sort_order == "asc" else sort_column.desc(),
+            DnsZone.id.desc(),
+        )
     rows = await session.execute(
-        query.order_by(DnsZone.id.desc()).offset((page - 1) * page_size).limit(page_size)
+        query.order_by(*order_by).offset((page - 1) * page_size).limit(page_size)
     )
     return list(rows.scalars()), total
 

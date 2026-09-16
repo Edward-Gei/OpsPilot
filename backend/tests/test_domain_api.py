@@ -452,6 +452,66 @@ async def test_domain_api_discovers_binds_syncs_and_hides_internal_fields(client
     assert "provider_meta" not in record and "record_key" not in record
 
 
+async def test_zone_list_sorts_all_visible_columns(client, db_factory):
+    headers = auth_header(await login_for_tokens(client, "admin"))
+    first_credential = await _seed_cloud_credential(db_factory, name="alpha-credential")
+    second_credential = await _seed_cloud_credential(db_factory, name="zeta-credential")
+    async with db_factory() as session:
+        session.add_all([
+            DnsZone(
+                provider="aws_route53",
+                remote_zone_id="Z-ALPHA",
+                zone_name="alpha.example.com",
+                credential_id=first_credential.id,
+                description="alpha description",
+                record_count=1,
+                sync_status="success",
+                last_synced_at=datetime(2026, 1, 1),
+            ),
+            DnsZone(
+                provider="google_cloud_dns",
+                remote_zone_id="Z-ZETA",
+                zone_name="zeta.example.com",
+                credential_id=second_credential.id,
+                description="zeta description",
+                record_count=2,
+                sync_status="failed",
+                last_synced_at=datetime(2026, 1, 2),
+                last_sync_error="zeta error",
+            ),
+        ])
+        await session.commit()
+
+    expected_ascending = {
+        "zone_name": ["alpha.example.com", "zeta.example.com"],
+        "provider": ["alpha.example.com", "zeta.example.com"],
+        "credential_name": ["alpha.example.com", "zeta.example.com"],
+        "description": ["alpha.example.com", "zeta.example.com"],
+        "record_count": ["alpha.example.com", "zeta.example.com"],
+        "sync_status": ["zeta.example.com", "alpha.example.com"],
+        "last_synced_at": ["alpha.example.com", "zeta.example.com"],
+        "last_sync_error": ["zeta.example.com", "alpha.example.com"],
+    }
+    expected_descending = {field: list(reversed(expected)) for field, expected in expected_ascending.items()}
+    expected_descending["last_sync_error"] = ["zeta.example.com", "alpha.example.com"]
+    for sort_by, expected in expected_ascending.items():
+        response = await client.get(
+            "/api/v1/domains/zones",
+            params={"sort_by": sort_by, "sort_order": "asc"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        assert [item["zone_name"] for item in response.json()["data"]["items"]] == expected
+
+        descending = await client.get(
+            "/api/v1/domains/zones",
+            params={"sort_by": sort_by, "sort_order": "desc"},
+            headers=headers,
+        )
+        assert descending.status_code == 200
+        assert [item["zone_name"] for item in descending.json()["data"]["items"]] == expected_descending[sort_by]
+
+
 async def test_record_api_writes_only_simple_current_records(client, db_factory, fake_adapter):
     headers = auth_header(await login_for_tokens(client, "admin"))
     credential = await _seed_cloud_credential(db_factory)
