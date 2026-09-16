@@ -138,12 +138,16 @@ const recordForm = reactive({
 })
 
 function openCreateRecord() {
+  pendingChange.value = null
+  confirmVisible.value = false
   editingRecord.value = null
   Object.assign(recordForm, { owner_name: '', record_type: 'A', ttl: 300, values_text: '' })
   recordEditorVisible.value = true
 }
 
 function openEditRecord(record: domainApi.DnsRecordSet) {
+  pendingChange.value = null
+  confirmVisible.value = false
   editingRecord.value = record
   Object.assign(recordForm, {
     owner_name: record.record_name,
@@ -175,6 +179,23 @@ interface PendingChange {
 const pendingChange = ref<PendingChange | null>(null)
 const confirmVisible = ref(false)
 const confirmLoading = ref(false)
+
+/** 编辑和变更确认复用同一弹窗，关闭时一并清理待提交快照。 */
+function closeRecordModal() {
+  recordEditorVisible.value = false
+  confirmVisible.value = false
+  pendingChange.value = null
+}
+
+function onRecordModalOpenChange(open: boolean) {
+  if (!open) closeRecordModal()
+}
+
+function returnToRecordEditor() {
+  confirmVisible.value = false
+  pendingChange.value = null
+  recordEditorVisible.value = true
+}
 
 function toPreview(record: domainApi.DnsRecordSet): RecordPreview {
   return {
@@ -252,8 +273,7 @@ async function onConfirmRecordChange() {
       await domainApi.deleteRecord(zoneId.value, pending.record.id)
       message.success('记录集已删除')
     }
-    confirmVisible.value = false
-    recordEditorVisible.value = false
+    closeRecordModal()
     if (records.value.length === 1 && recordQuery.page > 1) recordQuery.page -= 1
     refreshAll()
   } catch {
@@ -382,13 +402,29 @@ onMounted(refreshAll)
     </a-table>
 
     <a-modal
-      v-model:open="recordEditorVisible"
-      :title="editingRecord ? '修改记录集' : '新增记录集'"
+      :open="recordEditorVisible || confirmVisible"
+      :title="confirmVisible ? confirmTitle : editingRecord ? '修改记录集' : '新增记录集'"
       :width="620"
-      ok-text="继续"
-      @ok="onPrepareRecordChange"
+      @update:open="onRecordModalOpenChange"
     >
-      <a-form layout="vertical">
+      <div v-if="confirmVisible" class="confirm-grid">
+        <div v-if="pendingChange?.before" class="preview-block">
+          <h4>变更前</h4>
+          <div><b>名称：</b>{{ pendingChange.before.record_name }}</div>
+          <div><b>类型：</b>{{ pendingChange.before.record_type }}</div>
+          <div><b>TTL：</b>{{ pendingChange.before.ttl ?? '—' }}</div>
+          <pre>{{ pendingChange.before.values.join('\n') }}</pre>
+        </div>
+        <div v-if="pendingChange?.after" class="preview-block">
+          <h4>变更后</h4>
+          <div><b>名称：</b>{{ pendingChange.after.record_name }}</div>
+          <div><b>类型：</b>{{ pendingChange.after.record_type }}</div>
+          <div><b>TTL：</b>{{ pendingChange.after.ttl ?? '—' }}</div>
+          <pre>{{ pendingChange.after.values.join('\n') }}</pre>
+        </div>
+        <div v-if="pendingChange?.kind === 'delete'" class="delete-note">确认后将从远端 DNS 与本地快照删除该记录集。</div>
+      </div>
+      <a-form v-else layout="vertical">
         <div class="form-row">
           <a-form-item label="记录名称" required class="form-col">
             <a-input v-model:value="recordForm.owner_name" :disabled="Boolean(editingRecord)" placeholder="@、www 或完整记录名称" />
@@ -409,32 +445,17 @@ onMounted(refreshAll)
           />
         </a-form-item>
       </a-form>
-    </a-modal>
-
-    <a-modal
-      v-model:open="confirmVisible"
-      :title="confirmTitle"
-      :confirm-loading="confirmLoading"
-      ok-text="确认提交"
-      @ok="onConfirmRecordChange"
-    >
-      <div class="confirm-grid">
-        <div v-if="pendingChange?.before" class="preview-block">
-          <h4>变更前</h4>
-          <div><b>名称：</b>{{ pendingChange.before.record_name }}</div>
-          <div><b>类型：</b>{{ pendingChange.before.record_type }}</div>
-          <div><b>TTL：</b>{{ pendingChange.before.ttl ?? '—' }}</div>
-          <pre>{{ pendingChange.before.values.join('\n') }}</pre>
-        </div>
-        <div v-if="pendingChange?.after" class="preview-block">
-          <h4>变更后</h4>
-          <div><b>名称：</b>{{ pendingChange.after.record_name }}</div>
-          <div><b>类型：</b>{{ pendingChange.after.record_type }}</div>
-          <div><b>TTL：</b>{{ pendingChange.after.ttl ?? '—' }}</div>
-          <pre>{{ pendingChange.after.values.join('\n') }}</pre>
-        </div>
-        <div v-if="pendingChange?.kind === 'delete'" class="delete-note">确认后将从远端 DNS 与本地快照删除该记录集。</div>
-      </div>
+      <template #footer>
+        <template v-if="confirmVisible">
+          <a-button v-if="pendingChange?.kind !== 'delete'" @click="returnToRecordEditor">返回修改</a-button>
+          <a-button v-else @click="closeRecordModal">取消</a-button>
+          <a-button type="primary" :loading="confirmLoading" @click="onConfirmRecordChange">确认提交</a-button>
+        </template>
+        <template v-else>
+          <a-button @click="closeRecordModal">取消</a-button>
+          <a-button type="primary" @click="onPrepareRecordChange">继续</a-button>
+        </template>
+      </template>
     </a-modal>
   </div>
 </template>

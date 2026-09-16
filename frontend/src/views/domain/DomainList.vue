@@ -179,6 +179,7 @@ const discoverLoading = ref(false)
 const credentialLoading = ref(false)
 const credentials = ref<domainApi.ProviderCredential[]>([])
 const discovered = ref<domainApi.DiscoveredZone[]>([])
+const discoveredKeyword = ref('')
 const selectedRemoteZoneIds = ref<string[]>([])
 const bindResults = ref<domainApi.ZoneBindResult[]>([])
 const bindForm = reactive({
@@ -187,7 +188,17 @@ const bindForm = reactive({
   description: '',
 })
 
+/** 已发现的 Zone 在本地筛选，避免输入搜索词时重复请求 DNS 服务商。 */
+const filteredDiscovered = computed(() => {
+  const keyword = discoveredKeyword.value.trim().toLowerCase()
+  if (!keyword) return discovered.value
+  return discovered.value.filter((zone) => (
+    zone.zone_name.toLowerCase().includes(keyword) || zone.remote_zone_id.toLowerCase().includes(keyword)
+  ))
+})
+
 const discoveredRowSelection = computed(() => ({
+  preserveSelectedRowKeys: true,
   selectedRowKeys: selectedRemoteZoneIds.value,
   onChange: (keys: Array<string | number>) => {
     selectedRemoteZoneIds.value = keys.map(String)
@@ -200,6 +211,7 @@ function openBind() {
   bindForm.description = ''
   credentials.value = []
   discovered.value = []
+  discoveredKeyword.value = ''
   selectedRemoteZoneIds.value = []
   bindResults.value = []
   bindVisible.value = true
@@ -209,6 +221,7 @@ async function onProviderChange() {
   bindForm.credential_id = undefined
   credentials.value = []
   discovered.value = []
+  discoveredKeyword.value = ''
   selectedRemoteZoneIds.value = []
   bindResults.value = []
   if (!bindForm.provider) return
@@ -235,6 +248,7 @@ async function onDiscover() {
       credential_id: bindForm.credential_id,
     })
     discovered.value = data.items
+    discoveredKeyword.value = ''
     selectedRemoteZoneIds.value = []
     bindResults.value = []
   } catch {
@@ -505,18 +519,27 @@ onMounted(() => {
         </a-form-item>
       </a-form>
 
+      <a-input
+        v-if="discovered.length"
+        v-model:value="discoveredKeyword"
+        class="discovered-search"
+        allow-clear
+        placeholder="搜索 Zone 名称或远端 Zone ID"
+      >
+        <template #prefix><SearchOutlined /></template>
+      </a-input>
       <a-table
         :columns="[
           { title: 'Zone 名称', dataIndex: 'zone_name', key: 'zone_name' },
           { title: '远端 Zone ID', dataIndex: 'remote_zone_id', key: 'remote_zone_id', width: 300 },
         ]"
-        :data-source="discovered"
+        :data-source="filteredDiscovered"
         :row-selection="discoveredRowSelection"
         row-key="remote_zone_id"
         size="small"
         :pagination="false"
         :scroll="{ y: 360 }"
-        :locale="{ emptyText: bindForm.credential_id ? '点击发现 Zone 获取可绑定的公网 Zone' : '请先选择服务商和凭据' }"
+        :locale="{ emptyText: discovered.length ? '未找到匹配的 Zone' : bindForm.credential_id ? '点击发现 Zone 获取可绑定的公网 Zone' : '请先选择服务商和凭据' }"
       />
       <div class="modal-actions">
         <span>已选择 {{ selectedRemoteZoneIds.length }} 个 Zone</span>
@@ -614,6 +637,10 @@ onMounted(() => {
 }
 .discover-action {
   flex: 0 0 auto;
+}
+.discovered-search {
+  width: 100%;
+  margin-bottom: 12px;
 }
 .modal-actions {
   display: flex;
