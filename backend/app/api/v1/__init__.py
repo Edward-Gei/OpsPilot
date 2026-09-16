@@ -6,6 +6,7 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.cmdb import router as cmdb_router
 from app.api.v1.credentials import router as credentials_router
 from app.api.v1.dashboard import router as dashboard_router
+from app.api.v1.domains import router as domains_router
 from app.api.v1.executions import router as executions_router
 from app.api.v1.job_hosts import router as job_hosts_router
 from app.api.v1.notifications import router as notifications_router
@@ -26,6 +27,7 @@ api_router.include_router(tokens_router)
 api_router.include_router(users_router)
 api_router.include_router(roles_router)
 api_router.include_router(cmdb_router)
+api_router.include_router(domains_router)
 api_router.include_router(credentials_router)
 api_router.include_router(job_hosts_router)
 api_router.include_router(templates_router)

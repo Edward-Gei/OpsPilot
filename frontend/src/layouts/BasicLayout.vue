@@ -13,6 +13,7 @@ import {
   CodeOutlined,
   DownOutlined,
   FileDoneOutlined,
+  GlobalOutlined,
   KeyOutlined,
   LogoutOutlined,
   ReloadOutlined,
@@ -108,6 +109,7 @@ const menuGroups = computed(() =>
         // M2 已开放：资源管理拆分为主机/应用两个入口，按 cmdb:read 权限显隐
         { key: 'cmdb-hosts', label: '主机管理', icon: CloudServerOutlined, path: '/cmdb/hosts', perm: 'cmdb:read' },
         { key: 'cmdb-apps', label: '应用管理', icon: AppstoreAddOutlined, path: '/cmdb/apps', perm: 'cmdb:read' },
+        { key: 'domains', label: '域名管理', icon: GlobalOutlined, path: '/domains', perm: 'domain:read' },
         // M3 已开放：作业中心拆分为模板/凭据两个入口（作业主机配置已入系统设置）
         { key: 'job-templates', label: '模板管理', icon: CodeOutlined, path: '/job/templates', perm: 'template:read' },
         { key: 'job-credentials', label: '凭据管理', icon: KeyOutlined, path: '/job/credentials', perms: ['credential:read', 'secret:read'] },
@@ -295,6 +297,11 @@ const TPL_TYPE_LABELS: Record<string, string> = {
   ops: '运维',
   other: '其他',
 }
+const DOMAIN_PROVIDER_LABELS: Record<string, string> = {
+  aws_route53: 'AWS Route 53',
+  tencent_dnspod: '腾讯云 DNSPod',
+  google_cloud_dns: 'Google Cloud DNS',
+}
 
 // 功能菜单本地过滤：已按权限显隐的菜单项中按名称匹配（零请求，SEARCH-02）
 const menuMatches = computed(() => {
@@ -306,12 +313,12 @@ const menuMatches = computed(() => {
     .slice(0, 5)
 })
 
-// 空态：功能与四段业务对象均无命中（加载中不算）
+// 空态：功能与五段业务对象均无命中（加载中不算）
 const searchEmpty = computed(() => {
   if (searchLoading.value) return false
   const r = searchResult.value
   const bizHit = r
-    ? [r.hosts, r.apps, r.tickets, r.templates].some((s) => s !== null && s.total > 0)
+    ? [r.hosts, r.apps, r.tickets, r.templates, r.domains].some((s) => s !== null && s.total > 0)
     : false
   return menuMatches.value.length === 0 && !bizHit
 })
@@ -506,6 +513,18 @@ async function onLogout() {
                     @click="onSearchGoto('/cmdb/apps')"
                   >
                     <span class="search-item-main">{{ a.name }}</span>
+                  </div>
+                </div>
+                <div v-if="searchResult?.domains?.total" class="search-group">
+                  <div class="search-group-title">域名 Zone<em>共 {{ searchResult.domains.total }} 条</em></div>
+                  <div
+                    v-for="item in searchResult.domains.items"
+                    :key="item.id"
+                    class="search-item"
+                    @click="onSearchGoto(`/domains/${item.id}`, false)"
+                  >
+                    <span class="search-item-main">{{ item.zone_name }}</span>
+                    <span class="search-item-sub">{{ DOMAIN_PROVIDER_LABELS[item.provider] || item.provider }}</span>
                   </div>
                 </div>
                 <div v-if="searchResult?.tickets?.total" class="search-group">

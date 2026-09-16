@@ -1,5 +1,6 @@
 """凭据与作业主机凭据绑定接口测试。"""
 from app.core.security import decrypt_text
+from app.models.domain import DnsZone
 from app.models.job import Credential
 from tests.conftest import auth_header, login_for_tokens
 
@@ -128,6 +129,31 @@ class TestCredentialApi:
         assert resp.json()["code"] == 0
         resp = await client.delete(f"/api/v1/credentials/{cred_id}", headers=headers)
         assert resp.json()["code"] == 40401
+
+    async def test_credential_referenced_by_zone_cannot_be_deleted(self, client, db_factory):
+        """Zone 使用中的凭据删除时返回引用数量。"""
+        headers = auth_header(await login_for_tokens(client, "admin"))
+        credential_id = await _create_credential(
+            client,
+            headers,
+            name="route53-prod",
+            auth_type="username_password",
+        )
+        async with db_factory() as session:
+            session.add(
+                DnsZone(
+                    provider="aws_route53",
+                    remote_zone_id="Z123",
+                    zone_name="example.com",
+                    credential_id=credential_id,
+                )
+            )
+            await session.commit()
+
+        response = await client.delete(f"/api/v1/credentials/{credential_id}", headers=headers)
+
+        assert response.json()["code"] == 42201
+        assert "1 个 Zone" in response.json()["message"]
 
     async def test_script_secret_types_are_stored_without_echo(self, client, db_factory):
         """Token、用户名密码与文本密钥文件仅返回安全元数据。"""

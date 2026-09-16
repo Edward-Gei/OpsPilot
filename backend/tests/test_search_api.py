@@ -7,6 +7,7 @@ import pytest
 
 from app.models.auth import User, UserRole
 from app.models.cmdb import Application, Host
+from app.models.domain import DnsRecordSet, DnsZone
 from app.models.job import ProcessStep, ProcessTemplate, TicketTemplate
 from app.models.ticket import Ticket
 from tests.conftest import TEST_PASSWORD_HASH, auth_header, login_for_tokens
@@ -38,6 +39,29 @@ async def _seed_data(db_factory, admin_id: int) -> None:
             title="web发布模板", type="release", job_host_id=1,
             job_host_snap={"id": 1, "name": "web-agent"},
             creator_id=admin_id,
+        ))
+        await session.commit()
+
+
+async def _seed_domain_data(db_factory) -> None:
+    async with db_factory() as session:
+        zone = DnsZone(
+            provider="aws_route53",
+            remote_zone_id="Z-domain",
+            zone_name="shop.example.com",
+            credential_id=1,
+            description="电商生产",
+        )
+        session.add(zone)
+        await session.flush()
+        session.add(DnsRecordSet(
+            zone_id=zone.id,
+            record_key="shop-txt",
+            record_name="shop.example.com",
+            record_type="TXT",
+            ttl=300,
+            values=["private-token-text"],
+            provider_meta={"locator": {"name": "shop.example.com", "type": "TXT"}},
         ))
         await session.commit()
 
@@ -98,6 +122,25 @@ class TestSearchApi:
         assert hosts["total"] == 7
         assert len(hosts["items"]) == 5
 
+    async def test_domain_search_matches_zone_fields_but_not_record_values(self, client, db_factory):
+        await _seed_domain_data(db_factory)
+        tokens = await login_for_tokens(client, "admin")
+        by_description = await client.get(
+            "/api/v1/search", params={"keyword": "电商"}, headers=auth_header(tokens)
+        )
+        by_record_value = await client.get(
+            "/api/v1/search", params={"keyword": "private-token-text"}, headers=auth_header(tokens)
+        )
+        domains = by_description.json()["data"]["domains"]
+        assert domains["total"] == 1
+        assert domains["items"] == [{
+            "id": domains["items"][0]["id"],
+            "zone_name": "shop.example.com",
+            "provider": "aws_route53",
+            "description": "电商生产",
+        }]
+        assert by_record_value.json()["data"]["domains"]["total"] == 0
+
     async def test_perm_cut_segments_null(self, client, db_factory, seed):
         """auditor 无 ticket:read/template:read：对应段为 null，其余段正常返回。"""
         await _seed_data(db_factory, seed["users"]["admin"])
@@ -115,6 +158,7 @@ class TestSearchApi:
             "/api/v1/search", params={"keyword": "web"}, headers=auth_header(tokens)
         )
         data = resp.json()["data"]
+        assert data["domains"] is None
         assert data["tickets"] is None
         assert data["templates"] is None
         assert data["hosts"]["total"] == 1
