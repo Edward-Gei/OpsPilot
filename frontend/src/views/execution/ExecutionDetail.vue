@@ -1017,7 +1017,7 @@ onBeforeUnmount(() => {
   border-left: 2px solid #fb7185;
   color: #fda4af;
   background: rgba(251, 113, 133, 0.08);
-  font-family: 'Segoe UI', sans-serif;
+  font-family: 'OpsPilot Varela Round', 'OpsPilot Noto Sans SC', sans-serif;
   font-size: 11px;
 }
 .log-line {

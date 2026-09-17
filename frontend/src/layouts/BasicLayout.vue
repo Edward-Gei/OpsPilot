@@ -103,7 +103,7 @@ async function startTodoEventPoll() {
 const menuGroups = computed(() =>
   [
     {
-      title: '主导航',
+      title: '工作空间',
       items: [
         { key: 'dashboard', label: '工作台', icon: AppstoreOutlined, path: '/' },
         // M2 已开放：资源管理拆分为主机/应用两个入口，按 cmdb:read 权限显隐
@@ -160,6 +160,22 @@ const activeKey = computed(() => (route.meta.menuKey as string) || (route.name a
 const templateMenuOpen = ref(route.path.startsWith('/job/templates'))
 // 顶栏标题：跟随路由 meta
 const pageTitle = computed(() => (route.meta.title as string) || '工作台')
+const breadcrumbParent = computed(() => {
+  const matchedTitles = route.matched
+    .map((record) => record.meta.title as string | undefined)
+    .filter((title): title is string => Boolean(title))
+  if (matchedTitles.length > 1) return matchedTitles[matchedTitles.length - 2]
+
+  const activeMenu = menuGroups.value.flatMap((group) => group.items).find((item) => item.key === activeKey.value)
+  const group = menuGroups.value.find((menuGroup) => menuGroup.items.some((item) => item.key === activeKey.value))
+  return activeMenu && activeMenu.label !== pageTitle.value ? activeMenu.label : group?.title || '账户'
+})
+const breadcrumbParentIcon = computed<Component>(() =>
+  breadcrumbParent.value === '系统' ? SettingOutlined : AppstoreOutlined,
+)
+const hasNestedBreadcrumb = computed(
+  () => route.matched.filter((record) => Boolean(record.meta.title)).length > 1,
+)
 
 const me = computed(() => userStore.userInfo)
 const avatarChar = computed(() =>
@@ -398,7 +414,7 @@ async function onLogout() {
 <template>
   <div class="layout">
     <!-- 侧边栏 -->
-    <aside class="sider">
+    <aside class="sider opspilot-chrome">
       <div class="logo">
         <img class="logo-icon" src="/logo.svg" alt="OpsPilot" />
         <div>
@@ -453,10 +469,19 @@ async function onLogout() {
 
     <!-- 主区 -->
     <div class="main">
-      <header class="header">
+      <header class="header opspilot-chrome">
         <div class="header-left">
-          <h1>{{ pageTitle }}</h1>
-          <div class="header-sub">OpsPilot 自动化运维平台</div>
+          <nav class="breadcrumb" aria-label="当前位置">
+            <template v-if="hasNestedBreadcrumb">
+              <AppstoreOutlined class="breadcrumb-icon" />
+              <span class="breadcrumb-label">工作空间</span>
+              <span class="breadcrumb-separator">/</span>
+            </template>
+            <component v-if="!hasNestedBreadcrumb" :is="breadcrumbParentIcon" class="breadcrumb-icon" />
+            <span class="breadcrumb-label">{{ breadcrumbParent }}</span>
+            <span class="breadcrumb-separator">/</span>
+            <h1 class="breadcrumb-current">{{ pageTitle }}</h1>
+          </nav>
         </div>
         <!-- 全局搜索：顶栏居中，防抖后原位下拉分组展示（SEARCH-01） -->
         <div class="header-center">
@@ -662,12 +687,22 @@ async function onLogout() {
   display: flex;
   flex-direction: column;
   padding: 16px 12px;
-  background: var(--bg-sider);
-  border-right: 1px solid var(--border);
+  background: #182232;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
   position: sticky;
   top: 0;
   height: 100vh;
   overflow-y: auto;
+}
+.opspilot-chrome {
+  font-family: 'OpsPilot Varela Round', 'OpsPilot Noto Sans SC', sans-serif;
+}
+.opspilot-chrome input,
+.opspilot-chrome button {
+  font-family: inherit;
+}
+.opspilot-chrome .logo-name {
+  font-family: 'OpsPilot Varela Round', 'OpsPilot Noto Sans SC', sans-serif;
 }
 .logo {
   display: flex;
@@ -678,44 +713,44 @@ async function onLogout() {
 .logo-icon {
   width: 38px;
   height: 38px;
-  border-radius: 11px;
-  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.35);
+  border-radius: 12px;
+  box-shadow: 0 7px 16px rgba(52, 120, 246, 0.32);
 }
 .logo-name {
   font-size: 17px;
   font-weight: 700;
-  color: var(--text-1);
+  color: #fff;
 }
 .logo-sub {
   font-size: 11px;
-  color: var(--text-3);
+  color: #8e9bab;
   margin-top: 4px;
 }
 .menu-group {
   font-size: 11px;
-  color: var(--text-3);
-  padding: 10px 10px 6px;
+  color: #718095;
+  padding: 14px 10px 8px;
 }
 .menu-item {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: 10px;
-  color: var(--text-2);
-  margin-bottom: 2px;
+  border-radius: 13px;
+  color: #a9b5c6;
+  margin-bottom: 4px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
   user-select: none;
 }
 .menu-item:hover {
-  background: var(--bg-hover);
+  background: rgba(255, 255, 255, 0.07);
 }
 .menu-item.active {
-  background: var(--primary);
+  background: #3478f6;
   color: #fff;
   font-weight: 600;
-  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.3);
+  box-shadow: 0 7px 16px rgba(5, 18, 43, 0.28);
 }
 .menu-icon {
   font-size: 16px;
@@ -731,9 +766,9 @@ async function onLogout() {
 .badge {
   margin-left: auto;
   font-size: 10px;
-  color: var(--text-3);
-  background: var(--bg-hover);
-  border-radius: 6px;
+  color: #a9b5c6;
+  background: rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
   padding: 1px 6px;
 }
 .menu-item.active .badge {
@@ -752,8 +787,8 @@ async function onLogout() {
 .menu-subitem {
   margin: 1px 0;
   padding: 8px 12px;
-  border-radius: 8px;
-  color: var(--text-2);
+  border-radius: 10px;
+  color: #a9b5c6;
   font-size: 12px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
@@ -765,18 +800,18 @@ async function onLogout() {
   margin-left: 28px;
 }
 .menu-subicon {
-  color: var(--text-3);
+  color: #718095;
   font-size: 14px;
 }
 .menu-subitem.active + .menu-subicon {
   color: var(--primary);
 }
 .menu-subitem:hover {
-  background: var(--bg-hover);
+  background: rgba(255, 255, 255, 0.07);
 }
 .menu-subitem.active {
-  color: var(--primary);
-  background: var(--bg-hover);
+  color: #fff;
+  background: rgba(52, 120, 246, 0.2);
   font-weight: 600;
 }
 .sider-user {
@@ -785,18 +820,18 @@ async function onLogout() {
   align-items: center;
   gap: 10px;
   padding: 10px;
-  border-radius: 12px;
-  background: var(--bg-hover);
-  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid transparent;
 }
 .sider-user b {
   font-size: 13px;
   display: block;
-  color: var(--text-1);
+  color: #e9eef6;
 }
 .sider-user span {
   font-size: 11px;
-  color: var(--text-3);
+  color: #8290a4;
   margin-top: 3px;
 }
 .user-avatar {
@@ -832,7 +867,7 @@ async function onLogout() {
   gap: 14px;
   padding: 0 24px;
   background: var(--bg-sider);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -843,10 +878,24 @@ async function onLogout() {
   margin: 0;
   color: var(--text-1);
 }
-.header-sub {
-  font-size: 12px;
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.breadcrumb-icon {
+  color: var(--text-2);
+  font-size: 14px;
+}
+.breadcrumb-separator {
   color: var(--text-3);
-  margin-top: 4px;
+}
+.header .breadcrumb-current {
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 600;
 }
 /* 三段式：左标题 / 中搜索框居中 / 右操作按钮组（SEARCH-01） */
 .header-left {
@@ -869,7 +918,7 @@ async function onLogout() {
 }
 .search {
   height: 36px;
-  border-radius: 10px;
+  border-radius: 18px;
   background: var(--bg-input);
   display: flex;
   align-items: center;
@@ -877,11 +926,12 @@ async function onLogout() {
   padding: 0 12px;
   color: var(--text-3);
   font-size: 13px;
-  border: 1px solid transparent;
-  transition: border-color 0.15s;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 .search:focus-within {
   border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent);
 }
 .search-input {
   flex: 1;
@@ -977,9 +1027,9 @@ async function onLogout() {
 .icon-btn {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: transparent;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  background: var(--bg-sider);
   color: var(--text-2);
   font-size: 16px;
   display: flex;
@@ -987,10 +1037,12 @@ async function onLogout() {
   justify-content: center;
   position: relative;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .icon-btn:hover {
   background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+  color: var(--primary);
 }
 /* 刷新按钮点击后短暂旋转一周 */
 .spinning {
@@ -1025,7 +1077,7 @@ async function onLogout() {
   font-size: 10px;
   font-weight: 700;
   line-height: 15px;
-  border: 1.5px solid var(--bg-sider);
+  border: 2px solid var(--bg-sider);
   box-sizing: border-box;
 }
 /* 通知下拉面板 */

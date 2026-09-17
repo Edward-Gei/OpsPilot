@@ -210,11 +210,15 @@ function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 }
 
+const dashboardTextFont = "'OpsPilot Varela Round', 'OpsPilot Noto Sans SC', sans-serif"
+const dashboardNumberFont = "'OpsPilot Varela Round', 'OpsPilot Noto Sans SC', sans-serif"
+
 function renderPie() {
   if (!pieRef.value) return
   pieChart = pieChart ?? echarts.init(pieRef.value)
   pieChart.setOption({
-    tooltip: { trigger: 'item', formatter: '{b}：{c} 单（{d}%）' },
+    textStyle: { fontFamily: dashboardTextFont },
+    tooltip: { trigger: 'item', formatter: '{b}：{c} 单（{d}%）', textStyle: { fontFamily: dashboardTextFont } },
     series: [{
       type: 'pie',
       radius: ['58%', '80%'],
@@ -233,21 +237,22 @@ function renderTrend() {
   trendChart = trendChart ?? echarts.init(trendRef.value)
   const primary = cssVar('--primary') || '#3b82f6'
   trendChart.setOption({
+    textStyle: { fontFamily: dashboardTextFont },
     grid: { left: 8, right: 16, top: 24, bottom: 0, containLabel: true },
-    tooltip: { trigger: 'axis', formatter: '{b}<br/>提单 {c} 笔' },
+    tooltip: { trigger: 'axis', formatter: '{b}<br/>提单 {c} 笔', textStyle: { fontFamily: dashboardTextFont } },
     xAxis: {
       type: 'category',
       data: trendItems.value.map((i) => i.period),
       boundaryGap: false,
       axisLine: { lineStyle: { color: cssVar('--border') } },
-      axisLabel: { color: cssVar('--text-3'), fontSize: 11 },
+      axisLabel: { color: cssVar('--text-3'), fontSize: 11, fontFamily: dashboardNumberFont },
       axisTick: { show: false },
     },
     yAxis: {
       type: 'value',
       minInterval: 1,
       splitLine: { lineStyle: { color: cssVar('--border'), type: 'dashed' } },
-      axisLabel: { color: cssVar('--text-3'), fontSize: 11 },
+      axisLabel: { color: cssVar('--text-3'), fontSize: 11, fontFamily: dashboardNumberFont },
     },
     series: [{
       type: 'line',
@@ -327,6 +332,12 @@ onMounted(async () => {
   request<{ pong: boolean }>({ url: '/ping', method: 'get' }).catch(() => (apiStatus.value = 'down'))
   await Promise.all([loadSummary(), loadTrend()])
   if (unmounted) return // 组件已在等待期间卸载，不再启动轮询/绑定监听
+  void document.fonts.ready.then(() => {
+    if (!unmounted) {
+      renderPie()
+      renderTrend()
+    }
+  })
   // 30s 静默轮询概览（页面隐藏时跳过，避免后台空耗）
   pollTimer = window.setInterval(() => {
     if (!document.hidden) loadSummary()
@@ -344,7 +355,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="dashboard">
+  <div class="dashboard dashboard-fonts">
     <!-- A 问候横幅 -->
     <div class="op-hero op-hero--blue">
       <div class="op-hero-icon"><RocketOutlined /></div>
@@ -592,6 +603,22 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+.dashboard-fonts {
+  font-family: 'OpsPilot Varela Round', 'OpsPilot Noto Sans SC', sans-serif;
+}
+.dashboard-fonts :deep(.ant-segmented),
+.dashboard-fonts :deep(.ant-empty),
+.dashboard-fonts :deep(.ant-tag) {
+  font-family: inherit;
+}
+.dashboard-fonts .kpi .num,
+.dashboard-fonts .op-hero-stat b,
+.dashboard-fonts .pie-center b,
+.dashboard-fonts .legend-item b,
+.dashboard-fonts .exec-time,
+.dashboard-fonts .exec-dur {
+  font-family: 'OpsPilot Varela Round', 'OpsPilot Noto Sans SC', sans-serif;
 }
 
 /* ===== 首屏加载占位：保持最终布局尺寸，数据到达后只替换内容 ===== */

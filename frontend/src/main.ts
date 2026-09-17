@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 import { createApp } from 'vue'
 import Antd from 'ant-design-vue'
 import 'ant-design-vue/dist/reset.css'
+import './styles/section-fonts.css'
 import './styles/tokens.css'
 import './styles/auth-theme.css'
 
