@@ -91,7 +91,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/cmdb/apps` | `cmdb:read` | 应用分页、部署方式、项目类型、所属业务线和服务级别筛选 |
+| GET | `/cmdb/apps` | `cmdb:read` | 应用分页；关键词匹配应用名、所属系统、运维负责人和开发负责人，并支持部署方式、项目类型、所属业务线和服务级别筛选 |
 | POST | `/cmdb/apps` | `cmdb:write` | 创建应用和主机关联 |
 | GET | `/cmdb/apps/{id}` | `cmdb:read` | 应用详情 |
 | PUT | `/cmdb/apps/{id}` | `cmdb:write` | 编辑应用和主机关联 |
