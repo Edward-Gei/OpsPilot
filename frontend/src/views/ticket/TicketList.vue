@@ -83,7 +83,7 @@ const columns = ref(makeResizable([
   { title: '提交人', dataIndex: 'creator_name', key: 'creator_name', width: 110, ellipsis: true },
   { title: '提交时间', key: 'submitted', width: 155 },
   { title: '完成时间', key: 'finished', width: 155 },
-  { title: '操作', key: 'action', width: 220, fixed: 'right' as const },
+  { title: '操作', key: 'action', width: 171, fixed: 'right' as const },
 ]))
 
 /** 拉取工单列表（keyword 匹配工单号、标题或提交人） */

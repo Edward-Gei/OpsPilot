@@ -66,7 +66,7 @@ const columns = ref(makeResizable([
   { title: '同步状态', dataIndex: 'sync_status', key: 'sync_status', width: 105, sorter: true },
   { title: '最近同步时间', dataIndex: 'last_synced_at', key: 'last_synced_at', width: 170, sorter: true },
   { title: '错误摘要', dataIndex: 'last_sync_error', key: 'last_sync_error', width: 220, ellipsis: true, sorter: true },
-  { title: '操作', key: 'action', width: canDelete ? 292 : canWrite ? 224 : 72, fixed: 'right' as const },
+  { title: '操作', key: 'action', width: canWrite && canDelete ? 350 : canWrite ? 274 : canDelete ? 203 : 132, fixed: 'right' as const },
 ]))
 
 const sortableFields: domainApi.DomainSortField[] = [
@@ -554,7 +554,7 @@ onBeforeUnmount(stopBindPolling)
       :loading="loading"
       row-key="id"
       bordered
-      :scroll="{ x: 1510 }"
+      :scroll="{ x: 1710 }"
       :row-selection="rowSelection"
       @resize-column="onResizeColumn"
       @change="onTableChange"
