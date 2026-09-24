@@ -66,6 +66,55 @@ class DomainProvider(str, Enum):
     GOOGLE_CLOUD_DNS = "google_cloud_dns"
 
 
+class ConfigProvider(str, Enum):
+    APOLLO = "apollo"
+    NACOS = "nacos"
+    CONSUL = "consul"
+
+
+class ConfigFileStatus(str, Enum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class ConfigDriftStatus(str, Enum):
+    CLEAN = "clean"
+    DRIFTED = "drifted"
+    REMOTE_MISSING = "remote_missing"
+    SYNC_FAILED = "sync_failed"
+
+
+class ConfigVersionStatus(str, Enum):
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    PUBLISHING = "publishing"
+    PUBLISHED = "published"
+    REJECTED = "rejected"
+    INVALIDATED = "invalidated"
+
+
+class ConfigTaskKind(str, Enum):
+    IMPORT = "import"
+    SYNC = "sync"
+    PUBLISH = "publish"
+
+
+class ConfigTaskStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCESS = "success"
+    PARTIAL_FAILED = "partial_failed"
+    FAILED = "failed"
+
+
+class ConfigTaskItemStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCESS = "success"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
 class DnsSyncStatus(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
@@ -171,6 +220,10 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("domain:read", "域名管理查看", "domain"),
     ("domain:write", "域名管理操作", "domain"),
     ("domain:delete", "域名管理删除", "domain"),
+    ("config:read", "应用配置查看", "config"),
+    ("config:write", "应用配置维护", "config"),
+    ("config:delete", "应用配置删除", "config"),
+    ("config:instance", "配置平台实例管理", "config"),
     ("credential:read", "凭据查看", "job"),
     ("credential:write", "凭据管理", "job"),
     ("credential:delete", "凭据删除", "job"),
@@ -209,6 +262,7 @@ BUILTIN_ROLES: dict[str, dict] = {
         "description": "系统内置：CMDB/模板/工单/执行",
         "permissions": [
             "cmdb:read", "cmdb:write", "cmdb:import",
+            "config:read", "config:write",
             "credential:read",
             "secret:read",
             "job_host:read",

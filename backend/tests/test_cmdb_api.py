@@ -3,8 +3,10 @@ from datetime import datetime, timedelta
 from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
-from sqlalchemy import update
+from sqlalchemy import delete, select, update
 
+from app.models.application_config import ConfigFile, ConfigFileApplication, ConfigPlatformInstance
+from app.models.auth import Permission, RolePermission
 from app.models.cmdb import Application, Host
 from tests.conftest import auth_header, login_for_tokens
 
@@ -232,6 +234,97 @@ class TestHostCrud:
 
 
 class TestAppCrud:
+    async def test_app_keyword_matches_service_port_in_list_and_export(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        created = await client.post(
+            "/api/v1/cmdb/apps",
+            json={"name": "端口查询目标", "deploy_type": "shell", "service_port": "18080,18443", "host_ids": []},
+            headers=headers,
+        )
+        assert created.json()["code"] == 0
+
+        result = await client.get("/api/v1/cmdb/apps", params={"keyword": "18443"}, headers=headers)
+        assert [item["name"] for item in result.json()["data"]["items"]] == ["端口查询目标"]
+        exported = await client.get("/api/v1/cmdb/apps/export", params={"keyword": "18443"}, headers=headers)
+        assert exported.status_code == 200
+        rows = list(load_workbook(BytesIO(exported.content)).active.values)
+        assert any("端口查询目标" in row for row in rows)
+
+    async def test_app_detail_exposes_associated_config_metadata_with_cmdb_read_only(self, client, db_factory, seed):
+        admin = auth_header(await login_for_tokens(client, "admin"))
+        created = await client.post(
+            "/api/v1/cmdb/apps", json={"name": "关联配置应用", "deploy_type": "shell", "host_ids": []}, headers=admin,
+        )
+        app_id = created.json()["data"]["id"]
+        async with db_factory() as session:
+            instance = ConfigPlatformInstance(
+                name="关联实例", provider="nacos", base_url="https://nacos.example", credential_id=1,
+            )
+            session.add(instance)
+            await session.flush()
+            config_file = ConfigFile(
+                name="common.yaml", platform_instance_id=instance.id,
+                locator={"namespace": "prod", "group": "DEFAULT_GROUP", "data_id": "common.yaml"},
+                locator_key="associated-config", content_format="yaml", approval_role_id=seed["roles"]["ops"],
+                status="active", drift_status="drifted",
+            )
+            session.add(config_file)
+            await session.flush()
+            session.add(ConfigFileApplication(config_file_id=config_file.id, application_id=app_id))
+            permission_id = (await session.execute(
+                select(Permission.id).where(Permission.code == "config:read")
+            )).scalar_one()
+            await session.execute(delete(RolePermission).where(
+                RolePermission.role_id == seed["roles"]["ops"], RolePermission.permission_id == permission_id,
+            ))
+            await session.commit()
+
+        cmdb_reader = auth_header(await login_for_tokens(client, "ops1"))
+        denied = await client.get("/api/v1/application-configs/files", headers=cmdb_reader)
+        assert denied.json()["code"] == 40301
+        result = await client.get(f"/api/v1/cmdb/apps/{app_id}", headers=cmdb_reader)
+        assert result.json()["code"] == 0
+        assert result.json()["data"]["config_files"] == [{
+            "id": config_file.id, "name": "common.yaml", "platform_instance_name": "关联实例",
+            "provider": "nacos", "locator": {"namespace": "prod", "group": "DEFAULT_GROUP", "data_id": "common.yaml"},
+            "status": "active", "drift_status": "drifted",
+        }]
+        assert "content" not in result.text
+        assert "nacos.example" not in result.text
+
+    async def test_app_sorting_uses_full_filtered_result_before_pagination(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        host_id = await _create_host(client, headers, ip="10.8.0.1")
+        first = await client.post("/api/v1/cmdb/apps", json={
+            "name": "Z应用", "language": "Java", "deploy_type": "docker", "project_type": "backend",
+            "business_line": "tradingkey", "system_name": "Z系统", "service_level": "核心服务",
+            "ops_owner": "Z运维", "dev_owner": "Z开发", "service_port": "9000",
+            "cpu_quota": "9 Core", "mem_quota": "9 GiB", "description": "Z说明", "host_ids": [host_id],
+        }, headers=headers)
+        second = await client.post("/api/v1/cmdb/apps", json={
+            "name": "A应用", "language": "Go", "deploy_type": "shell", "project_type": "frontend",
+            "business_line": "mitrade", "system_name": "A系统", "service_level": "一般服务",
+            "ops_owner": "A运维", "dev_owner": "A开发", "service_port": "1000",
+            "cpu_quota": "1 Core", "mem_quota": "1 GiB", "description": "A说明", "host_ids": [],
+        }, headers=headers)
+        first_id, second_id = first.json()["data"]["id"], second.json()["data"]["id"]
+        for field, ascending in (
+            ("name", second_id), ("language", second_id), ("deploy_type", first_id),
+            ("project_type", first_id), ("host_count", second_id), ("business_line", second_id),
+            ("system_name", second_id), ("service_level", second_id),
+            ("ops_owner", second_id), ("dev_owner", second_id), ("service_port", second_id),
+            ("cpu_quota", second_id), ("mem_quota", second_id), ("description", second_id),
+        ):
+            asc = await client.get("/api/v1/cmdb/apps", params={
+                "sort_by": field, "sort_order": "asc", "page_size": 1,
+            }, headers=headers)
+            desc = await client.get("/api/v1/cmdb/apps", params={
+                "sort_by": field, "sort_order": "desc", "page_size": 1,
+            }, headers=headers)
+            assert asc.json()["data"]["total"] == 2
+            assert asc.json()["data"]["items"][0]["id"] == ascending, field
+            assert desc.json()["data"]["items"][0]["id"] != ascending, field
+
     async def test_app_list_sorts_by_language(self, client):
         """应用列表按语言正反序排序。"""
         headers = auth_header(await login_for_tokens(client, "ops1"))

@@ -13,6 +13,7 @@ import {
   CodeOutlined,
   DownOutlined,
   FileDoneOutlined,
+  FileTextOutlined,
   GlobalOutlined,
   KeyOutlined,
   LogoutOutlined,
@@ -24,6 +25,7 @@ import {
   UserOutlined,
 } from '@ant-design/icons-vue'
 import { pollTodoEvents, todoTickets } from '@/api/ticket'
+import { listConfigApprovalTodo } from '@/api/applicationConfig'
 import {
   getUnreadCount,
   listNotifications,
@@ -58,12 +60,14 @@ let todoCountRequestSeq = 0
 
 /** 拉取待我审批总数（page_size=1 只取 total）；无审批权限不请求 */
 async function loadTodoCount() {
-  if (!userStore.hasPerm('ticket:approve')) return
   const requestSeq = ++todoCountRequestSeq
   try {
-    const data = await todoTickets({ page: 1, page_size: 1 })
+    const [configs, tickets] = await Promise.all([
+      listConfigApprovalTodo({ page: 1, page_size: 1 }),
+      userStore.hasPerm('ticket:approve') ? todoTickets({ page: 1, page_size: 1 }) : Promise.resolve(null),
+    ])
     if (requestSeq !== todoCountRequestSeq || todoPollAbort?.signal.aborted) return
-    todoCount.value = data.total
+    todoCount.value = configs.total + (tickets?.total || 0)
   } catch {
     /* 角标拉取失败静默，不影响布局 */
   }
@@ -110,12 +114,13 @@ const menuGroups = computed(() =>
         { key: 'cmdb-hosts', label: '主机管理', icon: CloudServerOutlined, path: '/cmdb/hosts', perm: 'cmdb:read' },
         { key: 'cmdb-apps', label: '应用管理', icon: AppstoreAddOutlined, path: '/cmdb/apps', perm: 'cmdb:read' },
         { key: 'domains', label: '域名管理', icon: GlobalOutlined, path: '/domains', perm: 'domain:read' },
+        { key: 'application-configs', label: '应用配置', icon: FileTextOutlined, path: '/application-configs', perm: 'config:read' },
         // M3 已开放：作业中心拆分为模板/凭据两个入口（作业主机配置已入系统设置）
         { key: 'job-templates', label: '模板管理', icon: CodeOutlined, path: '/job/templates', perm: 'template:read' },
         { key: 'job-credentials', label: '凭据管理', icon: KeyOutlined, path: '/job/credentials', perms: ['credential:read', 'secret:read'] },
         // M4 已开放：工单中心 + 待办审批（角标显示待我审批数）
         { key: 'ticket-list', label: '工单中心', icon: FileDoneOutlined, path: '/ticket/list', perm: 'ticket:read' },
-        { key: 'ticket-todo', label: '待办审批', icon: AuditOutlined, path: '/ticket/todo', perm: 'ticket:approve', count: todoCount.value },
+        { key: 'ticket-todo', label: '待办审批', icon: AuditOutlined, path: '/ticket/todo', count: todoCount.value },
         { key: 'audit-logs', label: '安全审计', icon: SafetyCertificateOutlined, path: '/audit', perm: 'audit:read' },
                 // M6 已开放：通知中心（渠道配置 + 事件映射 + 发送记录）
                 { key: 'notify', label: '通知中心', icon: BellOutlined, path: '/notify', perm: 'notify:read' },
@@ -196,9 +201,18 @@ function onMenuClick(item: MenuItem) {
   if (item.path) router.push(item.path)
 }
 
-onMounted(loadTodoCount)
-onMounted(() => void startTodoEventPoll())
-onUnmounted(() => todoPollAbort?.abort())
+let configTodoTimer: number | undefined
+onMounted(() => {
+  void loadTodoCount()
+  void startTodoEventPoll()
+  configTodoTimer = window.setInterval(() => void loadTodoCount(), 30000)
+  window.addEventListener('opspilot:todo-changed', loadTodoCount)
+})
+onUnmounted(() => {
+  todoPollAbort?.abort()
+  window.clearInterval(configTodoTimer)
+  window.removeEventListener('opspilot:todo-changed', loadTodoCount)
+})
 watch(() => route.path, (path) => {
   loadTodoCount()
   if (path.startsWith('/job/templates')) templateMenuOpen.value = true

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.response import Errors
 from app.models.cmdb import AppHost, Application, Host
+from app.models.application_config import ConfigFile, ConfigFileApplication, ConfigPlatformInstance
 
 
 # ---------- 主机 ----------
@@ -183,17 +184,29 @@ async def list_apps(
         business_line=business_line, service_level=service_level,
     )
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
+    # 关联主机数须在数据库侧排序，分页后聚合会使跨页顺序错误。
+    sort_columns = {
+        "name": Application.name,
+        "language": Application.language,
+        "deploy_type": Application.deploy_type,
+        "project_type": Application.project_type,
+        "host_count": select(func.count(AppHost.id)).where(AppHost.app_id == Application.id)
+            .correlate(Application).scalar_subquery(),
+        "business_line": Application.business_line,
+        "system_name": Application.system_name,
+        "service_level": Application.service_level,
+        "ops_owner": Application.ops_owner,
+        "dev_owner": Application.dev_owner,
+        "service_port": Application.service_port,
+        "cpu_quota": Application.cpu_quota,
+        "mem_quota": Application.mem_quota,
+        "description": Application.description,
+        "created_at": Application.created_at,
+    }
     order_by = (Application.id.desc(),)
-    if sort_by == "language":
-        order_by = (
-            Application.language.asc() if sort_order == "asc" else Application.language.desc(),
-            Application.id.desc(),
-        )
-    elif sort_by == "created_at":
-        order_by = (
-            Application.created_at.asc() if sort_order == "asc" else Application.created_at.desc(),
-            Application.id.desc(),
-        )
+    if sort_by in sort_columns:
+        column = sort_columns[sort_by]
+        order_by = (column.asc() if sort_order == "asc" else column.desc(), Application.id.desc())
     rows = await session.execute(
         query.order_by(*order_by).offset((page - 1) * page_size).limit(page_size)
     )
@@ -211,7 +224,7 @@ def _app_filter_query(
     business_line: str | None = None,
     service_level: str | None = None,
 ):
-    """应用列表与导出共用筛选语义；关键词匹配名称、系统和负责人。"""
+    """应用列表与导出共用筛选语义；关键词匹配名称、系统、负责人及端口。"""
     query = select(Application)
     if keyword:
         query = query.where(or_(
@@ -219,6 +232,7 @@ def _app_filter_query(
             Application.system_name.like(f"%{keyword}%"),
             Application.ops_owner.like(f"%{keyword}%"),
             Application.dev_owner.like(f"%{keyword}%"),
+            Application.service_port.like(f"%{keyword}%"),
         ))
     if language:
         query = query.where(Application.language == language)
@@ -255,6 +269,29 @@ async def _app_host_stats(session: AsyncSession, apps: list[Application]) -> dic
             stats["host_count"] += 1
             stats["host_ips"].append(ip)
     return host_stats
+
+
+async def get_app_config_files(session: AsyncSession, app_id: int) -> list[dict]:
+    """CMDB 详情只返回关联配置的定位和状态元信息，不读取加密正文。"""
+    rows = await session.execute(
+        select(ConfigFile, ConfigPlatformInstance.name, ConfigPlatformInstance.provider)
+        .join(ConfigFileApplication, ConfigFileApplication.config_file_id == ConfigFile.id)
+        .join(ConfigPlatformInstance, ConfigPlatformInstance.id == ConfigFile.platform_instance_id)
+        .where(ConfigFileApplication.application_id == app_id)
+        .order_by(ConfigFile.id.asc())
+    )
+    return [
+        {
+            "id": config_file.id,
+            "name": config_file.name,
+            "platform_instance_name": instance_name,
+            "provider": provider,
+            "locator": config_file.locator,
+            "status": config_file.status,
+            "drift_status": config_file.drift_status,
+        }
+        for config_file, instance_name, provider in rows
+    ]
 
 
 async def _ensure_app_name_unique(session: AsyncSession, name: str, exclude_id: int | None = None) -> None:
@@ -332,6 +369,10 @@ async def delete_app(session: AsyncSession, app_id: int) -> Application:
     app = await get_app_or_404(session, app_id)
     for link in (
         await session.execute(select(AppHost).where(AppHost.app_id == app_id))
+    ).scalars():
+        await session.delete(link)
+    for link in (
+        await session.execute(select(ConfigFileApplication).where(ConfigFileApplication.application_id == app_id))
     ).scalars():
         await session.delete(link)
     await session.delete(app)

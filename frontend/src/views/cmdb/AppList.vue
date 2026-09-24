@@ -58,26 +58,26 @@ const query = reactive({
   project_type: undefined as cmdbApi.AppProjectType | undefined,
   business_line: undefined as cmdbApi.AppBusinessLine | undefined,
   service_level: undefined as cmdbApi.AppServiceLevel | undefined,
-  sort_by: undefined as 'language' | 'created_at' | undefined,
+  sort_by: undefined as cmdbApi.AppQuery['sort_by'],
   sort_order: undefined as 'asc' | 'desc' | undefined,
 })
 
 // 列宽尽量均匀；操作列固定右侧，其余列可拖拽调宽（响应式包装使 width 变更生效）
 const columns = ref(makeResizable([
-  { title: '应用名', dataIndex: 'name', key: 'name', width: 140, ellipsis: true },
+  { title: '应用名', dataIndex: 'name', key: 'name', width: 140, ellipsis: true, sorter: true },
   { title: '语言', dataIndex: 'language', key: 'language', width: 100, ellipsis: true, sorter: true },
-  { title: '部署方式', key: 'deploy_type', width: 100 },
-  { title: '项目类型', key: 'project_type', width: 100 },
-  { title: '关联主机', key: 'host_count', width: 95 },
-  { title: '所属业务线', key: 'business_line', width: 110 },
-  { title: '所属系统', dataIndex: 'system_name', key: 'system_name', width: 130, ellipsis: true },
-  { title: '服务级别', key: 'service_level', width: 100 },
-  { title: '运维负责人', dataIndex: 'ops_owner', key: 'ops_owner', width: 110, ellipsis: true },
-  { title: '开发负责人', dataIndex: 'dev_owner', key: 'dev_owner', width: 110, ellipsis: true },
-  { title: '服务端口', dataIndex: 'service_port', key: 'service_port', width: 100, ellipsis: true },
-  { title: 'CPU 配额', dataIndex: 'cpu_quota', key: 'cpu_quota', width: 100, ellipsis: true },
-  { title: 'MEM 配额', dataIndex: 'mem_quota', key: 'mem_quota', width: 100, ellipsis: true },
-  { title: '说明', key: 'description', width: 180, ellipsis: true },
+  { title: '部署方式', dataIndex: 'deploy_type', key: 'deploy_type', width: 100, sorter: true },
+  { title: '项目类型', dataIndex: 'project_type', key: 'project_type', width: 100, sorter: true },
+  { title: '关联主机', dataIndex: 'host_count', key: 'host_count', width: 95, sorter: true },
+  { title: '所属业务线', dataIndex: 'business_line', key: 'business_line', width: 110, sorter: true },
+  { title: '所属系统', dataIndex: 'system_name', key: 'system_name', width: 130, ellipsis: true, sorter: true },
+  { title: '服务级别', dataIndex: 'service_level', key: 'service_level', width: 100, sorter: true },
+  { title: '运维负责人', dataIndex: 'ops_owner', key: 'ops_owner', width: 110, ellipsis: true, sorter: true },
+  { title: '开发负责人', dataIndex: 'dev_owner', key: 'dev_owner', width: 110, ellipsis: true, sorter: true },
+  { title: '服务端口', dataIndex: 'service_port', key: 'service_port', width: 100, ellipsis: true, sorter: true },
+  { title: 'CPU 配额', dataIndex: 'cpu_quota', key: 'cpu_quota', width: 100, ellipsis: true, sorter: true },
+  { title: 'MEM 配额', dataIndex: 'mem_quota', key: 'mem_quota', width: 100, ellipsis: true, sorter: true },
+  { title: '说明', dataIndex: 'description', key: 'description', width: 180, ellipsis: true, sorter: true },
   { title: '创建时间', dataIndex: 'created_at', key: 'created', width: 155, sorter: true },
   { title: '操作', key: 'action', width: canDelete ? 244 : canWrite ? 171 : 98, fixed: 'right' as const },
 ]))
@@ -166,9 +166,7 @@ function onTableChange(
   sorter: { field?: string; order?: 'ascend' | 'descend' | null } | { field?: string; order?: 'ascend' | 'descend' | null }[],
 ) {
   const current = Array.isArray(sorter) ? sorter[0] : sorter
-  const sortBy = current.order && (current.field === 'language' || current.field === 'created_at')
-    ? current.field
-    : undefined
+  const sortBy = current.order ? current.field as cmdbApi.AppQuery['sort_by'] : undefined
   const sortOrder = current.order === 'ascend' ? 'asc' : current.order === 'descend' ? 'desc' : undefined
   const sortChanged = query.sort_by !== sortBy || query.sort_order !== sortOrder
   query.sort_by = sortBy
@@ -373,11 +371,25 @@ const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detail = ref<cmdbApi.AppDetail | null>(null)
 
+function configLocatorText(file: cmdbApi.AppConfigFile) {
+  if (file.provider === 'nacos') return `${file.locator.namespace || 'public'} / ${file.locator.group} / ${file.locator.data_id}`
+  if (file.provider === 'apollo') return `${file.locator.app_id} / ${file.locator.cluster} / ${file.locator.namespace}`
+  return `${file.locator.datacenter} / ${file.locator.kv_prefix}`
+}
+
+function configStatus(file: cmdbApi.AppConfigFile) {
+  if (file.status === 'archived') return { text: '已归档', color: 'default' }
+  if (file.drift_status === 'drifted') return { text: '存在漂移', color: 'warning' }
+  if (file.drift_status === 'remote_missing') return { text: '远端缺失', color: 'error' }
+  if (file.drift_status === 'sync_failed') return { text: '同步失败', color: 'error' }
+  return { text: '正常', color: 'success' }
+}
+
 function isSafeRepoUrl(url: string | null): boolean {
   return !!url && /^https?:\/\//i.test(url)
 }
 
-/** 打开详情：拉取应用完整信息 + 关联主机清单 */
+/** 打开详情：拉取应用信息及关联主机、配置文件元信息 */
 async function openDetail(row: cmdbApi.AppItem) {
   detailVisible.value = true
   detailLoading.value = true
@@ -419,7 +431,7 @@ onMounted(() => {
     <div class="toolbar">
       <a-input
         v-model:value="query.keyword"
-        placeholder="搜索应用名、所属系统、运维负责人、开发负责人"
+        placeholder="应用/系统/负责人/端口"
         class="kw"
         allow-clear
         @press-enter="onSearch"
@@ -638,7 +650,7 @@ onMounted(() => {
       </template>
     </a-modal>
 
-    <!-- 详情抽屉：应用信息 + 关联主机清单 -->
+    <!-- 详情抽屉：应用信息 + 关联主机和配置文件元信息 -->
     <a-drawer v-model:open="detailVisible" :title="detail?.name || '应用详情'" :width="650">
       <a-spin :spinning="detailLoading">
         <template v-if="detail">
@@ -698,6 +710,31 @@ onMounted(() => {
             size="small"
             :pagination="false"
           />
+
+          <div class="detail-hosts-title">关联配置文件（{{ detail.config_files.length }}）</div>
+          <a-empty v-if="!detail.config_files.length" description="暂无关联配置文件" />
+          <a-table
+            v-else
+            bordered
+            :columns="[
+              { title: '配置文件', dataIndex: 'name', width: 145 },
+              { title: '平台实例', dataIndex: 'platform_instance_name', width: 125 },
+              { title: '远端定位', key: 'locator', width: 210 },
+              { title: '状态', key: 'status', width: 90 },
+            ]"
+            :data-source="detail.config_files"
+            row-key="id"
+            size="small"
+            :pagination="false"
+            :scroll="{ x: 570 }"
+          >
+            <template #bodyCell="{ column, record }">
+              <span v-if="column.key === 'locator'" class="config-locator">{{ configLocatorText(record as cmdbApi.AppConfigFile) }}</span>
+              <a-tag v-else-if="column.key === 'status'" :color="configStatus(record as cmdbApi.AppConfigFile).color">
+                {{ configStatus(record as cmdbApi.AppConfigFile).text }}
+              </a-tag>
+            </template>
+          </a-table>
         </template>
       </a-spin>
     </a-drawer>
@@ -733,6 +770,7 @@ onMounted(() => {
   font-weight: 600;
   margin: 18px 0 10px;
 }
+.config-locator { overflow-wrap: anywhere; }
 .form-steps {
   margin-bottom: 20px;
 }

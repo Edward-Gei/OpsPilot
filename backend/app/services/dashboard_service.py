@@ -17,7 +17,7 @@ from app.models.auth import User
 from app.models.cmdb import Application, Host
 from app.models.execution import Execution
 from app.models.ticket import Ticket
-from app.services import execution_service, rbac_service, ticket_service
+from app.services import application_config_service, execution_service, rbac_service, ticket_service
 
 # 趋势粒度 → (桶数量, 桶宽描述)；口径与前端 segmented 选项一致
 TREND_GRANULARITIES = ("day", "week", "month", "year")
@@ -73,11 +73,15 @@ async def get_summary(session: AsyncSession, user: User) -> dict:
             "status_dist": status_dist,
         }
 
+    _, config_todo_total = await application_config_service.list_approval_todo(
+        session, user_id=user.id, page=1, page_size=1,
+    )
+    data["todo_total"] = config_todo_total
     if "ticket:approve" in perms:
         _, todo_total = await ticket_service.todo_tickets(
             session, user_id=user.id, page=1, page_size=1
         )
-        data["todo_total"] = todo_total
+        data["todo_total"] += todo_total
 
     if "execution:read" in perms:
         active = await _count_by(session, Execution.status, Execution)

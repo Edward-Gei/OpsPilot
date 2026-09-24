@@ -31,7 +31,7 @@ from app.core.config import settings
 from app.core.database import async_session_factory
 from app.engine import pipeline, recovery
 from app.notify.dispatcher import notify_dispatcher
-from app.services import domain_bind_task_service
+from app.services import domain_bind_task_service, application_config_task_service
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("opspilot.worker")
@@ -83,6 +83,33 @@ async def consume_zone_bind_tasks(stop_event: asyncio.Event) -> None:
             raise
         except Exception:  # noqa: BLE001 单个任务异常不能终止后续任务处理
             logger.exception("DNS Zone 绑定任务处理异常，2 秒后重试")
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                pass
+
+
+async def _process_next_config_task() -> bool:
+    """以独立会话处理一个持久化配置任务。"""
+    async with async_session_factory() as session:
+        return await application_config_task_service.process_next_config_task(session)
+
+
+async def consume_application_config_tasks(stop_event: asyncio.Event) -> None:
+    """手工发起的配置任务由 Worker 串行认领，不执行定时同步。"""
+    logger.info("应用配置任务轮询已启动")
+    while not stop_event.is_set():
+        try:
+            if await _process_next_config_task():
+                continue
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                pass
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("应用配置任务处理异常，2 秒后重试")
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=2)
             except asyncio.TimeoutError:
@@ -157,10 +184,12 @@ async def main() -> None:
     await startup()
     execution_consumer = asyncio.create_task(consume_loop(stop_event))
     zone_bind_consumer = asyncio.create_task(consume_zone_bind_tasks(stop_event))
+    config_consumer = asyncio.create_task(consume_application_config_tasks(stop_event))
     await stop_event.wait()
     execution_consumer.cancel()
     zone_bind_consumer.cancel()
-    await asyncio.gather(execution_consumer, zone_bind_consumer, return_exceptions=True)
+    config_consumer.cancel()
+    await asyncio.gather(execution_consumer, zone_bind_consumer, config_consumer, return_exceptions=True)
     if _running_tasks:
         # 不等待在跑执行（宽限期不足），由下次启动的崩溃恢复归 system_crash
         logger.warning("退出时仍有 %d 个执行在跑，将由重启后的崩溃恢复归档", len(_running_tasks))

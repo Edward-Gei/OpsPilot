@@ -3,6 +3,16 @@ from app.models.base import Base
 from app.models.auth import ApiToken, Permission, Role, RolePermission, User, UserRole
 from app.models.cmdb import AppHost, Application, Host, JobHost
 from app.models.domain import DnsRecordSet, DnsZone, DnsZoneBindTask, DnsZoneBindTaskItem
+from app.models.application_config import (
+    ConfigDraft,
+    ConfigFile,
+    ConfigFileApplication,
+    ConfigPlatformInstance,
+    ConfigRemoteSnapshot,
+    ConfigTask,
+    ConfigTaskItem,
+    ConfigVersion,
+)
 from app.models.job import Credential, ProcessStep, ProcessTemplate, TicketTemplate
 from app.models.ticket import (
     Ticket,

@@ -72,6 +72,24 @@ const router = createRouter({
           meta: { title: 'Zone 详情', perm: 'domain:read', menuKey: 'domains' },
         },
         {
+          path: 'application-configs',
+          name: 'application-configs',
+          component: () => import('@/views/application-config/ApplicationConfigList.vue'),
+          meta: { title: '应用配置', perm: 'config:read' },
+        },
+        {
+          path: 'application-configs/:id/edit',
+          name: 'application-config-edit',
+          component: () => import('@/views/application-config/ApplicationConfigDetail.vue'),
+          meta: { title: '编辑配置文件', perm: 'config:write', menuKey: 'application-configs' },
+        },
+        {
+          path: 'application-configs/:id',
+          name: 'application-config-detail',
+          component: () => import('@/views/application-config/ApplicationConfigDetail.vue'),
+          meta: { title: '配置文件详情', perm: 'config:read', menuKey: 'application-configs' },
+        },
+        {
           path: 'job/templates',
           name: 'job-templates',
           redirect: '/job/templates/tickets',
@@ -107,7 +125,7 @@ const router = createRouter({
           path: 'ticket/todo',
           name: 'ticket-todo',
           component: () => import('@/views/ticket/TodoList.vue'),
-          meta: { title: '待办审批', perm: 'ticket:approve' },
+          meta: { title: '待办审批' },
         },
         {
           path: 'executions/:id',

@@ -85,17 +85,17 @@ const dashboardLoading = computed(
 const canViewCmdb = computed(() => userStore.hasPerm('cmdb:read'))
 const canViewTicket = computed(() => userStore.hasPerm('ticket:read'))
 const canViewExecution = computed(() => userStore.hasPerm('execution:read'))
-const canViewApproval = computed(() => userStore.hasPerm('ticket:approve'))
+const canViewApproval = true
 const canViewAudit = computed(() => userStore.hasPerm('audit:read'))
 const loadingKpiCount = computed(() => {
   let count = canViewCmdb.value ? 2 : 0
   if (canViewTicket.value) count += 1
-  if (canViewApproval.value || canViewExecution.value || canViewAudit.value) count += 1
+  if (canViewApproval || canViewExecution.value || canViewAudit.value) count += 1
   return Math.min(count, 4)
 })
 const loadingHeroStatCount = computed(() => Math.max(
   1,
-  [canViewApproval.value, canViewExecution.value, canViewTicket.value].filter(Boolean).length,
+  [canViewApproval, canViewExecution.value, canViewTicket.value].filter(Boolean).length,
 ))
 const showMainSkeleton = computed(() => canViewExecution.value || canViewTicket.value)
 
@@ -303,11 +303,11 @@ interface QuickLink {
   color: string
   label: string
   path: string
-  perm: string
+  perm?: string
 }
 const ALL_LINKS: QuickLink[] = [
   { icon: FileAddOutlined, color: '#60a5fa', label: '提交工单', path: '/ticket/list', perm: 'ticket:write' },
-  { icon: AuditOutlined, color: '#fbbf24', label: '待办审批', path: '/ticket/todo', perm: 'ticket:approve' },
+  { icon: AuditOutlined, color: '#fbbf24', label: '待办审批', path: '/ticket/todo' },
   { icon: DatabaseOutlined, color: '#4ade80', label: '主机管理', path: '/cmdb/hosts', perm: 'cmdb:read' },
   { icon: CodeOutlined, color: '#a78bfa', label: '模板管理', path: '/job/templates', perm: 'template:read' },
   { icon: RocketOutlined, color: '#38bdf8', label: '执行记录', path: '/ticket/list?has_execution=true', perm: 'execution:read' },
@@ -315,7 +315,7 @@ const ALL_LINKS: QuickLink[] = [
   { icon: SafetyCertificateOutlined, color: '#f87171', label: '安全审计', path: '/audit', perm: 'audit:read' },
   { icon: TeamOutlined, color: '#34d399', label: '用户管理', path: '/system/users', perm: 'user:read' },
 ]
-const quickLinks = computed(() => ALL_LINKS.filter((l) => userStore.hasPerm(l.perm)).slice(0, 8))
+const quickLinks = computed(() => ALL_LINKS.filter((l) => !l.perm || userStore.hasPerm(l.perm)).slice(0, 8))
 
 // ===== 执行动态辅助 =====
 /** 终态执行耗时（秒级人性化）；未结束显示 — */

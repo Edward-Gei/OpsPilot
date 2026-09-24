@@ -272,7 +272,11 @@ async def list_apps(
     project_type: Literal["frontend", "backend"] | None = None,
     business_line: Literal["mitrade", "tradingkey"] | None = None,
     service_level: Literal["核心服务", "一般服务"] | None = None,
-    sort_by: Literal["language", "created_at"] | None = None,
+    sort_by: Literal[
+        "name", "language", "deploy_type", "project_type", "host_count", "business_line",
+        "system_name", "service_level", "ops_owner", "dev_owner", "service_port",
+        "cpu_quota", "mem_quota", "description", "created_at",
+    ] | None = None,
     sort_order: Literal["asc", "desc"] | None = None,
 ) -> dict:
     """分页查应用；items 含关联主机数与 IP 清单。"""
@@ -313,11 +317,12 @@ async def get_app(
     session: DbSession,
     _: User = Depends(require_perm("cmdb:read")),
 ) -> dict:
-    """详情 + 关联主机列表。"""
+    """详情 + 关联主机及配置文件元信息；均以 cmdb:read 授权。"""
     app = await cmdb_service.get_app_or_404(session, app_id)
     hosts = await cmdb_service.get_app_hosts(session, app_id)
     data = _app_brief(app, _hosts_stats(hosts))
     data["hosts"] = [_host_brief(h) for h in hosts]
+    data["config_files"] = await cmdb_service.get_app_config_files(session, app_id)
     return ok(data)
 
 

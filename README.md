@@ -74,6 +74,8 @@ docker compose up -d
 
 ## 目录
 
+应用配置通过独立主菜单维护生产配置文件，支持 Apollo、Nacos、Consul 的 HTTP 接入、版本审批、手动同步及漂移处理。配置文件与 CMDB 应用可多对多关联；仅删除本地归档记录，不删除远端配置。平台真实版本联调状态见[兼容性记录](docs/application-configuration-provider-compatibility.md)。
+
 ```text
 backend/  FastAPI API、数据库模型、迁移和 Worker
 frontend/ Vue 3 单页应用，构建后由 Nginx 提供静态资源

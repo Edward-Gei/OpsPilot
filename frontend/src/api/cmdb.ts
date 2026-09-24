@@ -55,9 +55,20 @@ export interface HostDetail extends HostItem {
   apps: AppItem[]
 }
 
-/** 应用详情：附关联主机清单 */
+export interface AppConfigFile {
+  id: number
+  name: string
+  platform_instance_name: string
+  provider: string
+  locator: Record<string, string>
+  status: string
+  drift_status: string
+}
+
+/** 应用详情：附关联主机及配置文件元信息，不包含配置正文 */
 export interface AppDetail extends AppItem {
   hosts: HostItem[]
+  config_files: AppConfigFile[]
 }
 
 export interface HostQuery {
@@ -169,7 +180,9 @@ export interface AppQuery {
   project_type?: AppProjectType
   business_line?: AppBusinessLine
   service_level?: AppServiceLevel
-  sort_by?: 'language' | 'created_at'
+  sort_by?: 'name' | 'language' | 'deploy_type' | 'project_type' | 'host_count' | 'business_line'
+    | 'system_name' | 'service_level' | 'ops_owner' | 'dev_owner' | 'service_port'
+    | 'cpu_quota' | 'mem_quota' | 'description' | 'created_at'
   sort_order?: 'asc' | 'desc'
 }
 

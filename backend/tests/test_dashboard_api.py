@@ -77,11 +77,11 @@ class TestSummary:
         assert data["audit_today"] >= 1  # 种子 1 条 + 本次登录审计
 
     async def test_ops_sections_trimmed(self, client, db_factory, seed):
-        """ops 无 ticket:approve / audit:read → 对应段为 null，其余段有值。"""
+        """ops 无 ticket:approve 时仍显示配置审批待办数。"""
         await _seed_biz(db_factory, seed)
         headers = auth_header(await login_for_tokens(client, "ops1"))
         data = (await client.get("/api/v1/dashboard/summary", headers=headers)).json()["data"]
-        assert data["todo_total"] is None and data["audit_today"] is None
+        assert data["todo_total"] == 0 and data["audit_today"] is None
         assert data["cmdb"]["host_total"] == 3
         assert data["ticket"]["status_dist"]["success"] == 1
         assert data["execution"]["active"]["running"] == 1

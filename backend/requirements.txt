@@ -36,3 +36,4 @@ apscheduler==3.10.4                # Worker 内嵌定时器：audit_log 分区�
 boto3==1.35.99
 tencentcloud-sdk-python==3.0.1210
 google-cloud-dns==0.35.0
+PyYAML==6.0.2

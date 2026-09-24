@@ -91,12 +91,14 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/cmdb/apps` | `cmdb:read` | 应用分页；关键词匹配应用名、所属系统、运维负责人和开发负责人，并支持部署方式、项目类型、所属业务线和服务级别筛选 |
+| GET | `/cmdb/apps` | `cmdb:read` | 应用分页；关键词匹配应用名、所属系统、运维负责人、开发负责人和服务端口，并支持部署方式、项目类型、所属业务线和服务级别筛选及列排序 |
 | POST | `/cmdb/apps` | `cmdb:write` | 创建应用和主机关联 |
-| GET | `/cmdb/apps/{id}` | `cmdb:read` | 应用详情 |
+| GET | `/cmdb/apps/{id}` | `cmdb:read` | 应用详情，含关联主机与配置文件元信息（名称、平台、定位和状态），不含配置正文；无需 `config:read` |
 | PUT | `/cmdb/apps/{id}` | `cmdb:write` | 编辑应用和主机关联 |
 | DELETE | `/cmdb/apps/{id}` | `cmdb:delete` | 删除应用 |
 | GET | `/cmdb/apps/export` | `cmdb:read` | 按当前筛选导出完整用户可见应用台账 |
+
+应用列表的 `sort_by` 可取 `name`、`language`、`deploy_type`、`project_type`、`host_count`、`business_line`、`system_name`、`service_level`、`ops_owner`、`dev_owner`、`service_port`、`cpu_quota`、`mem_quota`、`description`、`created_at`；`sort_order` 为 `asc` 或 `desc`。排序先于分页，关联主机数按数值排序，服务端口和配额作为文本排序；未指定时按应用 ID 倒序。列表与导出共用关键词匹配规则。
 
 ## 5. 凭据和作业主机
 
@@ -268,6 +270,7 @@
 user:read user:write user:mfa role:read role:write
 cmdb:read cmdb:write cmdb:delete cmdb:import
 domain:read domain:write domain:delete
+config:read config:write config:delete config:instance
 credential:read credential:write credential:delete
 secret:read secret:write secret:delete
 template:read template:write template:delete
@@ -277,3 +280,32 @@ execution:read execution:control execution:force_control
 audit:read audit:export
 notify:read notify:write notify:test system:config
 ```
+
+## 13. 应用配置 `/application-configs`
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET/POST | `/platform-instances` | `config:read` / `config:instance` | 实例列表、创建；凭据只返回 ID，不返回密钥 |
+| PUT/DELETE | `/platform-instances/{id}` | `config:instance` | 修改实例；仅已停用且无引用可删除 |
+| POST | `/platform-instances/{id}/probe` | `config:instance` | 连通性测试 |
+| GET | `/platform-instances/{id}/namespaces` | `config:write` | 读取 Nacos 命名空间选项，仅返回名称与 ID；默认 `public` 的 ID 为空字符串 |
+| GET | `/compatible-credentials` | `config:instance` | 按平台筛选凭据名称和认证类型 |
+| GET | `/approval-roles`、`/cmdb-applications` | `config:read` | 角色与关联应用选项，不授予审批权 |
+| GET | `/approval-todo` | 已登录用户 | 分页返回当前审批角色成员可处理的候选版本；admin 可见所有待审批候选，无 `ticket:approve` 或 `config:read` 要求 |
+| GET | `/approval-todo/{version_id}/content` | 当前审批角色成员或 admin | 只读预览候选正文；按 `secret:read` 脱敏，无权或候选已处理时返回 404 |
+| POST | `/discover`、`/import-tasks` | `config:write` | 发现远端资源、创建多选接入任务；任务返回 `202` |
+| GET | `/import-tasks` | `config:read` | 最近 20 项接入任务及逐项结果 |
+| GET/POST | `/files` | `config:read` / `config:write` | 分页列表、手工新建本地配置与草稿 |
+| GET/PUT | `/files/{id}` | `config:read` / `config:write` | 详情、名称、审批角色与 CMDB 多对多关联 |
+| POST/DELETE | `/files/{id}/archive`、`/files/{id}` | `config:delete` | 先归档，再删除本地记录；永不删除远端 |
+| GET/PUT/DELETE | `/files/{id}/draft` | `config:read` / `config:write` | 读取、保存、丢弃草稿 |
+| GET | `/files/{id}/versions`、`/files/{id}/versions/{version_id}/content` | `config:read` | 版本与按权限脱敏的正文 |
+| POST | `/files/{id}/candidates` | `config:write` | 冻结草稿并提交审批 |
+| POST | `/files/{id}/candidates/{version_id}/approve`、`/reject` | 当前审批角色成员或 admin | 批准时同事务创建远端发布任务，驳回则不发布；提交人可自审，无 `config:approve` 或 `config:write` 要求 |
+| POST | `/files/{id}/sync`、`/files/{id}/versions/{version_id}/publish` | `config:write` | 创建手动同步任务；指定版本发布用于失败后人工重试，漂移弹窗重新发布时请求体传 `confirmed_snapshot_id`，返回 `202` |
+| GET/POST | `/files/{id}/drift`、`/files/{id}/drift/import` | `config:read` / `config:write` | 双栏脱敏快照包含 `latest_snapshot_id`；导入仅创建内部正式版本，不写外部 |
+| GET | `/tasks/{id}`、`/files/{id}/tasks` | `config:read` | 查询任务逐项进度、单文件最近 50 项任务摘要 |
+
+文件格式限定 `properties`、YAML、JSON、TEXT 和 Consul KV；仅生产环境。正文响应基于 `secret:read` 脱敏，敏感键、服务账号 JSON 字符串和带签名/令牌参数的 URL 用占位符隐藏；无密钥权限的编辑只能保留这些既有值。任务错误和审计不包含正文与凭据。
+审批通过仅表示发布任务已入队；Worker 写入并回读一致后版本才变为正式版本。远端暂不可用时首次执行后最多自动重试 3 次（间隔 2、4、8 秒）；写入结果不确定时只重试回读，不重复写入，普通人工重试也继承这一限制。明确确认漂移覆盖时，`confirmed_snapshot_id` 必须是当前文件最近一次同步的漂移/远端缺失快照，任务将它持久化为本次写入基线；Worker 执行时再次核对文件仍处于该漂移状态，远端正文在确认后再次变化也停止写入。此确认是新的人工发布操作，不沿用旧任务的不确定写入标记。远端漂移或确定性拒绝不自动重试，最终失败的已批准版本可人工重试。过期任务或丧失配置文件操作锁的 Worker 不得继续写入。
+工作台 `/dashboard/summary` 的 `todo_total` 为工单审批与配置审批待办之和；无工单审批权限的用户只计算其配置待办。前端“待办审批”分为工单审批与配置审批页签；配置文件详情只展示版本记录，审批统一在待办页处理。
