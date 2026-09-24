@@ -1,4 +1,4 @@
-"""全局搜索服务：聚合主机/应用/工单/模板四段查询（SEARCH-02/03）。
+"""全局搜索服务：聚合主机/应用/工单/模板/Zone 五段查询（SEARCH-02/03）。
 
 登录即可调用，不挂独立权限点；按调用者权限集合决定各段返回与否，
 无权段为 None（与 dashboard_service.get_summary 同惯例）。
@@ -6,7 +6,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.auth import User
-from app.services import cmdb_service, rbac_service, template_service, ticket_service
+from app.services import cmdb_service, domain_service, rbac_service, template_service, ticket_service
 
 # 每段最多返回条数（顶栏下拉面板每组 5 条 + 总数）
 SEGMENT_LIMIT = 5
@@ -15,7 +15,13 @@ SEGMENT_LIMIT = 5
 async def search(session: AsyncSession, user: User, keyword: str) -> dict:
     """聚合搜索：复用各模块现有列表查询（keyword + page_size=5），无权段为 None。"""
     perms = await rbac_service.get_user_perms(session, user.id)
-    data: dict = {"hosts": None, "apps": None, "tickets": None, "templates": None}
+    data: dict = {
+        "hosts": None,
+        "apps": None,
+        "tickets": None,
+        "templates": None,
+        "domains": None,
+    }
 
     if "cmdb:read" in perms:
         hosts, host_total = await cmdb_service.list_hosts(
@@ -49,6 +55,21 @@ async def search(session: AsyncSession, user: User, keyword: str) -> dict:
         data["templates"] = {
             "items": [{"id": t.id, "name": t.name, "type": t.type} for t in tpls],
             "total": tpl_total,
+        }
+
+    if "domain:read" in perms:
+        zones, zone_total = await domain_service.search_zones(session, keyword, SEGMENT_LIMIT)
+        data["domains"] = {
+            "items": [
+                {
+                    "id": zone.id,
+                    "zone_name": zone.zone_name,
+                    "provider": zone.provider,
+                    "description": zone.description,
+                }
+                for zone in zones
+            ],
+            "total": zone_total,
         }
 
     return data

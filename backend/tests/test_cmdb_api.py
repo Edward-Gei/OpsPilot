@@ -462,6 +462,26 @@ class TestAppCrud:
         )
         assert [item["id"] for item in filtered.json()["data"]["items"]] == [app_id]
 
+    async def test_app_keyword_matches_system_and_owners(self, client):
+        """关键词可匹配所属系统、运维负责人和开发负责人。"""
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        fields = (
+            ("system_name", "搜索所属系统", "系统搜索应用"),
+            ("ops_owner", "搜索运维负责人", "运维搜索应用"),
+            ("dev_owner", "搜索开发负责人", "开发搜索应用"),
+        )
+        for field, keyword, name in fields:
+            created = await client.post(
+                "/api/v1/cmdb/apps",
+                json={"name": name, "deploy_type": "shell", field: keyword, "host_ids": []},
+                headers=headers,
+            )
+            app_id = created.json()["data"]["id"]
+            result = await client.get(
+                "/api/v1/cmdb/apps", params={"keyword": keyword}, headers=headers,
+            )
+            assert [item["id"] for item in result.json()["data"]["items"]] == [app_id]
+
     async def test_app_business_metadata_rejects_invalid_enums(self, client):
         """业务线和服务级别拒绝未定义的枚举值。"""
         headers = auth_header(await login_for_tokens(client, "ops1"))

@@ -60,6 +60,34 @@ class CredentialAuthType(str, Enum):
     SECRET_FILE = "secret_file"
 
 
+class DomainProvider(str, Enum):
+    TENCENT_DNSPOD = "tencent_dnspod"
+    AWS_ROUTE53 = "aws_route53"
+    GOOGLE_CLOUD_DNS = "google_cloud_dns"
+
+
+class DnsSyncStatus(str, Enum):
+    SUCCESS = "success"
+    FAILED = "failed"
+    SYNCING = "syncing"
+
+
+class DnsBindTaskStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCESS = "success"
+    PARTIAL_FAILED = "partial_failed"
+    FAILED = "failed"
+
+
+class DnsBindTaskItemStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCESS = "success"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
 class TicketStatus(str, Enum):
     """工单 9 态状态机（合法迁移见 03-数据库设计 §5.1；无草稿态，提交即生效）。
 
@@ -140,6 +168,9 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("cmdb:write", "CMDB管理", "cmdb"),
     ("cmdb:delete", "CMDB删除", "cmdb"),
     ("cmdb:import", "CMDB导入", "cmdb"),
+    ("domain:read", "域名管理查看", "domain"),
+    ("domain:write", "域名管理操作", "domain"),
+    ("domain:delete", "域名管理删除", "domain"),
     ("credential:read", "凭据查看", "job"),
     ("credential:write", "凭据管理", "job"),
     ("credential:delete", "凭据删除", "job"),

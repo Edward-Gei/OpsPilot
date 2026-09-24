@@ -18,7 +18,7 @@ async def global_search(
     user: CurrentUser,
     keyword: str = Query("", description="搜索关键词，不可为空"),
 ) -> dict:
-    """主机/应用/工单/模板四段聚合；每段限 5 条 + total，无权段为 null。"""
+    """主机/应用/工单/模板/Zone 五段聚合；每段限 5 条 + total，无权段为 null。"""
     keyword = keyword.strip()
     if not keyword:
         raise Errors.param("keyword 不能为空")

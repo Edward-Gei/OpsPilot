@@ -5,7 +5,7 @@
     与 CMDB 主机已解耦，无工单侧删除保护
     删应用：V2 模型中工单不再引用应用，无工单侧删除保护
 """
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.response import Errors
@@ -211,10 +211,15 @@ def _app_filter_query(
     business_line: str | None = None,
     service_level: str | None = None,
 ):
-    """应用列表与导出共用筛选语义。"""
+    """应用列表与导出共用筛选语义；关键词匹配名称、系统和负责人。"""
     query = select(Application)
     if keyword:
-        query = query.where(Application.name.like(f"%{keyword}%"))
+        query = query.where(or_(
+            Application.name.like(f"%{keyword}%"),
+            Application.system_name.like(f"%{keyword}%"),
+            Application.ops_owner.like(f"%{keyword}%"),
+            Application.dev_owner.like(f"%{keyword}%"),
+        ))
     if language:
         query = query.where(Application.language == language)
     if deploy_type:

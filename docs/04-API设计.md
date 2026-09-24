@@ -91,7 +91,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/cmdb/apps` | `cmdb:read` | 应用分页、部署方式、项目类型、所属业务线和服务级别筛选 |
+| GET | `/cmdb/apps` | `cmdb:read` | 应用分页；关键词匹配应用名、所属系统、运维负责人和开发负责人，并支持部署方式、项目类型、所属业务线和服务级别筛选 |
 | POST | `/cmdb/apps` | `cmdb:write` | 创建应用和主机关联 |
 | GET | `/cmdb/apps/{id}` | `cmdb:read` | 应用详情 |
 | PUT | `/cmdb/apps/{id}` | `cmdb:write` | 编辑应用和主机关联 |
@@ -121,9 +121,52 @@
 | POST | `/job-hosts/{id}/test` | `job_host:write` | 执行 `echo ok` 连通性测试 |
 | PUT | `/job-hosts/{id}/status` | `job_host:write` | 启用或停用 |
 
-## 6. 模板和工单
+## 6. 域名管理
 
-### 6.1 `/process-templates`
+所有域名接口的前缀为 `/domains`。Zone 与记录读取只查询本地快照，不会隐式访问服务商；同步和记录变更才访问服务商。认证字段、服务商定位元数据和记录键不会出现在响应中。
+
+### 6.1 凭据发现、Zone 绑定与台账
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/domains/credentials?provider=` | `domain:write` | 返回指定服务商兼容凭据的 ID、名称、认证类型和描述，不返回认证明文 |
+| POST | `/domains/zones/discover` | `domain:write` | 使用 `{provider, credential_id}` 发现可访问的公网 Zone |
+| POST | `/domains/zones` | `domain:write` | 创建 Zone 绑定任务并返回 `202`；请求含 `provider`、`credential_id` 和 `selections`，每个选择项可携带已发现的 `zone_name` |
+| GET | `/domains/zone-bind-tasks/{task_id}` | `domain:read` | 查询绑定任务及每个 Zone 的处理进度与结果 |
+| GET | `/domains/zones` | `domain:read` | 分页读取 Zone 台账，支持 `keyword`、`provider`、`sync_status` 筛选，以及 `sort_by`、`sort_order` 排序 |
+| GET | `/domains/zones/{zone_id}` | `domain:read` | 查询单个 Zone 快照详情 |
+| PUT | `/domains/zones/{zone_id}` | `domain:write` | 仅更新本地 `description` |
+| DELETE | `/domains/zones/{zone_id}` | `domain:delete` | 解除本地绑定并删除本地记录快照，不删除远端 Zone 或记录 |
+| POST | `/domains/zones/{zone_id}/sync` | `domain:write` | 手动刷新单个 Zone 的本地记录快照 |
+
+`sort_by` 可取 `zone_name`、`provider`、`credential_name`、`description`、`record_count`、`sync_status`、`last_synced_at` 或 `last_sync_error`；`sort_order` 可取 `asc` 或 `desc`。未同时提供时按 Zone ID 倒序。
+
+服务商取值为 `tencent_dnspod`、`aws_route53`、`google_cloud_dns`。Route 53 和 DNSPod 复用 `username_password` 凭据类型，Google Cloud DNS 复用 `secret_file` 凭据类型；服务端会拒绝服务商与凭据类型不匹配的组合。绑定请求只接受前一发现结果中的公网 Zone。创建任务后由 Worker 串行处理，每个 Zone 的已有记录快照和任务计数逐项持久化；首次绑定失败时会保留 `failed` 状态、记录数为零的 Zone 台账和错误摘要，已有快照保持不变。任务状态为 `queued`、`running`、`success`、`partial_failed` 或 `failed`，子项状态为 `pending`、`running`、`success`、`skipped` 或 `failed`。
+
+### 6.2 DNS 记录集
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/domains/zones/{zone_id}/records` | `domain:read` | 分页读取本地记录快照，支持 `keyword`、`record_type`、`read_only` 筛选 |
+| POST | `/domains/zones/{zone_id}/records` | `domain:write` | 新增简单记录集：`owner_name`、`record_type`、`ttl`、`values` |
+| PUT | `/domains/zones/{zone_id}/records/{record_id}` | `domain:write` | 更新已有记录集的 `ttl` 和 `values`，名称与类型不可修改 |
+| DELETE | `/domains/zones/{zone_id}/records/{record_id}` | `domain:delete` | 删除可编辑记录集 |
+
+可写类型为 `A`、`AAAA`、`CNAME`、`MX`、`TXT`、`CAA`、`SRV`，`ttl` 必须介于 300 与 86400。SOA、NS 和高级路由记录返回 `read_only=true` 与原因，不能更新或删除。更新、删除前服务端核对远端记录和快照，远端已漂移时返回 `40901`；DNS 服务商暂时不可用时返回 `50201`。若写入结果未知，Zone 快照会标为失败，用户需手动同步确认。前端在所有记录写入前展示变更前后预览并要求确认。
+
+### 6.3 Excel 导入导出
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/domains/zones/import-template` | `domain:write` | 下载“Zone 导入”工作表模板 |
+| POST | `/domains/zones/import` | `domain:write` | 上传 `.xlsx`，逐行返回成功数、跳过行和失败行 |
+| GET | `/domains/zones/export` | `domain:read` | 按 Zone 列表筛选导出“Zone 台账”和“记录集”两个工作表 |
+
+导入列为服务商、凭据名称、Zone 名称、远端 Zone ID 和描述；最大 5000 行。导出可包含凭据名称和 DNS 记录值，但不会包含凭据认证字段。
+
+## 7. 模板和工单
+
+### 7.1 `/process-templates`
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -134,7 +177,7 @@
 | PUT | `/process-templates/{id}/status` | `template:write` | 启停 |
 | DELETE | `/process-templates/{id}` | `template:delete` | 被工单模板引用时拒绝 |
 
-### 6.2 `/templates`
+### 7.2 `/templates`
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -145,7 +188,7 @@
 | PUT | `/templates/{id}/status` | `template:write` | 启停 |
 | DELETE | `/templates/{id}` | `template:delete` | 有进行中工单时拒绝 |
 
-### 6.3 `/tickets`
+### 7.3 `/tickets`
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -166,7 +209,7 @@
 
 工单服务校验模板启用、可见角色、流程启用、参数定义、预生成结果和模板并发控制；提交后只读快照。开启同模板并发控制时，首个执行从 `queued` 起持有模板直到成功、失败、中止、撤回、驳回或崩溃恢复归档；关闭开关不影响已持有者，但后续提交不再受该模板互斥限制。`GET /tickets` 中的 `execution` 是每张工单最新执行实例的 `{id,status,total_steps,started_at,finished_at}` 摘要；`has_execution=true` 仅返回已创建执行实例的工单，`execution_active=true` 匹配最新执行状态为 `queued`、`running` 或 `paused` 的工单。
 
-## 7. 执行和实时日志
+## 8. 执行和实时日志
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -179,7 +222,7 @@
 
 前端工单中心是唯一的列表入口；不提供 `/executions` 列表路由。以上执行接口和 `/executions/{id}` 执行详情页继续用于步骤、日志和控制。
 
-## 8. 通知
+## 9. 通知
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -201,14 +244,14 @@
 | PUT | `/notifications/{id}/read` | 标记本人单条已读 |
 | PUT | `/notifications/read-all` | 本人全部已读 |
 
-## 9. 审计
+## 10. 审计
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/audit/logs` | `audit:read` | 时间、操作人、模块、动作、结果和对象关键字组合筛选 |
 | GET | `/audit/logs/export` | `audit:export` | 当前筛选导出 CSV 或 XLSX，最多 100000 行；导出行为写审计 |
 
-## 10. 系统、工作台和搜索
+## 11. 系统、工作台和搜索
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -217,13 +260,14 @@
 | GET | `/healthz` | 公开 | DB/Redis 健康检查 |
 | GET | `/dashboard/summary` | 登录 | 按权限返回概览各段 |
 | GET | `/dashboard/ticket-trend` | `ticket:read` | 日/周/月/年提单趋势 |
-| GET | `/search?keyword=` | 登录 | 按权限裁剪的主机、应用、工单和模板聚合搜索 |
+| GET | `/search?keyword=` | 登录 | 按权限裁剪的主机、应用、Zone、工单和模板聚合搜索；Zone 仅搜索名称和描述 |
 
-## 11. 权限点全集
+## 12. 权限点全集
 
 ```text
 user:read user:write user:mfa role:read role:write
 cmdb:read cmdb:write cmdb:delete cmdb:import
+domain:read domain:write domain:delete
 credential:read credential:write credential:delete
 secret:read secret:write secret:delete
 template:read template:write template:delete

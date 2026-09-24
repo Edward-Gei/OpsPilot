@@ -14,6 +14,7 @@ const antdThemeConfig = computed(() => ({
   token: {
     colorPrimary: themeStore.mode === 'dark' ? '#3b82f6' : '#2563eb',
     borderRadius: 10,
+    fontFamily: "'OpsPilot Varela Round', 'OpsPilot Noto Sans SC', sans-serif",
     ...(themeStore.mode === 'dark'
       ? { colorBgContainer: '#111a2e', colorBgElevated: '#16213a' }
       : {}),

@@ -58,7 +58,7 @@ html[data-theme='light'] {
 body {
   background: var(--bg-layout);
   color: var(--text-1);
-  font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  font-family: 'OpsPilot Varela Round', 'OpsPilot Noto Sans SC', sans-serif;
   transition: background-color 0.2s ease;
 }
 

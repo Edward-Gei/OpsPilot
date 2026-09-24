@@ -6,7 +6,7 @@
     3. 崩溃恢复：recover_db_executions（DB running/paused → interrupted）
        + reclaim_pending_messages（PEL 重认领/丢弃），返回的可重试消息按新消息处理
     4. 消费循环：xreadgroup → 逐条**立即 XACK**（认领即 ACK，已确认决策三）
-       → create_task(run_execution) 放入任务集合并发执行
+       → create_task(run_execution) 放入任务集合并发执行；并行轮询 DNS Zone 绑定任务
 
 认领即 ACK 的取舍：XACK 后、execution 置 running 前存在极小崩溃窗口，此时
 消息已不在 PEL 而 DB 仍是 queued——该窗口由人工排查兜底（已声明接受）；
@@ -28,8 +28,10 @@ from app.audit.partition import run_maintenance
 from app.audit.writer import audit_writer
 from app.core import redis as redis_mod
 from app.core.config import settings
+from app.core.database import async_session_factory
 from app.engine import pipeline, recovery
 from app.notify.dispatcher import notify_dispatcher
+from app.services import domain_bind_task_service
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("opspilot.worker")
@@ -58,6 +60,33 @@ def _spawn_execution(execution_id: int) -> None:
     task = asyncio.get_running_loop().create_task(pipeline.run_execution(execution_id))
     _running_tasks.add(task)
     task.add_done_callback(_running_tasks.discard)
+
+
+async def _process_next_zone_bind_task() -> bool:
+    """使用独立会话处理一个 Zone 绑定任务，避免复用执行引擎会话。"""
+    async with async_session_factory() as session:
+        return await domain_bind_task_service.process_next_zone_bind_task(session)
+
+
+async def consume_zone_bind_tasks(stop_event: asyncio.Event) -> None:
+    """串行认领 Zone 绑定任务，服务商调用等待时不阻塞执行队列消费。"""
+    logger.info("DNS Zone 绑定任务轮询已启动")
+    while not stop_event.is_set():
+        try:
+            if await _process_next_zone_bind_task():
+                continue
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                pass
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 单个任务异常不能终止后续任务处理
+            logger.exception("DNS Zone 绑定任务处理异常，2 秒后重试")
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                pass
 
 
 async def _handle_message(msg_id: str, fields: dict) -> None:
@@ -126,10 +155,12 @@ async def main() -> None:
             # Windows 本地调试无信号处理器支持，Ctrl+C 走 KeyboardInterrupt
             pass
     await startup()
-    task = asyncio.create_task(consume_loop(stop_event))
+    execution_consumer = asyncio.create_task(consume_loop(stop_event))
+    zone_bind_consumer = asyncio.create_task(consume_zone_bind_tasks(stop_event))
     await stop_event.wait()
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
+    execution_consumer.cancel()
+    zone_bind_consumer.cancel()
+    await asyncio.gather(execution_consumer, zone_bind_consumer, return_exceptions=True)
     if _running_tasks:
         # 不等待在跑执行（宽限期不足），由下次启动的崩溃恢复归 system_crash
         logger.warning("退出时仍有 %d 个执行在跑，将由重启后的崩溃恢复归档", len(_running_tasks))

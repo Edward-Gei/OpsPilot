@@ -42,6 +42,7 @@ class Errors:
     BIZ_REJECTED = 42201     # 业务规则拒绝（如删除保护）
     LOCKED = 42901           # 账号锁定/频率限制
     INTERNAL = 50001         # 服务内部错误
+    UPSTREAM = 50201         # 上游服务错误
 
     @staticmethod
     def param(msg: str) -> BizError:
@@ -58,6 +59,10 @@ class Errors:
     @staticmethod
     def rejected(msg: str) -> BizError:
         return BizError(Errors.BIZ_REJECTED, msg, 422)
+
+    @staticmethod
+    def upstream(message: str) -> BizError:
+        return BizError(Errors.UPSTREAM, message, 502)
 
 
 def ok(data: Any = None, message: str = "ok") -> dict:

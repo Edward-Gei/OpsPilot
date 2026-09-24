@@ -31,3 +31,8 @@ aiosmtplib==3.0.2                  # 异步 SMTP 发送（Email 渠道）；Webh
 
 # ---- M7 安全审计新增 ----
 apscheduler==3.10.4                # Worker 内嵌定时器：audit_log 分区滚动预建/过期清理
+
+# ---- 域名管理 DNS 服务商适配 ----
+boto3==1.35.99
+tencentcloud-sdk-python==3.0.1210
+google-cloud-dns==0.35.0
