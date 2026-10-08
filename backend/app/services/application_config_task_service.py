@@ -212,10 +212,13 @@ async def process_next_config_task(session: AsyncSession) -> bool:
 
     task, items = await get_config_task(session, task_id)
     if task.kind == ConfigTaskKind.IMPORT.value:
-        for item in items:
-            if item.status != ConfigTaskItemStatus.PENDING.value:
-                continue
-            await _process_import_item(session, task, item, token)
+        # 单项回滚会使整个会话中的对象过期；保存 ID，下一项通过异步查询重新加载。
+        item_ids = [item.id for item in items if item.status == ConfigTaskItemStatus.PENDING.value]
+        for item_id in item_ids:
+            task = await session.get(ConfigTask, task_id)
+            item = await session.get(ConfigTaskItem, item_id)
+            if not await _process_import_item(session, task, item, token):
+                return True
         await _finish_import_task(session, task_id, token)
     else:
         await _process_single_task(session, task_id, token)
@@ -227,7 +230,8 @@ async def _process_import_item(
     task: ConfigTask,
     item: ConfigTaskItem,
     token: str,
-) -> None:
+) -> bool:
+    task_id = task.id
     item_id = item.id
     item.status = ConfigTaskItemStatus.RUNNING.value
     item.lease_token = token
@@ -289,9 +293,9 @@ async def _process_import_item(
             item.status = ConfigTaskItemStatus.SUCCESS.value
         item.lease_token = None
         item.finished_at = datetime.now()
-        await session.commit()
     except _LeaseLost:
         await session.rollback()
+        return False
     except Exception as exc:
         await session.rollback()
         item = await session.get(ConfigTaskItem, item_id)
@@ -299,7 +303,22 @@ async def _process_import_item(
         item.reason = _safe_error(exc)
         item.lease_token = None
         item.finished_at = datetime.now()
-        await session.commit()
+    return await _refresh_import_progress(session, task_id, token)
+
+
+async def _refresh_import_progress(session: AsyncSession, task_id: int, token: str) -> bool:
+    """单项结果与汇总同事务保存；重新汇总避免恢复任务时重复累计。"""
+    task, items = await get_config_task(session, task_id)
+    try:
+        await _assert_task_lease(session, task, token)
+    except _LeaseLost:
+        await session.rollback()
+        return False
+    task.success_count = sum(item.status == ConfigTaskItemStatus.SUCCESS.value for item in items)
+    task.skipped_count = sum(item.status == ConfigTaskItemStatus.SKIPPED.value for item in items)
+    task.failed_count = sum(item.status == ConfigTaskItemStatus.FAILED.value for item in items)
+    await session.commit()
+    return True
 
 
 async def _finish_import_task(session: AsyncSession, task_id: int, token: str) -> None:
