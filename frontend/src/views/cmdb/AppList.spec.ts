@@ -87,11 +87,12 @@ it('主机详情链接按 ID 直达，不依赖当前列表记录', async () => 
   api.routeQuery = { id: '21' }
   api.listHosts.mockResolvedValue({ items: [], total: 0 })
   api.getHost.mockResolvedValue({ id: 21, hostname: 'demo-host', ip: '192.0.2.1', project: 'mitrade',
-    environment: 'prod', status: 'online', ssh_port: 22, apps: [], created_at: null })
+    environment: 'prod', status: 'online', ssh_port: 22, apps: [app], created_at: null })
   const wrapper = mount(HostList, { attachTo: document.body })
   await flushPromises()
   expect(document.querySelector('.ant-drawer-title')?.textContent).toBe('demo-host')
   expect(document.body.textContent).toContain('192.0.2.1')
+  expect(document.querySelector('a[href="/cmdb/apps?id=7"]')?.textContent).toBe('订单应用')
   wrapper.unmount()
 })
 

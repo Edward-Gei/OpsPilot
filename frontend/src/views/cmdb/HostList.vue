@@ -686,7 +686,7 @@ onMounted(() => {
             v-else
             bordered
             :columns="[
-              { title: '应用名', dataIndex: 'name' },
+              { title: '应用名', dataIndex: 'name', key: 'name' },
               { title: '语言', dataIndex: 'language', width: 90 },
               { title: '部署方式', dataIndex: 'deploy_type', width: 90 },
             ]"
@@ -694,7 +694,11 @@ onMounted(() => {
             row-key="id"
             size="small"
             :pagination="false"
-          />
+          >
+            <template #bodyCell="{ column, record }">
+              <a v-if="column.key === 'name'" :href="`/cmdb/apps?id=${record.id}`">{{ record.name }}</a>
+            </template>
+          </a-table>
         </template>
       </a-spin>
     </a-drawer>

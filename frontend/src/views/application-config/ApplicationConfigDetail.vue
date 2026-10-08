@@ -15,6 +15,7 @@ const fileId = computed(() => Number(route.params.id))
 const canWrite = computed(() => user.hasPerm('config:write'))
 const canEdit = computed(() => route.name === 'application-config-edit' && canWrite.value)
 const canDelete = computed(() => user.hasPerm('config:delete'))
+const canReadCmdb = computed(() => user.hasPerm('cmdb:read'))
 const canReadSecret = computed(() => user.hasPerm('secret:read'))
 const file = ref<api.ConfigFileBrief | null>(null)
 const versions = ref<api.ConfigVersion[]>([])
@@ -201,7 +202,10 @@ watch(canEdit, (editing) => { if (!editing) { draftLoaded.value = false; metadat
       <a-descriptions-item label="最近同步">{{ file.last_synced_at ? new Date(file.last_synced_at).toLocaleString() : '—' }}</a-descriptions-item>
       <a-descriptions-item label="关联应用">
         <a-space v-if="file.application_ids.length" wrap>
-          <a-tag v-for="id in file.application_ids" :key="id" class="related-app-tag">{{ applications.find((item) => item.id === id)?.name || `应用 #${id}` }}</a-tag>
+          <a-tag v-for="id in file.application_ids" :key="id" class="related-app-tag">
+            <a v-if="canReadCmdb" :href="`/cmdb/apps?id=${id}`">{{ applications.find((item) => item.id === id)?.name || `应用 #${id}` }}</a>
+            <span v-else>{{ applications.find((item) => item.id === id)?.name || `应用 #${id}` }}</span>
+          </a-tag>
         </a-space>
         <span v-else>暂无关联应用</span>
       </a-descriptions-item>

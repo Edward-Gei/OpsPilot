@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 流程模板列表：集中维护步骤、执行策略和步骤前审批，供多个工单模板复用。
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
 import { CodeOutlined, CopyOutlined, DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons-vue'
 import * as api from '@/api/job'
@@ -10,6 +11,7 @@ import { useUserStore } from '@/stores/user'
 import { listRoleOptions } from '@/api/system'
 
 const userStore = useUserStore()
+const route = useRoute()
 const canWrite = userStore.hasPerm('template:write')
 const canDelete = userStore.hasPerm('template:delete')
 
@@ -96,7 +98,7 @@ function confirmCopy(): void {
 }
 async function toggle(row: api.ProcessTemplateItem) { statusLoading.value = row.id; try { await api.setProcessTemplateStatus(row.id, row.status === 'enabled' ? 'disabled' : 'enabled'); await load() } finally { statusLoading.value = null } }
 async function remove(row: api.ProcessTemplateItem) { await api.deleteProcessTemplate(row.id); message.success('流程模板已删除'); await load() }
-async function openDetail(row: api.ProcessTemplateItem) { detail.value = null; detailOpen.value = true; detail.value = await api.getProcessTemplate(row.id) }
+async function openDetail(row: Pick<api.ProcessTemplateItem, 'id'>) { detail.value = null; detailOpen.value = true; detail.value = await api.getProcessTemplate(row.id) }
 /** 批量删除逐条调用现有接口，保留流程模板引用保护和明确的失败汇总。 */
 async function batchRemove(): Promise<void> {
   const ids = [...selectedKeys.value]
@@ -112,7 +114,12 @@ function confirmBatchRemove(): void {
   Modal.confirm({ title: '批量删除流程模板', content: `确认删除选中的 ${selectedKeys.value.length} 个模板吗？`, okText: '删除', okType: 'danger', cancelText: '取消', onOk: batchRemove })
 }
 const rowSelection = computed(() => ({ selectedRowKeys: selectedKeys.value, onChange: (keys: (string | number)[]) => (selectedKeys.value = keys as number[]) }))
-onMounted(load)
+onMounted(() => {
+  // 工单模板中的流程链接按 ID 直达只读详情，不依赖当前分页。
+  const qid = typeof route.query.id === 'string' ? Number(route.query.id) : NaN
+  if (Number.isSafeInteger(qid) && qid > 0) void openDetail({ id: qid }).catch(() => { detailOpen.value = false })
+  void load()
+})
 </script>
 
 <template>

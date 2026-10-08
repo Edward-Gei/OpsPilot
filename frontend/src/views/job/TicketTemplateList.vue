@@ -180,7 +180,7 @@ onMounted(load)
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'type'"><a-tag :color="typeText[record.type as api.TemplateType]?.color">{{ typeText[record.type as api.TemplateType]?.text || record.type }}</a-tag></template>
         <template v-else-if="column.key === 'host'">{{ hostMap[record.job_host_id] || `#${record.job_host_id}` }}</template>
-        <template v-else-if="column.key === 'process'"><a-tag color="cyan">{{ processMap[record.process_template_id] || `#${record.process_template_id}` }}</a-tag></template>
+        <template v-else-if="column.key === 'process'"><a-tag color="cyan"><a :href="`/job/templates/processes?id=${record.process_template_id}`">{{ processMap[record.process_template_id] || `#${record.process_template_id}` }}</a></a-tag></template>
         <template v-else-if="column.key === 'visible_roles'">
           <template v-if="record.visible_role_ids?.length">
             <a-tag v-for="roleId in record.visible_role_ids" :key="roleId" color="blue">{{ roleMap[roleId] || roleId }}</a-tag>
