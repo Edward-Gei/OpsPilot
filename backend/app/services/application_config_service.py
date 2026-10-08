@@ -237,11 +237,32 @@ async def list_config_files(
     page: int,
     page_size: int,
     keyword: str | None = None,
+    platform_instance_id: int | None = None,
+    status: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str = "desc",
 ) -> tuple[list[ConfigFile], int]:
     query = select(ConfigFile)
     if keyword:
         query = query.where(ConfigFile.name.like(f"%{keyword}%"))
+    if platform_instance_id is not None:
+        query = query.where(ConfigFile.platform_instance_id == platform_instance_id)
+    # 筛选沿用列表状态标签的优先级：归档、漂移异常、未发布、一致。
+    if status == "archived":
+        query = query.where(ConfigFile.status == "archived")
+    elif status:
+        query = query.where(ConfigFile.status == "active")
+        if status == "unpublished":
+            query = query.where(ConfigFile.drift_status == "clean", ConfigFile.current_version_id.is_(None))
+        elif status == "clean":
+            query = query.where(ConfigFile.drift_status == "clean", ConfigFile.current_version_id.is_not(None))
+        else:
+            query = query.where(ConfigFile.drift_status == status)
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
+    # 未同步记录始终置后，相同时间按 ID 排序，确保跨页顺序稳定。
+    if sort_by == "last_synced_at":
+        order = ConfigFile.last_synced_at.asc() if sort_order == "asc" else ConfigFile.last_synced_at.desc()
+        query = query.order_by(ConfigFile.last_synced_at.is_(None), order)
     rows = await session.execute(query.order_by(ConfigFile.id.desc()).offset((page - 1) * page_size).limit(page_size))
     return list(rows.scalars()), total
 

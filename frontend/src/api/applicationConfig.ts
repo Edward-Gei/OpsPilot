@@ -7,6 +7,7 @@ const prefix = '/application-configs'
 export type ConfigProvider = 'apollo' | 'nacos' | 'consul'
 export type ConfigFormat = 'properties' | 'yaml' | 'json' | 'text' | 'consul_kv'
 export type DriftStatus = 'clean' | 'drifted' | 'remote_missing' | 'sync_failed'
+export type ConfigListStatus = DriftStatus | 'unpublished' | 'archived'
 export type TaskStatus = 'queued' | 'running' | 'success' | 'partial_failed' | 'failed'
 
 export interface PlatformInstance {
@@ -145,7 +146,17 @@ export interface DriftView {
 export interface NamedOption { id: number; name: string }
 export interface CredentialOption extends NamedOption { auth_type: string }
 
-export function listConfigFiles(params: { page: number; page_size: number; keyword?: string }) {
+export interface ConfigFileQuery {
+  page: number
+  page_size: number
+  keyword?: string
+  platform_instance_id?: number
+  status?: ConfigListStatus
+  sort_by?: 'last_synced_at'
+  sort_order?: 'asc' | 'desc'
+}
+
+export function listConfigFiles(params: ConfigFileQuery) {
   return request<PageResult<ConfigFileBrief>>({ url: `${prefix}/files`, method: 'get', params })
 }
 

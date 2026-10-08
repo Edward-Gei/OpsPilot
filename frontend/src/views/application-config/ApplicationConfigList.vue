@@ -5,6 +5,7 @@ import { message } from 'ant-design-vue'
 import { CloudSyncOutlined, DeleteOutlined, EditOutlined, EyeOutlined, FileTextOutlined, PlusOutlined, SearchOutlined, SettingOutlined } from '@ant-design/icons-vue'
 import * as configApi from '@/api/applicationConfig'
 import { useUserStore } from '@/stores/user'
+import { makeResizable, onResizeColumn } from '@/utils/table'
 import NewConfigDrawer from './NewConfigDrawer.vue'
 import PlatformInstanceDrawer from './PlatformInstanceDrawer.vue'
 import DriftCompareDrawer from './DriftCompareDrawer.vue'
@@ -18,7 +19,21 @@ const loading = ref(false)
 const deletingId = ref<number | null>(null)
 const items = ref<configApi.ConfigFileBrief[]>([])
 const total = ref(0)
-const query = reactive({ page: 1, page_size: 20, keyword: '' })
+const query = reactive({
+  page: 1, page_size: 20, keyword: '',
+  platform_instance_id: undefined as number | undefined,
+  status: undefined as configApi.ConfigListStatus | undefined,
+  sort_by: undefined as configApi.ConfigFileQuery['sort_by'],
+  sort_order: undefined as 'asc' | 'desc' | undefined,
+})
+const instances = ref<configApi.PlatformInstance[]>([])
+const instanceLoading = ref(false)
+const instanceOptions = computed(() => instances.value.map((item) => ({ label: item.name, value: item.id })))
+const statusOptions = [
+  { label: '一致', value: 'clean' }, { label: '存在漂移', value: 'drifted' },
+  { label: '远端缺失', value: 'remote_missing' }, { label: '同步失败', value: 'sync_failed' },
+  { label: '待首次发布', value: 'unpublished' }, { label: '已归档', value: 'archived' },
+]
 const newOpen = ref(false)
 const instanceOpen = ref(false)
 const driftFileId = ref<number | null>(null)
@@ -28,7 +43,7 @@ const syncPollTimers = new Map<number, number>()
 const syncTaskIds = new Map<number, number>()
 let importPollTimer: number | null = null
 
-const columns = [
+const columns = ref(makeResizable([
   { title: '配置文件', dataIndex: 'name', key: 'name', width: 190, ellipsis: true },
   { title: '平台实例', dataIndex: 'platform_instance_name', key: 'instance', width: 170, ellipsis: true },
   { title: '远端定位', key: 'locator', width: 270, ellipsis: true },
@@ -37,9 +52,9 @@ const columns = [
   { title: '审批角色', dataIndex: 'approval_role_name', key: 'role', width: 130, ellipsis: true },
   { title: '当前版本', key: 'version', width: 105 },
   { title: '状态', key: 'status', width: 120 },
-  { title: '最近同步', key: 'synced', width: 170 },
+  { title: '最近同步', dataIndex: 'last_synced_at', key: 'synced', width: 170, sorter: true },
   { title: '操作', key: 'action', width: canWrite.value ? 270 : canDelete.value ? 160 : 88, fixed: 'right' as const },
-]
+]))
 
 function locatorText(file: configApi.ConfigFileBrief) {
   if (file.provider === 'apollo') return `${file.locator.app_id} / ${file.locator.cluster} / ${file.locator.namespace}`
@@ -61,6 +76,8 @@ async function load() {
   try {
     const data = await configApi.listConfigFiles({
       page: query.page, page_size: query.page_size, keyword: query.keyword || undefined,
+      platform_instance_id: query.platform_instance_id, status: query.status,
+      sort_by: query.sort_by, sort_order: query.sort_order,
     })
     items.value = data.items
     total.value = data.total
@@ -70,6 +87,16 @@ async function load() {
 }
 
 function onSearch() { query.page = 1; void load() }
+async function loadInstances() {
+  instanceLoading.value = true
+  try {
+    instances.value = (await configApi.listPlatformInstances()).items
+  } catch {
+    /* 错误由请求层显示，列表仍可查询。 */
+  } finally {
+    instanceLoading.value = false
+  }
+}
 async function loadImportTasks() {
   const running = (await configApi.listConfigImportTasks()).items.find((item) => item.status === 'queued' || item.status === 'running')
   if (running && importTask.value?.id !== running.id && importPollTimer === null) {
@@ -77,9 +104,20 @@ async function loadImportTasks() {
     void pollImportTask(running.id)
   }
 }
-function onTableChange(pagination: { current?: number; pageSize?: number }) {
-  query.page = pagination.current || 1
-  query.page_size = pagination.pageSize || 20
+// 服务端排序覆盖全部分页记录，切换排序时重新从第一页查询。
+function onTableChange(
+  pagination: { current?: number; pageSize?: number },
+  _: unknown,
+  sorter: { field?: string; order?: 'ascend' | 'descend' | null } | { field?: string; order?: 'ascend' | 'descend' | null }[],
+) {
+  const current = Array.isArray(sorter) ? sorter[0] : sorter
+  const sortBy = current?.order ? current.field as configApi.ConfigFileQuery['sort_by'] : undefined
+  const sortOrder = current?.order === 'ascend' ? 'asc' : current?.order === 'descend' ? 'desc' : undefined
+  const sortChanged = query.sort_by !== sortBy || query.sort_order !== sortOrder
+  query.sort_by = sortBy
+  query.sort_order = sortOrder
+  query.page = sortChanged ? 1 : pagination.current || 1
+  query.page_size = pagination.pageSize || query.page_size
   void load()
 }
 function stopSyncPolling(fileId: number) {
@@ -171,7 +209,7 @@ function onCreated(result: { fileId?: number; task?: configApi.ConfigTask }) {
   if (result.fileId) void router.push(`/application-configs/${result.fileId}/edit`)
 }
 
-onMounted(() => { void load(); void loadImportTasks() })
+onMounted(() => { void load(); void loadImportTasks(); void loadInstances() })
 onBeforeUnmount(() => {
   for (const fileId of syncPollTimers.keys()) stopSyncPolling(fileId)
   syncTaskIds.clear()
@@ -191,6 +229,11 @@ onBeforeUnmount(() => {
       <a-input v-model:value="query.keyword" class="config-search" allow-clear placeholder="搜索配置文件名称" @press-enter="onSearch">
         <template #prefix><SearchOutlined /></template>
       </a-input>
+      <a-select v-model:value="query.platform_instance_id" class="config-filter" allow-clear show-search
+        placeholder="平台实例" aria-label="平台实例筛选" option-filter-prop="label" :options="instanceOptions"
+        :loading="instanceLoading" @change="onSearch" @dropdown-visible-change="(open: boolean) => { if (open) void loadInstances() }" />
+      <a-select v-model:value="query.status" class="config-filter" allow-clear
+        placeholder="状态" aria-label="状态筛选" :options="statusOptions" @change="onSearch" />
       <div class="config-toolbar-actions">
         <a-button v-if="canManageInstances" class="op-btn-cyan" @click="instanceOpen = true"><SettingOutlined />平台实例</a-button>
         <a-button v-if="canWrite" type="primary" @click="newOpen = true"><PlusOutlined />新建配置文件</a-button>
@@ -200,7 +243,7 @@ onBeforeUnmount(() => {
       :scroll="{ x: 1500 }"
       :pagination="{ current: query.page, pageSize: query.page_size, total,
         showSizeChanger: true, showTotal: (count: number) => `共 ${count} 个配置文件` }"
-      @change="onTableChange">
+      @change="onTableChange" @resizeColumn="onResizeColumn">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'name'">
           <a class="file-name" @click="router.push(`/application-configs/${record.id}`)">{{ record.name }}</a>
@@ -249,6 +292,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .config-toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
 .config-search { width: min(300px, 100%); }
+.config-filter { width: 180px; max-width: 100%; }
 .config-toolbar-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-left: auto; }
 .file-name { font-weight: 600; }
 .locator-value { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

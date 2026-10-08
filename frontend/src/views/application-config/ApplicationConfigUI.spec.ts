@@ -110,6 +110,41 @@ describe('漂移确认', () => {
 })
 
 describe('列表同步', () => {
+  it('同步时间排序与筛选组合传给后端，改变条件回到第一页', async () => {
+    const wrapper = mount(ApplicationConfigList, { attachTo: document.body,
+      global: { stubs: { NewConfigDrawer: true, PlatformInstanceDrawer: true, DriftCompareDrawer: true } },
+    })
+    await flushPromises()
+    const sortHeader = wrapper.findAll('.ant-table-thead th').find((header) => header.text().includes('最近同步'))!
+    expect(sortHeader.find('.ant-table-column-sorters').exists()).toBe(true)
+    await sortHeader.find('.ant-table-column-sorters').trigger('click')
+    await flushPromises()
+    expect(api.listConfigFiles).toHaveBeenLastCalledWith(expect.objectContaining({
+      sort_by: 'last_synced_at', sort_order: 'asc', page: 1,
+    }))
+    const selects = wrapper.findAllComponents({ name: 'ASelect' }).filter((select) => select.classes().includes('config-filter'))
+    expect(selects).toHaveLength(2)
+    const table = wrapper.findComponent({ name: 'ATable' })
+    table.vm.$emit('change', { current: 3, pageSize: 20 }, {}, { field: 'last_synced_at', order: 'ascend' })
+    await flushPromises()
+    selects[0]!.vm.$emit('update:value', 2)
+    selects[0]!.vm.$emit('change', 2)
+    await flushPromises()
+    selects[1]!.vm.$emit('update:value', 'drifted')
+    selects[1]!.vm.$emit('change', 'drifted')
+    await flushPromises()
+    expect(api.listConfigFiles).toHaveBeenLastCalledWith(expect.objectContaining({
+      platform_instance_id: 2, status: 'drifted', sort_order: 'asc', page: 1,
+    }))
+    selects[0]!.vm.$emit('update:value', undefined)
+    selects[0]!.vm.$emit('change', undefined)
+    await flushPromises()
+    expect(api.listConfigFiles).toHaveBeenLastCalledWith(expect.objectContaining({
+      platform_instance_id: undefined, status: 'drifted',
+    }))
+    wrapper.unmount()
+  })
+
   it('请求阶段及排队阶段分别保持各行加载，互不取消', async () => {
     const pending: Record<number, (value: unknown) => void> = {}
     const polls: Record<number, (value: unknown) => void> = {}

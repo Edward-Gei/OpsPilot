@@ -1,4 +1,6 @@
 """应用配置 REST 入口：平台实例和配置文件本地管理。"""
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 
@@ -216,9 +218,14 @@ async def list_config_files(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     keyword: str | None = None,
+    platform_instance_id: int | None = Query(None, ge=1),
+    status: Literal["clean", "drifted", "remote_missing", "sync_failed", "unpublished", "archived"] | None = None,
+    sort_by: Literal["last_synced_at"] | None = None,
+    sort_order: Literal["asc", "desc"] = "desc",
 ) -> dict:
     rows, total = await application_config_service.list_config_files(
         session, page=page, page_size=page_size, keyword=keyword,
+        platform_instance_id=platform_instance_id, status=status, sort_by=sort_by, sort_order=sort_order,
     )
     return ok({"items": [await _file_data(session, item) for item in rows], "total": total,
                "page": page, "page_size": page_size})

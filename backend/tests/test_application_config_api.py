@@ -1,9 +1,11 @@
 """应用配置实例与本地配置文件 API 测试。"""
 import pytest
+from datetime import datetime
+
 from sqlalchemy import delete, select
 
 from app.config_providers.nacos import NacosAdapter
-from app.models.application_config import ConfigTask
+from app.models.application_config import ConfigFile, ConfigTask
 from app.models.auth import Permission, Role, RolePermission, UserRole
 from app.models.cmdb import Application
 
@@ -11,6 +13,55 @@ from tests.conftest import auth_header, login_for_tokens
 
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_file_list_filters_display_status_and_sorts_before_pagination(client, db_factory, seed):
+    """状态与列表标签保持一致，筛选和同步时间排序作用于全部分页记录。"""
+    cases = [
+        ("old", 1, "active", "clean", 1, datetime(2026, 10, 1)),
+        ("new", 1, "active", "clean", 2, datetime(2026, 10, 3)),
+        ("never", 1, "active", "clean", None, None),
+        ("drift", 1, "active", "drifted", None, datetime(2026, 10, 2)),
+        ("missing", 1, "active", "remote_missing", 3, None),
+        ("failed", 1, "active", "sync_failed", 4, None),
+        ("archive", 1, "archived", "drifted", 5, None),
+        ("other", 2, "active", "clean", 6, datetime(2026, 10, 4)),
+    ]
+    async with db_factory() as session:
+        for name, instance, status, drift, version, synced in cases:
+            session.add(ConfigFile(name=f"filter-{name}", platform_instance_id=instance,
+                                   locator={}, locator_key=name, content_format="yaml",
+                                   approval_role_id=seed["roles"]["ops"], status=status,
+                                   drift_status=drift, current_version_id=version, last_synced_at=synced))
+        await session.commit()
+    headers = auth_header(await login_for_tokens(client, "ops1"))
+    params = {"keyword": "filter-", "platform_instance_id": 1, "sort_by": "last_synced_at",
+              "sort_order": "desc", "page_size": 1}
+    response = await client.get("/api/v1/application-configs/files", headers=headers, params=params)
+    assert response.json()["data"]["total"] == 7
+    assert response.json()["data"]["items"][0]["name"] == "filter-new"
+    second = await client.get("/api/v1/application-configs/files", headers=headers, params={**params, "page": 2})
+    assert second.json()["data"]["items"][0]["name"] == "filter-drift"
+    ascending = await client.get("/api/v1/application-configs/files", headers=headers,
+                                 params={**params, "sort_order": "asc"})
+    assert ascending.json()["data"]["items"][0]["name"] == "filter-old"
+    for order, expected in [("asc", ["old", "drift", "new", "archive", "failed", "missing", "never"]),
+                            ("desc", ["new", "drift", "old", "archive", "failed", "missing", "never"])]:
+        ordered = await client.get("/api/v1/application-configs/files", headers=headers,
+                                   params={**params, "sort_order": order, "page_size": 20})
+        assert [item["name"] for item in ordered.json()["data"]["items"]] == [f"filter-{name}" for name in expected]
+    for status, expected in [("clean", ["filter-new", "filter-old"]),
+                             ("unpublished", ["filter-never"]), ("drifted", ["filter-drift"]),
+                             ("remote_missing", ["filter-missing"]), ("sync_failed", ["filter-failed"]),
+                             ("archived", ["filter-archive"])]:
+        result = await client.get("/api/v1/application-configs/files", headers=headers,
+                                  params={**params, "status": status, "page_size": 20})
+        data = result.json()["data"]
+        assert [item["name"] for item in data["items"]] == expected
+        assert data["total"] == len(expected)
+    for invalid in [{"status": "invalid"}, {"sort_by": "name"}, {"sort_order": "invalid"}]:
+        rejected = await client.get("/api/v1/application-configs/files", headers=headers, params=invalid)
+        assert rejected.json()["code"] != 0
 
 
 async def test_cmdb_application_options_include_apps_beyond_first_hundred(client, db_factory, seed):
