@@ -147,3 +147,40 @@ def test_yaml_placeholder_merge_retains_yaml11_values_and_block_comments():
     merged = merge_redacted_update(base, 'yaml', displayed)
     assert merged.structured == {'password': 'original', 'mode': 'on', 'legacy': 10, 'body': '# 文本\n'}
     assert '# 内容' in redact_content(merged, True)
+
+
+def test_yaml_nonbreaking_separator_error_names_exact_position_without_content():
+    """冒号后的不可断空格应提示实际位置，不能泄漏上下文中的敏感正文。"""
+    from app.services.application_config_task_service import _safe_error
+
+    raw = 'password: PRIVATE_TEST_VALUE\nregistry:\u00a0\n  nacos:\n    enabled: true\n'
+    with pytest.raises(ValueError) as raised:
+        validate_and_normalize_content('yaml', raw)
+    reason = _safe_error(raised.value)
+    assert '第 2 行' in reason
+    assert '第 10 列' in reason
+    assert 'U+00A0' in reason
+    assert '普通空格' in reason
+    assert 'PRIVATE_TEST_VALUE' not in reason
+    assert 'registry' not in reason
+
+
+def test_yaml_other_syntax_errors_have_safe_line_and_column():
+    from app.services.application_config_task_service import _safe_error
+
+    with pytest.raises(ValueError) as raised:
+        validate_and_normalize_content('yaml', 'password: [PRIVATE_TEST_VALUE\n')
+    reason = _safe_error(raised.value)
+    assert 'YAML' in reason
+    assert '第 2 行' in reason
+    assert '第 1 列' in reason
+    assert 'PRIVATE_TEST_VALUE' not in reason
+
+
+def test_yaml_nonbreaking_space_in_value_is_preserved():
+    """不可断空格在合法字符串值中应原样保存，不能全局替换正文。"""
+    raw = 'password: "value\u00a0with-space"\nlabel: value\u00a0with-space\nregistry:\n  enabled: true\n'
+    content = validate_and_normalize_content('yaml', raw)
+    assert content.structured['password'] == 'value\u00a0with-space'
+    assert content.structured['label'] == 'value\u00a0with-space'
+    assert redact_content(content, True) == raw

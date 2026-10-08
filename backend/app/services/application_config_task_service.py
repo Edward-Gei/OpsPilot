@@ -33,7 +33,7 @@ from app.models.application_config import (
 from app.schemas.application_config import ConfigFileSelection
 from app.services import application_config_service as config_service
 from app.services.application_config_service import ConfigActor
-from app.services.config_content_service import redact_content, validate_and_normalize_content
+from app.services.config_content_service import ContentValidationError, redact_content, validate_and_normalize_content
 
 
 _TASK_LEASE = timedelta(minutes=10)
@@ -347,6 +347,8 @@ async def _finish_import_task(session: AsyncSession, task_id: int, token: str) -
 def _safe_error(exc: Exception) -> str:
     if isinstance(exc, ProviderError):
         return f"平台操作失败: {exc.code}"
+    if isinstance(exc, ContentValidationError):
+        return f"远端配置正文校验失败：{exc}"
     if isinstance(exc, ValueError):
         return "远端配置正文格式不符合当前文件格式"
     return "配置任务处理失败"

@@ -22,6 +22,7 @@ pytestmark = pytest.mark.asyncio
     (("already.yaml", "bad-network.yaml", "ok.yaml"), ["skipped", "failed", "success"],
      [(0, 1, 0), (0, 1, 1)]),
     (("ok.yaml", "later.yaml"), ["success", "success"], [(0, 0, 0), (1, 0, 0)]),
+    (("bad-nbsp.yaml", "ok.yaml"), ["failed", "success"], [(0, 0, 0), (0, 0, 1)]),
 ])
 async def test_multi_select_import_keeps_success_and_never_writes_remote(
     client, db_factory, seed, monkeypatch, names, statuses, progress,
@@ -59,6 +60,8 @@ async def test_multi_select_import_keeps_success_and_never_writes_remote(
                 raise ProviderUnavailableError("read", "network")
             if locator["data_id"] == "bad-format.yaml":
                 return RemoteContent(locator, "enabled: [", revision="1")
+            if locator["data_id"] == "bad-nbsp.yaml":
+                return RemoteContent(locator, "password: PRIVATE_TEST_VALUE\nregistry:\u00a0\n  enabled: true\n", revision="1")
             if locator["data_id"] == "bad.yaml":
                 raise ProviderRejectedError("read", "http_403")
             return RemoteContent(locator, "enabled: true\n", revision="1")
@@ -93,6 +96,10 @@ async def test_multi_select_import_keeps_success_and_never_writes_remote(
     )
     assert sum(data[key] for key in ("success_count", "skipped_count", "failed_count")) == data["total_count"]
     assert observed_progress == progress
+    if "bad-nbsp.yaml" in names:
+        reason = data["items"][0]["reason"]
+        assert "第 2 行，第 10 列" in reason and "U+00A0" in reason
+        assert "PRIVATE_TEST_VALUE" not in reason and "registry" not in reason
     async with db_factory() as session:
         files = list((await session.execute(select(ConfigFile))).scalars())
         versions = list((await session.execute(select(ConfigVersion))).scalars())

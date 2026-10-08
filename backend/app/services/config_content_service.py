@@ -25,6 +25,27 @@ _SENSITIVE_KEY_PARTS = frozenset({
 _SENSITIVE_URL_PARAMS = frozenset({"sig", "signature", "xamzsignature", "token", "accesstoken", "apikey", "secret", "key"})
 
 
+class ContentValidationError(ValueError):
+    """可向用户展示的正文校验错误，仅含原因及位置，不含正文片段。"""
+
+
+def _yaml_syntax_error(raw: str, error: yaml.YAMLError) -> ContentValidationError:
+    """识别结构分隔位置的不可断空格，避免解析器将位置指向下一行。"""
+    lines = raw.splitlines()
+    for mark in (getattr(error, "context_mark", None), getattr(error, "problem_mark", None)):
+        if mark is None or mark.line >= len(lines):
+            continue
+        match = re.match(r"^[ \t]*[^#\r\n]+:(?P<gap>\u00a0+)[ \t]*(?:#.*)?$", lines[mark.line])
+        if match:
+            return ContentValidationError(
+                f"YAML 第 {mark.line + 1} 行，第 {match.start('gap') + 1} 列："
+                "冒号后存在不可断空格（U+00A0），请删除或替换为普通空格"
+            )
+    mark = getattr(error, "problem_mark", None)
+    position = f" 第 {mark.line + 1} 行，第 {mark.column + 1} 列" if mark is not None else ""
+    return ContentValidationError(f"YAML{position}：语法错误，请检查缩进、分隔符和引号")
+
+
 @dataclass(frozen=True)
 class NormalizedContent:
     """规范化表示用于比较；带注释原文用于保存、展示和发布。"""
@@ -102,7 +123,9 @@ def validate_and_normalize_content(content_format: str, raw: str) -> NormalizedC
 
     try:
         parsed = yaml.load(raw, Loader=_NoDuplicateYamlLoader)
-    except (yaml.YAMLError, ValueError) as exc:
+    except yaml.YAMLError as exc:
+        raise _yaml_syntax_error(raw, exc) from exc
+    except ValueError as exc:
         raise ValueError(f"YAML 格式无效: {exc}") from exc
     _ensure_json_compatible(parsed, "YAML")
     return _structured_content("yaml", parsed, raw=raw)
