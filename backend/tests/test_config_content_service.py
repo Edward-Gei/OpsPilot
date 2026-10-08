@@ -83,3 +83,67 @@ def test_embedded_service_account_and_signed_url_are_masked_and_preserved():
 def test_malformed_url_text_does_not_break_content_preview():
     base = validate_and_normalize_content("json", '{"endpoint":"http://["}')
     assert 'http://[' in redact_content(base, can_read_secret=False)
+
+
+@pytest.mark.parametrize("content_format, raw", [
+    ("yaml", '# 服务配置\ndb:\n  pool: 10  # 连接池大小\n\n# 保留说明\n'),
+    ("properties", '# 服务配置\n! 连接池说明\ndb.pool : 10\n\n'),
+])
+def test_content_preview_preserves_comments(content_format, raw):
+    """重新序列化正文会删除注释；原文应在两种权限预览中保留。"""
+    content = validate_and_normalize_content(content_format, raw)
+    assert redact_content(content, can_read_secret=True) == raw
+    assert redact_content(content, can_read_secret=False) == raw
+
+
+@pytest.mark.parametrize("content_format, raw, updated", [
+    ("yaml", '# 数据库\ndb:\n  password: test-secret  # 密码\n  pool: 10 # 连接池\n',
+     f'# 新说明\ndb:\n  password: {SECRET_PLACEHOLDER}  # 密码\n  pool: 20 # 连接池\n'),
+    ("properties", '# 数据库\ndb.password : test-secret\n! 连接池\ndb.pool=10\n',
+     f'# 新说明\ndb.password : {SECRET_PLACEHOLDER}\n! 连接池\ndb.pool=20\n'),
+])
+def test_redaction_and_placeholder_save_keep_comments(content_format, raw, updated):
+    """脱敏与占位符合并不能删除说明，也不能泄漏或覆盖已有敏感值。"""
+    base = validate_and_normalize_content(content_format, raw)
+    redacted = redact_content(base, can_read_secret=False)
+    assert 'test-secret' not in redacted
+    assert '# 数据库' in redacted
+    assert ('# 密码' if content_format == 'yaml' else '! 连接池') in redacted
+    merged = merge_redacted_update(base, content_format, updated)
+    visible = redact_content(merged, can_read_secret=True)
+    assert '# 新说明' in visible
+    assert ('# 连接池' if content_format == 'yaml' else '! 连接池') in visible
+    assert 'test-secret' in visible
+    assert SECRET_PLACEHOLDER not in visible
+    assert merged.structured == ({'db': {'password': 'test-secret', 'pool': 20}} if content_format == 'yaml'
+                                 else {'db.password': 'test-secret', 'db.pool': '20'})
+
+
+def test_yaml_redacted_anchors_and_sensitive_containers_keep_safe_values():
+    raw = ('# 共享配置\nsource: &db\n  password: test-secret\n  pool: 10\n'
+           'copy: *db\nsecret: [one, two] # 凭据\n')
+    redacted = redact_content(validate_and_normalize_content('yaml', raw), False)
+    assert '# 共享配置' in redacted
+    assert '# 凭据' in redacted
+    assert 'test-secret' not in redacted
+    parsed = validate_and_normalize_content('yaml', redacted).structured
+    assert parsed['source']['password'] == parsed['copy']['password'] == SECRET_PLACEHOLDER
+    assert parsed['secret'] == SECRET_PLACEHOLDER
+
+
+@pytest.mark.parametrize("raw, comments", [
+    ('# 说明\nurl: "https://example.test/#fragment" # 行尾\n', ('# 说明', '# 行尾')),
+    ('body: | # 多行\n  # 正文内容\n# 末尾\n', ('# 多行', '# 末尾')),
+    ('# 只有注释\n', ('# 只有注释',)),
+])
+def test_yaml_comment_comparison_ignores_hash_inside_values(raw, comments):
+    assert validate_and_normalize_content('yaml', raw).comments == comments
+
+
+def test_yaml_placeholder_merge_retains_yaml11_values_and_block_comments():
+    raw = '# 数据库\npassword: original\nmode: "on"\nlegacy: 012\nbody: | # 内容\n  # 文本\n'
+    base = validate_and_normalize_content('yaml', raw)
+    displayed = redact_content(base, False)
+    merged = merge_redacted_update(base, 'yaml', displayed)
+    assert merged.structured == {'password': 'original', 'mode': 'on', 'legacy': 10, 'body': '# 文本\n'}
+    assert '# 内容' in redact_content(merged, True)

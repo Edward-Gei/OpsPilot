@@ -193,7 +193,7 @@ class ApolloAdapter(HttpConfigAdapter, ConfigPlatformAdapter):
                 except ProviderError as exc:
                     raise ProviderWriteUncertainError("write", exc.code) from None
         else:
-            payload = {"key": "content", "value": content.canonical}
+            payload = {"key": "content", "value": content.text}
             method, item_path = ("PUT", f"{path}/content") if "content" in draft_values else ("POST", path)
             payload["dataChangeLastModifiedBy" if method == "PUT" else "dataChangeCreatedBy"] = "OpsPilot"
             response = await self._request(

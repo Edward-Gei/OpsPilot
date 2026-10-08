@@ -1,6 +1,7 @@
 """应用配置平台 HTTP 适配器的离线契约测试。"""
 import base64
 import json
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -194,12 +195,12 @@ async def test_apollo_first_release_in_existing_empty_namespace():
         adapter = ApolloAdapter(requester=client)
         connection = PlatformConnection(ConfigProvider.APOLLO, "https://apollo.example", 1, "api_token", "token")
         locator = {"app_id": "payment", "cluster": "default", "namespace": "application.yaml"}
-        await adapter.write(connection, locator, validate_and_normalize_content("yaml", "enabled: true"),
+        await adapter.write(connection, locator, validate_and_normalize_content("yaml", "# 服务开关\nenabled: true"),
                             expect=RemoteExpectation.missing())
     writes = [request for request in requests if request.method == "POST"]
     assert [request.url.path.rsplit("/", 1)[-1] for request in writes] == ["items", "releases"]
     assert json.loads(writes[0].content) == {
-        "key": "content", "value": "enabled: true\n", "dataChangeCreatedBy": "OpsPilot",
+        "key": "content", "value": "# 服务开关\nenabled: true", "dataChangeCreatedBy": "OpsPilot",
     }
 
 
@@ -418,6 +419,28 @@ async def test_nacos_write_does_not_overwrite_changed_remote_content():
             await adapter.write(connection, locator, validate_and_normalize_content("yaml", "enabled: false"),
                                 expect=RemoteExpectation.exists(RemoteContent(locator, "enabled: true\n")))
     assert [request.method for request in requests] == ["GET"]
+
+
+@pytest.mark.parametrize("content_format, raw", [
+    ("yaml", "# 服务开关\nenabled: true # 开启\n"),
+    ("properties", "# 服务开关\n! 开启\nenabled=true\n"),
+])
+async def test_nacos_write_keeps_config_comments(content_format, raw):
+    """发布请求必须发送带注释正文，而不是用于比较的规范化键值。"""
+    writes = []
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(404)
+        writes.append(parse_qs(request.content.decode())["content"][0])
+        return httpx.Response(200, text="true")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = NacosAdapter(requester=client)
+        connection = PlatformConnection(ConfigProvider.NACOS, "https://nacos.example", 1, "api_token", "token")
+        await adapter.write(connection, {"namespace": "prod", "group": "G", "data_id": "config"},
+                            validate_and_normalize_content(content_format, raw), expect=RemoteExpectation.missing())
+    assert writes == [raw]
 
 
 async def test_apollo_release_failure_after_item_update_is_uncertain():

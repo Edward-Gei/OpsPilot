@@ -4,11 +4,14 @@ from __future__ import annotations
 import json
 import math
 import re
+from copy import copy
 from dataclasses import dataclass
+from io import StringIO
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
 import yaml
+from ruamel.yaml import YAML
 
 
 SUPPORTED_CONTENT_FORMATS = frozenset({"properties", "yaml", "json", "text", "consul_kv"})
@@ -24,11 +27,39 @@ _SENSITIVE_URL_PARAMS = frozenset({"sig", "signature", "xamzsignature", "token",
 
 @dataclass(frozen=True)
 class NormalizedContent:
-    """同一语义正文的稳定表示，供版本比较和远端回读确认使用。"""
+    """规范化表示用于比较；带注释原文用于保存、展示和发布。"""
 
     format: str
     canonical: str
     structured: Any | None
+    raw: str | None = None
+
+    @property
+    def text(self) -> str:
+        return self.raw if self.raw is not None else self.canonical
+
+    @property
+    def comments(self) -> tuple[str, ...]:
+        """比较真实注释，忽略键排序及排版差异，不把字符串内的 # 当注释。"""
+        if self.format == "properties":
+            return tuple(line.strip() for line in self.text.splitlines() if line.lstrip().startswith(("#", "!")))
+        if self.format != "yaml":
+            return ()
+        comments: dict[int, str] = {}
+
+        def collect(value, index):
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    collect(item, index)
+            elif isinstance(value, str):
+                # 块标量头部的注释由扫描器以字符串返回，而不是 CommentToken。
+                comments[index] = value.strip()
+            elif value is not None:
+                comments[value.start_mark.index] = value.value.strip()
+
+        for token in YAML().scan(self.text):
+            collect(token.comment, token.start_mark.index)
+        return tuple(comments[index] for index in sorted(comments))
 
 
 class _NoDuplicateYamlLoader(yaml.SafeLoader):
@@ -74,17 +105,16 @@ def validate_and_normalize_content(content_format: str, raw: str) -> NormalizedC
     except (yaml.YAMLError, ValueError) as exc:
         raise ValueError(f"YAML 格式无效: {exc}") from exc
     _ensure_json_compatible(parsed, "YAML")
-    return _structured_content("yaml", parsed)
+    return _structured_content("yaml", parsed, raw=raw)
 
 
 def redact_content(content: NormalizedContent, can_read_secret: bool) -> str:
     """按权限返回可展示的正文，绝不做全文字符串替换。"""
     if can_read_secret:
-        return content.canonical
+        return content.text
     if content.format == "text":
         return TEXT_MASK
-    assert content.structured is not None
-    return _structured_content(content.format, _redact_value(content.structured)).canonical
+    return _render_values(content, _redact_value(content.structured))
 
 
 def merge_redacted_update(
@@ -103,7 +133,60 @@ def merge_redacted_update(
     updated = validate_and_normalize_content(content_format, raw_update)
     assert baseline.structured is not None and updated.structured is not None
     merged = _merge_value(baseline.structured, updated.structured)
-    return _structured_content(content_format, merged)
+    return validate_and_normalize_content(content_format, _render_values(updated, merged))
+
+
+def _render_values(content: NormalizedContent, values: Any) -> str:
+    """脱敏或恢复占位符时只替换值，保留正文的注释。"""
+    if values == content.structured:
+        return content.text
+    if content.format == "properties":
+        lines = []
+        for line in content.text.splitlines(keepends=True):
+            if not line.strip() or line.lstrip().startswith(("#", "!")):
+                lines.append(line)
+                continue
+            positions = [pos for pos in (line.find("="), line.find(":")) if pos >= 0]
+            pos = min(positions) if positions else len(line.rstrip("\r\n"))
+            key = line[:pos].strip()
+            if values[key] == content.structured[key]:
+                lines.append(line)
+                continue
+            end = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+            prefix = line[:pos + 1] if positions else line[:pos] + "="
+            lines.append(prefix + str(values[key]) + end)
+        return "".join(lines)
+    if content.format == "yaml":
+        round_trip = YAML()
+        round_trip.preserve_quotes = True
+        template = round_trip.load(content.text)
+        rendered = _replace_yaml_values(template, values)
+        # 沿用 PyYAML 的 1.1 校验语义，避免 yes/on 等字符串在输出后变成布尔值。
+        round_trip.version = (1, 1)
+        output = StringIO()
+        round_trip.dump(rendered, output)
+        return output.getvalue().removeprefix("%YAML 1.1\n---\n")
+    return _structured_content(content.format, values).canonical
+
+
+def _replace_yaml_values(template: Any, values: Any) -> Any:
+    """逐路径复制带注释容器，避免共享锚点导致脱敏值被另一引用覆盖。"""
+    if isinstance(template, dict) and isinstance(values, dict):
+        result = copy(template)
+        result.yaml_set_anchor(None)
+        for key in template:
+            if key not in values:
+                del result[key]
+        for key, value in values.items():
+            result[key] = _replace_yaml_values(template.get(key), value)
+        return result
+    if isinstance(template, list) and isinstance(values, list):
+        result = copy(template)
+        result.yaml_set_anchor(None)
+        for index, value in enumerate(values):
+            result[index] = _replace_yaml_values(template[index], value)
+        return result
+    return template if type(template) is type(values) and template == values else values
 
 
 def _require_utf8(raw: str) -> None:
@@ -151,7 +234,7 @@ def _normalize_properties(raw: str) -> NormalizedContent:
         if key in values:
             raise ValueError(f"properties 存在重复键: {key}")
         values[key] = value
-    return NormalizedContent("properties", _canonical_properties(values), values)
+    return NormalizedContent("properties", _canonical_properties(values), values, raw)
 
 
 def _normalize_consul_kv(raw: str) -> NormalizedContent:
@@ -167,7 +250,7 @@ def _normalize_consul_kv(raw: str) -> NormalizedContent:
     return NormalizedContent("consul_kv", canonical, parsed)
 
 
-def _structured_content(content_format: str, parsed: Any) -> NormalizedContent:
+def _structured_content(content_format: str, parsed: Any, raw: str | None = None) -> NormalizedContent:
     if content_format == "json":
         canonical = json.dumps(parsed, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
     elif content_format == "yaml":
@@ -178,7 +261,7 @@ def _structured_content(content_format: str, parsed: Any) -> NormalizedContent:
         canonical = json.dumps(parsed, ensure_ascii=False, sort_keys=True, indent=2)
     else:
         raise ValueError("配置格式暂不支持")
-    return NormalizedContent(content_format, canonical, parsed)
+    return NormalizedContent(content_format, canonical, parsed, raw)
 
 
 def _canonical_properties(values: dict[str, str]) -> str:

@@ -219,7 +219,7 @@ async def create_config_file(
     config_file.latest_snapshot_id = snapshot.id
     session.add(ConfigDraft(
         config_file_id=config_file.id,
-        content_enc=encrypt_text(normalized_content.canonical),
+        content_enc=encrypt_text(normalized_content.text),
         base_snapshot_id=snapshot.id,
         updated_by=actor_id,
     ))
@@ -473,7 +473,7 @@ async def save_draft(
         )
     except ValueError:
         raise Errors.param("配置正文格式或敏感字段占位符无效") from None
-    draft.content_enc = encrypt_text(content.canonical)
+    draft.content_enc = encrypt_text(content.text)
     draft.updated_by = actor_id
     await session.flush()
     return draft

@@ -129,7 +129,7 @@ class NacosAdapter(HttpConfigAdapter, ConfigPlatformAdapter):
             "tenant": namespace,
             "group": group,
             "dataId": data_id,
-            "content": content.canonical,
+            "content": content.text,
             "type": "yaml" if content.format == "yaml" else content.format,
         }
         response = await self._request(

@@ -269,14 +269,14 @@ async def _process_import_item(
             await session.flush()
             snapshot = ConfigRemoteSnapshot(
                 config_file_id=config_file.id, exists=True,
-                content_enc=encrypt_text(normalized.canonical),
+                content_enc=encrypt_text(normalized.text),
                 provider_revision=remote.revision, observed_at=datetime.now(),
             )
             session.add(snapshot)
             await session.flush()
             version = ConfigVersion(
                 config_file_id=config_file.id, version_no=1, source="external_import",
-                status="published", content_enc=encrypt_text(normalized.canonical),
+                status="published", content_enc=encrypt_text(normalized.text),
                 base_snapshot_id=snapshot.id, published_at=datetime.now(),
             )
             session.add(version)
@@ -474,7 +474,10 @@ async def _process_publish(session, task, config_file, version, adapter, connect
         readback = await adapter.read(connection, config_file.locator)
         await _assert_task_lease(session, task, token)
 
-    if readback is None or not _same_content(config_file.content_format, desired.canonical, readback.content):
+    # Apollo properties 发布接口只承载键值，回读不提供本地正文中的注释。
+    published_text = (desired.canonical if connection.provider == ConfigProvider.APOLLO
+                      and config_file.content_format == "properties" else desired.text)
+    if readback is None or not _same_content(config_file.content_format, published_text, readback.content):
         snapshot = await _persist_snapshot(session, config_file, readback)
         config_file.latest_snapshot_id = snapshot.id
         config_file.drift_status = (
@@ -496,11 +499,11 @@ async def _process_publish(session, task, config_file, version, adapter, connect
 
 
 async def _persist_snapshot(session, config_file, remote: RemoteContent | None) -> ConfigRemoteSnapshot:
-    canonical = validate_and_normalize_content(config_file.content_format, remote.content).canonical if remote else None
+    text = validate_and_normalize_content(config_file.content_format, remote.content).text if remote else None
     snapshot = ConfigRemoteSnapshot(
         config_file_id=config_file.id,
         exists=remote is not None,
-        content_enc=encrypt_text(canonical) if canonical is not None else None,
+        content_enc=encrypt_text(text) if text is not None else None,
         provider_revision=remote.revision if remote else None,
         observed_at=datetime.now(),
     )
@@ -510,9 +513,9 @@ async def _persist_snapshot(session, config_file, remote: RemoteContent | None) 
 
 
 def _same_content(content_format: str, left: str, right: str) -> bool:
-    return validate_and_normalize_content(content_format, left).canonical == validate_and_normalize_content(
-        content_format, right,
-    ).canonical
+    left_content = validate_and_normalize_content(content_format, left)
+    right_content = validate_and_normalize_content(content_format, right)
+    return left_content.canonical == right_content.canonical and left_content.comments == right_content.comments
 
 
 def _drift_status(content_format: str, baseline: ConfigRemoteSnapshot | None, remote: RemoteContent | None) -> str:

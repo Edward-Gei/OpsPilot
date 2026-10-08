@@ -37,3 +37,4 @@ boto3==1.35.99
 tencentcloud-sdk-python==3.0.1210
 google-cloud-dns==0.35.0
 PyYAML==6.0.2
+ruamel.yaml==0.18.16               # 配置正文脱敏及占位符合并保留 YAML 注释
