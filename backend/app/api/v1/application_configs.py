@@ -125,7 +125,8 @@ async def list_cmdb_applications(
     query = select(Application.id, Application.name)
     if keyword:
         query = query.where(Application.name.like(f"%{keyword}%"))
-    rows = await session.execute(query.order_by(Application.name).limit(100))
+    # 全量名称/ID 供关联下拉框筛选，避免应用超过 100 个后不可选或名称缺失。
+    rows = await session.execute(query.order_by(Application.name))
     return ok({"items": [{"id": app_id, "name": name} for app_id, name in rows]})
 
 

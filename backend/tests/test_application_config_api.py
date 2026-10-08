@@ -5,11 +5,29 @@ from sqlalchemy import delete, select
 from app.config_providers.nacos import NacosAdapter
 from app.models.application_config import ConfigTask
 from app.models.auth import Permission, Role, RolePermission, UserRole
+from app.models.cmdb import Application
 
 from tests.conftest import auth_header, login_for_tokens
 
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_cmdb_application_options_include_apps_beyond_first_hundred(client, db_factory, seed):
+    """关联选项必须包含全部应用，不能使第 101 个应用无法搜索或显示名称。"""
+    async with db_factory() as session:
+        session.add_all([Application(name=f"service-{index:03d}", deploy_type="shell") for index in range(105)])
+        await session.commit()
+    headers = auth_header(await login_for_tokens(client, "ops1"))
+    response = await client.get("/api/v1/application-configs/cmdb-applications", headers=headers)
+    assert response.json()["code"] == 0
+    items = response.json()["data"]["items"]
+    assert len(items) == 105
+    assert items[-1]["name"] == "service-104"
+    assert set(items[-1]) == {"id", "name"}
+    filtered = await client.get("/api/v1/application-configs/cmdb-applications",
+                                params={"keyword": "service-104"}, headers=headers)
+    assert filtered.json()["data"]["items"] == [items[-1]]
 
 
 async def _create_api_token_credential(client, headers: dict) -> int:

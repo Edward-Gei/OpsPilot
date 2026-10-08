@@ -244,7 +244,7 @@ watch(canEdit, (editing) => { if (!editing) { draftLoaded.value = false; metadat
       <a-form layout="vertical"><a-form-item label="名称"><a-input v-model:value="metadata.name" /></a-form-item>
         <a-form-item label="说明"><a-textarea v-model:value="metadata.description" :rows="2" /></a-form-item>
         <a-form-item label="审批角色"><a-select v-model:value="metadata.approval_role_id" :options="roles.map((item) => ({ label: item.name, value: item.id }))" /></a-form-item>
-        <a-form-item label="关联 CMDB 应用"><a-select v-model:value="metadata.application_ids" mode="multiple" :options="applications.map((item) => ({ label: item.name, value: item.id }))" /></a-form-item></a-form>
+        <a-form-item label="关联 CMDB 应用"><a-select v-model:value="metadata.application_ids" mode="multiple" option-filter-prop="label" :options="applications.map((item) => ({ label: item.name, value: item.id }))" /></a-form-item></a-form>
     </a-modal>
     <a-modal v-model:open="previewOpen" centered :width="'min(900px, calc(100vw - 32px))'"
       :title="`版本 v${previewVersion?.version_no ?? ''} 内容`"

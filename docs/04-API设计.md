@@ -290,7 +290,7 @@ notify:read notify:write notify:test system:config
 | POST | `/platform-instances/{id}/probe` | `config:instance` | 连通性测试 |
 | GET | `/platform-instances/{id}/namespaces` | `config:write` | 读取 Nacos 命名空间选项，仅返回名称与 ID；默认 `public` 的 ID 为空字符串 |
 | GET | `/compatible-credentials` | `config:instance` | 按平台筛选凭据名称和认证类型 |
-| GET | `/approval-roles`、`/cmdb-applications` | `config:read` | 角色与关联应用选项，不授予审批权 |
+| GET | `/approval-roles`、`/cmdb-applications` | `config:read` | 角色与关联应用选项，不授予审批权；应用选项返回全量名称/ID，支持 `keyword` 按名称筛选 |
 | GET | `/approval-todo` | 已登录用户 | 分页返回当前审批角色成员可处理的候选版本；admin 可见所有待审批候选，无 `ticket:approve` 或 `config:read` 要求 |
 | GET | `/approval-todo/{version_id}/content` | 当前审批角色成员或 admin | 只读预览候选正文；按 `secret:read` 脱敏，无权或候选已处理时返回 404 |
 | POST | `/discover`、`/import-tasks` | `config:write` | 发现远端资源、创建多选接入任务；任务返回 `202` |

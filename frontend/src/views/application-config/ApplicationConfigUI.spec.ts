@@ -157,6 +157,64 @@ describe('配置编辑器', () => {
   })
 })
 
+describe('新建配置默认格式与应用搜索', () => {
+  it.each([
+    ['nacos', 'YAML'], ['apollo', 'YAML'], ['consul', 'Consul KV'],
+  ])('%s 手工与发现模式采用正确默认格式', async (provider, expected) => {
+    api.listPlatformInstances.mockResolvedValue({ items: [{ id: 1, name: '平台', provider, enabled: true }] })
+    const wrapper = mount(NewConfigDrawer, { props: { open: false, importTask: null }, attachTo: document.body })
+    await wrapper.setProps({ open: true })
+    await flushPromises()
+    const vm = wrapper.vm as unknown as { instanceId: number; mode: string; selected: unknown[] }
+    vm.instanceId = 1
+    await flushPromises()
+    const formatField = () => [...document.querySelectorAll<HTMLElement>('.ant-form-item')]
+      .find((item) => item.querySelector('label')?.textContent === '格式')!
+    expect(formatField().querySelector('.ant-select-selection-item')?.textContent).toBe(expected)
+    vm.mode = 'discover'
+    await flushPromises()
+    vm.selected = [{ display_name: 'common.yaml', locator: { data_id: 'common.yaml' }, revision: null }]
+    await flushPromises()
+    expect(formatField().querySelector('.ant-select-selection-item')?.textContent).toBe(expected)
+    wrapper.unmount()
+  })
+
+  it.each(['manual', 'discover'])('%s 模式按名称搜索并选中第 101 个应用', async (mode) => {
+    api.listCmdbApplications.mockResolvedValue({ items: Array.from({ length: 105 }, (_, index) => ({
+      id: index + 1, name: `service-${String(index).padStart(3, '0')}`,
+    })) })
+    const wrapper = mount(NewConfigDrawer, { props: { open: false, importTask: null }, attachTo: document.body })
+    await wrapper.setProps({ open: true })
+    await flushPromises()
+    const vm = wrapper.vm as unknown as {
+      instanceId: number; mode: string; selected: unknown[];
+      manual: { application_ids: number[] }; discovered: { application_ids: number[] }[];
+    }
+    vm.instanceId = 1
+    vm.mode = mode
+    await flushPromises()
+    if (mode === 'discover') vm.selected = [
+      { display_name: 'common.yaml', locator: { data_id: 'common.yaml' }, revision: null },
+    ]
+    await flushPromises()
+    const field = [...document.querySelectorAll<HTMLElement>('.ant-form-item')]
+      .find((item) => item.querySelector('label')?.textContent === '关联 CMDB 应用')!
+    const search = field.querySelector<HTMLInputElement>('input')!
+    search.focus()
+    search.closest('.ant-select-selector')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    search.value = 'service-100'
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    const option = [...document.querySelectorAll<HTMLElement>('.ant-select-item-option')]
+      .find((item) => item.textContent === 'service-100')
+    expect(option).toBeDefined()
+    option!.click()
+    await flushPromises()
+    expect(mode === 'manual' ? vm.manual.application_ids : vm.discovered[0]!.application_ids).toEqual([101])
+    wrapper.unmount()
+  })
+})
+
 describe('Nacos 手工新建', () => {
   async function openNacos() {
     const wrapper = mount(NewConfigDrawer, { props: { open: false, importTask: null }, attachTo: document.body })

@@ -18,7 +18,7 @@ const task = ref<api.ConfigTask | null>(null)
 const selected = ref<api.DiscoveredResource[]>([])
 const selectionDrafts = new Map<string, api.ConfigFileSelection>()
 const manual = reactive<api.ConfigFileSelection>({
-  name: '', description: '', locator: {}, content_format: 'properties', approval_role_id: 0,
+  name: '', description: '', locator: {}, content_format: 'yaml', approval_role_id: 0,
   application_ids: [], initial_content: '',
 })
 const discovered = ref<api.ConfigFileSelection[]>([])
@@ -86,7 +86,7 @@ watch(() => props.open, async (open) => {
     return
   }
   task.value = null
-  Object.assign(manual, { name: '', description: '', locator: {}, content_format: 'properties',
+  Object.assign(manual, { name: '', description: '', locator: {}, content_format: 'yaml',
     approval_role_id: 0, application_ids: [], initial_content: '' })
   selectionDrafts.clear()
   selected.value = []
@@ -116,7 +116,7 @@ watch(instanceId, () => {
   loadedGroupScope = null
   selectionDrafts.clear()
   manual.locator = {}
-  manual.content_format = provider.value === 'consul' ? 'consul_kv' : 'properties'
+  manual.content_format = provider.value === 'consul' ? 'consul_kv' : 'yaml'
   manual.initial_content = provider.value === 'consul' ? '{}' : ''
   selected.value = []
   if (provider.value === 'nacos') void loadNacosNamespaces()
@@ -125,7 +125,7 @@ watch(selected, (resources) => {
   discovered.value.forEach((item) => selectionDrafts.set(JSON.stringify(item.locator), item))
   discovered.value = resources.map((resource) => selectionDrafts.get(JSON.stringify(resource.locator)) || ({
     name: resource.display_name, locator: resource.locator,
-    content_format: provider.value === 'consul' ? 'consul_kv' : 'properties',
+    content_format: provider.value === 'consul' ? 'consul_kv' : 'yaml',
     approval_role_id: roles.value[0]?.id || 0, application_ids: [],
   }))
 })
@@ -275,7 +275,7 @@ async function submit() {
         <a-form-item label="格式" required><a-select v-model:value="manual.content_format" :disabled="!provider" :options="formats" /></a-form-item>
         <a-form-item label="审批角色" required><a-select :value="manual.approval_role_id || undefined" placeholder="请选择审批角色" :options="roles.map((item) => ({ label: item.name, value: item.id }))" @update:value="manual.approval_role_id = $event" /></a-form-item>
         <a-form-item label="关联 CMDB 应用">
-          <a-select v-model:value="manual.application_ids" mode="multiple" :options="applications.map((item) => ({ label: item.name, value: item.id }))" />
+          <a-select v-model:value="manual.application_ids" mode="multiple" option-filter-prop="label" :options="applications.map((item) => ({ label: item.name, value: item.id }))" />
         </a-form-item>
         <a-form-item label="初始内容"><ConfigContentEditor :model-value="manual.initial_content || ''" :format="manual.content_format"
           @update:model-value="manual.initial_content = $event" /></a-form-item>
@@ -290,7 +290,7 @@ async function submit() {
             <a-form-item label="审批角色" required><a-select v-model:value="item.approval_role_id" :options="roles.map((role) => ({ label: role.name, value: role.id }))" /></a-form-item>
           </div>
           <a-form-item label="关联 CMDB 应用">
-            <a-select v-model:value="discovered[index].application_ids" mode="multiple" :options="applications.map((app) => ({ label: app.name, value: app.id }))" />
+            <a-select v-model:value="discovered[index].application_ids" mode="multiple" option-filter-prop="label" :options="applications.map((app) => ({ label: app.name, value: app.id }))" />
           </a-form-item>
         </div>
       </template>
