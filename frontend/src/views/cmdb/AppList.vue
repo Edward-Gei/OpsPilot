@@ -19,6 +19,7 @@ import { useUserStore } from '@/stores/user'
 const userStore = useUserStore()
 const canWrite = userStore.hasPerm('cmdb:write')
 const canDelete = userStore.hasPerm('cmdb:delete')
+const canReadConfigs = userStore.hasPerm('config:read')
 
 // 部署方式彩色标签（与 M1 列表标签风格一致）
 const deployText: Record<string, { text: string; color: string }> = {
@@ -390,7 +391,7 @@ function isSafeRepoUrl(url: string | null): boolean {
 }
 
 /** 打开详情：拉取应用信息及关联主机、配置文件元信息 */
-async function openDetail(row: cmdbApi.AppItem) {
+async function openDetail(row: Pick<cmdbApi.AppItem, 'id'>) {
   detailVisible.value = true
   detailLoading.value = true
   try {
@@ -400,7 +401,17 @@ async function openDetail(row: cmdbApi.AppItem) {
   }
 }
 
+/** 普通点击复用详情抽屉，修饰键点击保留浏览器打开详情链接的行为。 */
+function onNameClick(event: MouseEvent, row: cmdbApi.AppItem) {
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+  event.preventDefault()
+  void openDetail(row).catch(() => { detailVisible.value = false })
+}
+
 onMounted(() => {
+  // 详情链接按 ID 查询，不依赖分页列表中是否包含目标应用。
+  const qid = typeof route.query.id === 'string' ? Number(route.query.id) : NaN
+  if (Number.isSafeInteger(qid) && qid > 0) void openDetail({ id: qid }).catch(() => { detailVisible.value = false })
   // 全局搜索跳转：?keyword= 带入搜索框自动过滤，随后清掉 query 避免刷新残留（SEARCH-04）
   const qkw = route.query.keyword
   if (typeof qkw === 'string' && qkw) {
@@ -509,7 +520,10 @@ onMounted(() => {
       }"
     >
       <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'language'">{{ record.language || '—' }}</template>
+        <template v-if="column.key === 'name'">
+          <a :href="`/cmdb/apps?id=${record.id}`" @click="onNameClick($event, record as cmdbApi.AppItem)">{{ record.name }}</a>
+        </template>
+        <template v-else-if="column.key === 'language'">{{ record.language || '—' }}</template>
         <template v-else-if="column.key === 'deploy_type'">
           <a-tag :color="deployText[record.deploy_type]?.color">
             {{ deployText[record.deploy_type]?.text || record.deploy_type }}
@@ -701,7 +715,7 @@ onMounted(() => {
             v-else
             bordered
             :columns="[
-              { title: '主机名', dataIndex: 'hostname' },
+              { title: '主机名', dataIndex: 'hostname', key: 'hostname' },
               { title: 'IP 地址', dataIndex: 'ip', width: 130 },
               { title: '环境', dataIndex: 'environment', width: 80 },
             ]"
@@ -709,7 +723,11 @@ onMounted(() => {
             row-key="id"
             size="small"
             :pagination="false"
-          />
+          >
+            <template #bodyCell="{ column, record }">
+              <a v-if="column.key === 'hostname'" :href="`/cmdb/hosts?id=${record.id}`">{{ record.hostname }}</a>
+            </template>
+          </a-table>
 
           <div class="detail-hosts-title">关联配置文件（{{ detail.config_files.length }}）</div>
           <a-empty v-if="!detail.config_files.length" description="暂无关联配置文件" />
@@ -717,7 +735,7 @@ onMounted(() => {
             v-else
             bordered
             :columns="[
-              { title: '配置文件', dataIndex: 'name', width: 145 },
+              { title: '配置文件', dataIndex: 'name', key: 'name', width: 145 },
               { title: '平台实例', dataIndex: 'platform_instance_name', width: 125 },
               { title: '远端定位', key: 'locator', width: 210 },
               { title: '状态', key: 'status', width: 90 },
@@ -729,7 +747,11 @@ onMounted(() => {
             :scroll="{ x: 570 }"
           >
             <template #bodyCell="{ column, record }">
-              <span v-if="column.key === 'locator'" class="config-locator">{{ configLocatorText(record as cmdbApi.AppConfigFile) }}</span>
+              <template v-if="column.key === 'name'">
+                <a v-if="canReadConfigs" :href="`/application-configs/${record.id}`">{{ record.name }}</a>
+                <span v-else>{{ record.name }}</span>
+              </template>
+              <span v-else-if="column.key === 'locator'" class="config-locator">{{ configLocatorText(record as cmdbApi.AppConfigFile) }}</span>
               <a-tag v-else-if="column.key === 'status'" :color="configStatus(record as cmdbApi.AppConfigFile).color">
                 {{ configStatus(record as cmdbApi.AppConfigFile).text }}
               </a-tag>

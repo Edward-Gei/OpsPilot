@@ -292,7 +292,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .config-toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
 .config-search { width: min(300px, 100%); }
-.config-filter { width: 180px; max-width: 100%; }
+.config-filter { width: 140px; max-width: 100%; }
 .config-toolbar-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-left: auto; }
 .file-name { font-weight: 600; }
 .locator-value { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

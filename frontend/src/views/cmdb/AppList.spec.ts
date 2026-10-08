@@ -4,12 +4,14 @@ import { config, flushPromises, mount } from '@vue/test-utils'
 import Antd from 'ant-design-vue'
 import { createPinia } from 'pinia'
 import AppList from './AppList.vue'
+import HostList from './HostList.vue'
 
-const api = vi.hoisted(() => ({ listApps: vi.fn(), getApp: vi.fn() }))
+const api = vi.hoisted(() => ({ listApps: vi.fn(), getApp: vi.fn(), listHosts: vi.fn(), getHost: vi.fn(),
+  routeQuery: {} as Record<string, string>, configRead: true }))
 vi.mock('@/api/cmdb', () => api)
-vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: () => true }) }))
+vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: (perm: string) => perm !== 'config:read' || api.configRead }) }))
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: {}, path: '/cmdb/apps' }),
+  useRoute: () => ({ query: api.routeQuery, path: '/cmdb/apps' }),
   useRouter: () => ({ replace: vi.fn() }),
 }))
 
@@ -32,6 +34,8 @@ window.matchMedia = vi.fn().mockImplementation((media: string) => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  api.routeQuery = {}
+  api.configRead = true
   api.listApps.mockResolvedValue({ items: [app], total: 1 })
   api.getApp.mockResolvedValue({ ...app, hosts: [], config_files: [{
     id: 11, name: 'common.yaml', platform_instance_name: '生产 Nacos', provider: 'nacos',
@@ -40,6 +44,56 @@ beforeEach(() => {
   }] })
 })
 afterEach(() => { document.body.innerHTML = '' })
+
+it('点击应用名打开该应用详情，关联主机和配置提供对应详情链接', async () => {
+  api.getApp.mockResolvedValue({ ...app, hosts: [{ id: 21, hostname: 'demo-host', ip: '192.0.2.1', environment: 'prod' }],
+    config_files: [{ id: 11, name: 'common.yaml', platform_instance_name: 'Nacos', provider: 'nacos',
+      locator: { group: 'DEFAULT_GROUP', data_id: 'common.yaml' }, status: 'active', drift_status: 'clean' }] })
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  const nameLink = wrapper.find('a[href="/cmdb/apps?id=7"]')
+  expect(nameLink.exists()).toBe(true)
+  await nameLink.trigger('click')
+  await flushPromises()
+  expect(document.querySelector('.ant-drawer-title')?.textContent).toBe('订单应用')
+  expect(document.querySelector('a[href="/cmdb/hosts?id=21"]')?.textContent).toBe('demo-host')
+  expect(document.querySelector('a[href="/application-configs/11"]')?.textContent).toBe('common.yaml')
+  wrapper.unmount()
+})
+
+it('没有配置读取权限时仍展示关联配置名称，但不提供详情链接', async () => {
+  api.configRead = false
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  const detailButton = [...document.querySelectorAll<HTMLButtonElement>('button')]
+    .find(button => button.textContent?.includes('详情'))!
+  detailButton.click()
+  await flushPromises()
+  expect(document.body.textContent).toContain('common.yaml')
+  expect(document.querySelector('a[href="/application-configs/11"]')).toBeNull()
+  wrapper.unmount()
+})
+
+it('应用详情链接按 ID 直达，不依赖当前分页是否包含该应用', async () => {
+  api.routeQuery = { id: '7' }
+  api.listApps.mockResolvedValue({ items: [], total: 0 })
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  expect(document.querySelector('.ant-drawer-title')?.textContent).toBe('订单应用')
+  wrapper.unmount()
+})
+
+it('主机详情链接按 ID 直达，不依赖当前列表记录', async () => {
+  api.routeQuery = { id: '21' }
+  api.listHosts.mockResolvedValue({ items: [], total: 0 })
+  api.getHost.mockResolvedValue({ id: 21, hostname: 'demo-host', ip: '192.0.2.1', project: 'mitrade',
+    environment: 'prod', status: 'online', ssh_port: 22, apps: [], created_at: null })
+  const wrapper = mount(HostList, { attachTo: document.body })
+  await flushPromises()
+  expect(document.querySelector('.ant-drawer-title')?.textContent).toBe('demo-host')
+  expect(document.body.textContent).toContain('192.0.2.1')
+  wrapper.unmount()
+})
 
 it('应用详情展示关联配置文件元信息', async () => {
   const wrapper = mount(AppList, { attachTo: document.body })

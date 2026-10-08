@@ -363,7 +363,7 @@ const detailLoading = ref(false)
 const detail = ref<cmdbApi.HostDetail | null>(null)
 
 /** 打开详情：拉取主机完整信息 + 关联应用清单 */
-async function openDetail(row: cmdbApi.HostItem) {
+async function openDetail(row: Pick<cmdbApi.HostItem, 'id'>) {
   detailVisible.value = true
   detailLoading.value = true
   try {
@@ -374,6 +374,9 @@ async function openDetail(row: cmdbApi.HostItem) {
 }
 
 onMounted(() => {
+  // 应用关联主机链接按 ID 直达详情，不依赖目标是否出现在当前分页。
+  const qid = typeof route.query.id === 'string' ? Number(route.query.id) : NaN
+  if (Number.isSafeInteger(qid) && qid > 0) void openDetail({ id: qid }).catch(() => { detailVisible.value = false })
   // 全局搜索跳转：?keyword= 带入搜索框自动过滤，随后清掉 query 避免刷新残留（SEARCH-04）
   const qkw = route.query.keyword
   if (typeof qkw === 'string' && qkw) {
