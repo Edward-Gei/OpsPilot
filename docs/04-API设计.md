@@ -190,6 +190,10 @@
 | PUT | `/templates/{id}/status` | `template:write` | 启停 |
 | DELETE | `/templates/{id}` | `template:delete` | 有进行中工单时拒绝 |
 
+模板创建/更新可提交 `app_ids: [应用ID, ...]`，仅允许存在且不重复的正整数 ID；`[]` 解除全部绑定。创建时省略表示不绑定，更新时省略则保留原关联，以兼容旧客户端；显式 `null` 无效。创建非空绑定及更新显式提交 `app_ids` 时额外要求 `cmdb:read`，候选应用复用分页 `GET /cmdb/apps`。
+
+`GET /templates/{id}` 额外返回 `app_ids` 和 `apps: [{id,name}]`；`GET /cmdb/apps/{id}` 额外返回 `ticket_templates: [{id,name,status}]`。双向关联仅提供名称等元信息，应用详情不会返回模板脚本或密钥引用。完整详情分别沿用 `template:read` 与 `cmdb:read` 权限。
+
 ### 7.3 `/tickets`
 
 | 方法 | 路径 | 权限 | 说明 |

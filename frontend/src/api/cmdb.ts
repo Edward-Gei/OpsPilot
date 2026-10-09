@@ -69,6 +69,7 @@ export interface AppConfigFile {
 export interface AppDetail extends AppItem {
   hosts: HostItem[]
   config_files: AppConfigFile[]
+  ticket_templates: { id: number; name: string; status: 'enabled' | 'disabled' }[]
 }
 
 export interface HostQuery {

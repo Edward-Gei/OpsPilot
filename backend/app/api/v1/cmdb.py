@@ -317,12 +317,13 @@ async def get_app(
     session: DbSession,
     _: User = Depends(require_perm("cmdb:read")),
 ) -> dict:
-    """详情 + 关联主机及配置文件元信息；均以 cmdb:read 授权。"""
+    """详情及关联主机、配置文件、工单模板元信息；均以 cmdb:read 授权。"""
     app = await cmdb_service.get_app_or_404(session, app_id)
     hosts = await cmdb_service.get_app_hosts(session, app_id)
     data = _app_brief(app, _hosts_stats(hosts))
     data["hosts"] = [_host_brief(h) for h in hosts]
     data["config_files"] = await cmdb_service.get_app_config_files(session, app_id)
+    data["ticket_templates"] = await cmdb_service.get_app_ticket_templates(session, app_id)
     return ok(data)
 
 

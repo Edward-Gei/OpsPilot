@@ -2,13 +2,13 @@
 
 import re
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.response import Errors
 from app.models.auth import Role
-from app.models.cmdb import JobHost
-from app.models.job import Credential, ProcessStep, ProcessTemplate, TicketTemplate
+from app.models.cmdb import Application, JobHost
+from app.models.job import Credential, ProcessStep, ProcessTemplate, TicketTemplate, TicketTemplateApplication
 from app.models.ticket import Ticket
 from app.services.credential_service import is_script_secret
 
@@ -174,6 +174,11 @@ async def _validate_ticket_refs(session: AsyncSession, data: dict, *, update_id:
         if role_ids - found:
             raise Errors.param(f"可见角色不存在: {sorted(role_ids - found)}")
     await validate_script_secret_refs(session, data.get("credential_refs") or [])
+    app_ids = set(data.get("app_ids") or [])
+    if app_ids:
+        found = set((await session.execute(select(Application.id).where(Application.id.in_(app_ids)))).scalars())
+        if app_ids - found:
+            raise Errors.param(f"应用不存在: {sorted(app_ids - found)}")
     return process
 
 
@@ -229,12 +234,33 @@ async def credential_ref_snapshot(session: AsyncSession, refs: list[dict]) -> li
     ]
 
 
+async def get_template_apps(session: AsyncSession, template_id: int) -> list[dict]:
+    """只返回适用应用的安全元信息，执行配置仍由模板自身决定。"""
+    rows = await session.execute(
+        select(Application.id, Application.name)
+        .join(TicketTemplateApplication, TicketTemplateApplication.app_id == Application.id)
+        .where(TicketTemplateApplication.template_id == template_id).order_by(Application.id)
+    )
+    return [{"id": row.id, "name": row.name} for row in rows]
+
+
+async def _replace_template_apps(session: AsyncSession, template_id: int, app_ids: list[int]) -> None:
+    """保存时全量替换关联，空列表表示解除全部绑定。"""
+    await session.execute(delete(TicketTemplateApplication).where(TicketTemplateApplication.template_id == template_id))
+    for app_id in app_ids:
+        session.add(TicketTemplateApplication(template_id=template_id, app_id=app_id))
+    await session.flush()
+
+
 async def create_template(session: AsyncSession, *, created_by: int, data: dict) -> TicketTemplate:
     await _unique(session, TicketTemplate, data["name"])
     await _validate_ticket_refs(session, data)
-    tpl = TicketTemplate(created_by=created_by, **data)
+    fields = dict(data)
+    app_ids = fields.pop("app_ids", [])
+    tpl = TicketTemplate(created_by=created_by, **fields)
     session.add(tpl)
     await session.flush()
+    await _replace_template_apps(session, tpl.id, app_ids)
     return tpl
 
 
@@ -244,7 +270,10 @@ async def update_template(session: AsyncSession, template_id: int, *, data: dict
         await _unique(session, TicketTemplate, data["name"], template_id)
     await _validate_ticket_refs(session, data, update_id=template_id)
     for key, value in data.items():
-        setattr(tpl, key, value)
+        if key != "app_ids":
+            setattr(tpl, key, value)
+    if "app_ids" in data:
+        await _replace_template_apps(session, template_id, data["app_ids"])
     await session.flush()
     return tpl
 
@@ -263,6 +292,7 @@ async def delete_template(session: AsyncSession, template_id: int) -> TicketTemp
     ))).scalars().all()
     if active:
         raise Errors.rejected(f"工单模板仍有执行中的工单: {', '.join(active[:5])}")
+    await session.execute(delete(TicketTemplateApplication).where(TicketTemplateApplication.template_id == template_id))
     await session.delete(tpl)
     await session.flush()
     return tpl

@@ -13,7 +13,7 @@ from app.models.application_config import (
     ConfigTaskItem,
     ConfigVersion,
 )
-from app.models.job import Credential, ProcessStep, ProcessTemplate, TicketTemplate
+from app.models.job import Credential, ProcessStep, ProcessTemplate, TicketTemplate, TicketTemplateApplication
 from app.models.ticket import (
     Ticket,
     TicketApproval,
@@ -29,7 +29,7 @@ __all__ = [
     "User", "Role", "Permission", "UserRole", "RolePermission", "ApiToken",
     "Host", "Application", "AppHost", "JobHost",
     "DnsZone", "DnsRecordSet", "DnsZoneBindTask", "DnsZoneBindTaskItem",
-    "Credential", "ProcessTemplate", "ProcessStep", "TicketTemplate",
+    "Credential", "ProcessTemplate", "ProcessStep", "TicketTemplate", "TicketTemplateApplication",
     "Ticket", "TicketStep", "TicketApproval", "TicketParameterPrepare",
     "Execution", "ExecutionStep",
     "NotifyChannel", "NotifyChannelEvent", "NotificationRecord", "UserNotification",

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 工单模板列表：只维护业务入口，流程步骤和参数统一从流程模板引用，避免重复配置。
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
 import { CodeOutlined, CopyOutlined, DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons-vue'
 import * as api from '@/api/job'
@@ -20,6 +21,8 @@ interface Row extends api.TemplateItem {
 }
 
 const userStore = useUserStore()
+const route = useRoute()
+const canReadApps = userStore.hasPerm('cmdb:read')
 const canWrite = userStore.hasPerm('template:write')
 const canDelete = userStore.hasPerm('template:delete')
 const rows = ref<Row[]>([])
@@ -153,9 +156,14 @@ function formatReceiver(value: string): string {
 function formatValues(values: string[] | undefined, map: Record<string, string>): string {
   return values?.length ? values.map((value) => map[value] || value).join('、') : '-'
 }
-async function openDetail(row: Row) { detail.value = null; detailOpen.value = true; detail.value = await api.getTemplate(row.id) }
+async function openDetail(row: Pick<Row, 'id'>) { detail.value = null; detailOpen.value = true; detail.value = await api.getTemplate(row.id) }
 const rowSelection = computed(() => ({ selectedRowKeys: selectedKeys.value, onChange: (keys: (string | number)[]) => (selectedKeys.value = keys as number[]) }))
-onMounted(load)
+onMounted(() => {
+  // 应用关联链接按 ID 直达只读详情，不依赖当前列表分页。
+  const qid = typeof route.query.id === 'string' ? Number(route.query.id) : NaN
+  if (Number.isSafeInteger(qid) && qid > 0) void openDetail({ id: qid }).catch(() => { detailOpen.value = false })
+  void load()
+})
 </script>
 
 <template>
@@ -207,6 +215,15 @@ onMounted(load)
             <a-descriptions-item label="模板名称">{{ detail.name }}</a-descriptions-item>
             <a-descriptions-item label="说明">{{ detail.description || '-' }}</a-descriptions-item>
             <a-descriptions-item label="作业主机">{{ hostMap[detail.job_host_id] || detail.job_host_id }}</a-descriptions-item>
+            <a-descriptions-item label="适用应用">
+              <a-space v-if="detail.apps?.length" wrap>
+                <a-tag v-for="app in detail.apps" :key="app.id" color="blue">
+                  <a v-if="canReadApps" :href="`/cmdb/apps?id=${app.id}`">{{ app.name }}</a>
+                  <span v-else>{{ app.name }}</span>
+                </a-tag>
+              </a-space>
+              <span v-else>未绑定应用</span>
+            </a-descriptions-item>
             <a-descriptions-item label="流程模板">{{ detail.process_template?.name || processMap[detail.process_template_id] || '-' }}<span v-if="detail.process_template" class="inline-muted">（{{ detail.process_template.status === 'enabled' ? '启用' : '停用' }}）</span></a-descriptions-item>
             <a-descriptions-item v-if="detail.credential_refs?.length" label="脚本密钥"><a-space wrap><a-tag v-for="ref in detail.credential_refs" :key="ref.alias" color="purple">{{ ref.alias }} → {{ ref.credential_name }}</a-tag></a-space></a-descriptions-item>
             <a-descriptions-item label="可见角色"><template v-if="detail.visible_role_ids?.length"><a-space wrap><a-tag v-for="roleId in detail.visible_role_ids" :key="roleId" color="blue">{{ roleMap[roleId] || roleId }}</a-tag></a-space></template><span v-else>全部角色</span></a-descriptions-item>

@@ -60,6 +60,22 @@ class TicketTemplate(Base):
     updated_at: Mapped[datetime] = updated_at_column()
 
 
+class TicketTemplateApplication(Base):
+    """模板适用应用的多对多台账，仅用于关联展示。"""
+
+    __tablename__ = "ticket_template_application"
+    __table_args__ = (
+        UniqueConstraint("template_id", "app_id", name="uk_ticket_template_application"),
+        Index("idx_ticket_template_application_app", "app_id"),
+        Base.__table_args__,
+    )
+
+    id: Mapped[int] = pk_column()
+    template_id: Mapped[int] = mapped_column(UBIGINT, nullable=False)
+    app_id: Mapped[int] = mapped_column(UBIGINT, nullable=False)
+    created_at: Mapped[datetime] = created_at_column()
+
+
 class ProcessTemplate(Base):
     """可复用流程：只维护步骤、执行策略和步骤审批，不绑定参数契约。"""
 

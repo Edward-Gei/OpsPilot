@@ -5,12 +5,13 @@
     与 CMDB 主机已解耦，无工单侧删除保护
     删应用：V2 模型中工单不再引用应用，无工单侧删除保护
 """
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.response import Errors
 from app.models.cmdb import AppHost, Application, Host
 from app.models.application_config import ConfigFile, ConfigFileApplication, ConfigPlatformInstance
+from app.models.job import TicketTemplate, TicketTemplateApplication
 
 
 # ---------- 主机 ----------
@@ -364,9 +365,20 @@ async def update_app(
     return app
 
 
+async def get_app_ticket_templates(session: AsyncSession, app_id: int) -> list[dict]:
+    """应用详情仅展示关联模板元信息，不暴露脚本、参数及密钥引用。"""
+    rows = await session.execute(
+        select(TicketTemplate.id, TicketTemplate.name, TicketTemplate.status)
+        .join(TicketTemplateApplication, TicketTemplateApplication.template_id == TicketTemplate.id)
+        .where(TicketTemplateApplication.app_id == app_id).order_by(TicketTemplate.id)
+    )
+    return [{"id": row.id, "name": row.name, "status": row.status} for row in rows]
+
+
 async def delete_app(session: AsyncSession, app_id: int) -> Application:
     """删除应用；关联关系级联清理。V2 模型工单不引用应用，无需工单侧删除保护。"""
     app = await get_app_or_404(session, app_id)
+    await session.execute(delete(TicketTemplateApplication).where(TicketTemplateApplication.app_id == app_id))
     for link in (
         await session.execute(select(AppHost).where(AppHost.app_id == app_id))
     ).scalars():

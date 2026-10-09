@@ -20,6 +20,7 @@ const userStore = useUserStore()
 const canWrite = userStore.hasPerm('cmdb:write')
 const canDelete = userStore.hasPerm('cmdb:delete')
 const canReadConfigs = userStore.hasPerm('config:read')
+const canReadTemplates = userStore.hasPerm('template:read')
 
 // 部署方式彩色标签（与 M1 列表标签风格一致）
 const deployText: Record<string, { text: string; color: string }> = {
@@ -728,6 +729,15 @@ onMounted(() => {
               <a v-if="column.key === 'hostname'" :href="`/cmdb/hosts?id=${record.id}`">{{ record.hostname }}</a>
             </template>
           </a-table>
+
+          <div class="detail-hosts-title">关联工单模板（{{ detail.ticket_templates?.length || 0 }}）</div>
+          <a-empty v-if="!detail.ticket_templates?.length" description="暂无关联工单模板" />
+          <a-space v-else wrap>
+            <a-tag v-for="template in detail.ticket_templates" :key="template.id" color="blue">
+              <a v-if="canReadTemplates" :href="`/job/templates/tickets?id=${template.id}`">{{ template.name }}</a>
+              <span v-else>{{ template.name }}</span>
+            </a-tag>
+          </a-space>
 
           <div class="detail-hosts-title">关联配置文件（{{ detail.config_files.length }}）</div>
           <a-empty v-if="!detail.config_files.length" description="暂无关联配置文件" />

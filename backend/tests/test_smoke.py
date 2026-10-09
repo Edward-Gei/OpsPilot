@@ -85,7 +85,7 @@ def test_metadata_contains_all_tables():
     expected = {
         "user", "role", "permission", "user_role", "role_permission", "api_token",
         "host", "application", "app_host", "job_host",
-        "credential", "ticket_template", "process_template", "process_step",
+        "credential", "ticket_template", "ticket_template_application", "process_template", "process_step",
         "ticket", "ticket_step", "ticket_approval",
         "ticket_parameter_prepare",
         "execution", "execution_step",

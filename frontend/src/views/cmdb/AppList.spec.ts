@@ -45,6 +45,17 @@ beforeEach(() => {
 })
 afterEach(() => { document.body.innerHTML = '' })
 
+it('应用详情展示关联工单模板名称并链接到模板详情', async () => {
+  api.routeQuery = { id: '7' }
+  api.getApp.mockResolvedValue({ ...app, hosts: [], config_files: [],
+    ticket_templates: [{ id: 13, name: '订单发布入口', status: 'enabled' }] })
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  expect(document.body.textContent).toContain('关联工单模板（1）')
+  expect(document.querySelector('a[href="/job/templates/tickets?id=13"]')?.textContent).toBe('订单发布入口')
+  wrapper.unmount()
+})
+
 it('点击应用名打开该应用详情，关联主机和配置提供对应详情链接', async () => {
   api.getApp.mockResolvedValue({ ...app, hosts: [{ id: 21, hostname: 'demo-host', ip: '192.0.2.1', environment: 'prod' }],
     config_files: [{ id: 11, name: 'common.yaml', platform_instance_name: 'Nacos', provider: 'nacos',
