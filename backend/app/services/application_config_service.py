@@ -551,6 +551,7 @@ async def submit_candidate(session: AsyncSession, file_id: int, actor_id: int) -
         source="opspilot_publish",
         status=ConfigVersionStatus.PENDING_APPROVAL.value,
         content_enc=draft.content_enc,
+        base_version_id=config_file.current_version_id,
         base_snapshot_id=draft.base_snapshot_id,
         approval_role_id=config_file.approval_role_id,
         submitted_by=actor_id,
@@ -568,6 +569,27 @@ async def get_candidate(session: AsyncSession, file_id: int, version_id: int) ->
     if version is None or version.config_file_id != file_id:
         raise Errors.not_found("配置版本不存在")
     return version
+
+
+async def version_comparison(session: AsyncSession, config_file: ConfigFile, version: ConfigVersion,
+                             can_read_secret: bool) -> dict:
+    """只读取同文件的冻结基准，双方沿用脱敏规则且保留注释。"""
+    baseline = await session.get(ConfigVersion, version.base_version_id) if version.base_version_id else None
+    if version.base_version_id and (baseline is None or baseline.config_file_id != config_file.id):
+        raise Errors.not_found("配置对照版本不存在")
+    content = validate_and_normalize_content(config_file.content_format, decrypt_text(version.content_enc))
+    base_content = (validate_and_normalize_content(config_file.content_format, decrypt_text(baseline.content_enc))
+                    if baseline else None)
+    return {
+        "version_id": version.id, "version_no": version.version_no,
+        "content_format": config_file.content_format,
+        "content": redact_content(content, can_read_secret),
+        "base_version_id": baseline.id if baseline else None,
+        "base_version_no": baseline.version_no if baseline else None,
+        "base_content": redact_content(base_content, can_read_secret) if base_content else "",
+        # 即使敏感值脱敏后相同，仍提示原始正文存在变化。
+        "has_changes": content.text != (base_content.text if base_content else ""),
+    }
 
 
 async def can_approve_candidate(session: AsyncSession, user_id: int, role_id: int) -> bool:
@@ -617,10 +639,8 @@ async def approval_todo_content(session: AsyncSession, version_id: int, actor_id
             or not await can_approve_candidate(session, actor_id, version.approval_role_id)):
         raise Errors.not_found("配置待办不存在")
     config_file = await get_config_file(session, version.config_file_id)
-    content = validate_and_normalize_content(config_file.content_format, decrypt_text(version.content_enc))
-    return {"version_id": version.id, "file_id": config_file.id, "file_name": config_file.name,
-            "version_no": version.version_no, "content_format": config_file.content_format,
-            "content": redact_content(content, can_read_secret)}
+    comparison = await version_comparison(session, config_file, version, can_read_secret)
+    return {**comparison, "file_id": config_file.id, "file_name": config_file.name}
 
 
 async def decide_candidate(

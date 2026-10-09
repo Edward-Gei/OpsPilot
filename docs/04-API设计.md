@@ -292,7 +292,7 @@ notify:read notify:write notify:test system:config
 | GET | `/compatible-credentials` | `config:instance` | 按平台筛选凭据名称和认证类型 |
 | GET | `/approval-roles`、`/cmdb-applications` | `config:read` | 角色与关联应用选项，不授予审批权；应用选项返回全量名称/ID，支持 `keyword` 按名称筛选 |
 | GET | `/approval-todo` | 已登录用户 | 分页返回当前审批角色成员可处理的候选版本；admin 可见所有待审批候选，无 `ticket:approve` 或 `config:read` 要求 |
-| GET | `/approval-todo/{version_id}/content` | 当前审批角色成员或 admin | 只读预览候选正文；按 `secret:read` 脱敏，无权或候选已处理时返回 404 |
+| GET | `/approval-todo/{version_id}/content` | 当前审批角色成员或 admin | 返回候选及冻结旧正式版本的差异对照；双方按 `secret:read` 脱敏，无权或候选已处理时返回 404 |
 | POST | `/discover`、`/import-tasks` | `config:write` | 发现远端资源、创建多选接入任务；任务返回 `202` |
 | GET | `/import-tasks` | `config:read` | 最近 20 项接入任务及逐项结果 |
 | GET/POST | `/files` | `config:read` / `config:write` | 分页列表、手工新建本地配置与草稿 |
@@ -300,6 +300,7 @@ notify:read notify:write notify:test system:config
 | POST/DELETE | `/files/{id}/archive`、`/files/{id}` | `config:delete` | 先归档，再删除本地记录；永不删除远端 |
 | GET/PUT/DELETE | `/files/{id}/draft` | `config:read` / `config:write` | 读取、保存、丢弃草稿 |
 | GET | `/files/{id}/versions`、`/files/{id}/versions/{version_id}/content` | `config:read` | 版本与按权限脱敏的正文 |
+| GET | `/files/{id}/versions/{version_id}/comparison` | `config:read` | 读取版本生成时旧正式版本与所选版本的只读对照；双方按 `secret:read` 脱敏 |
 | POST | `/files/{id}/candidates` | `config:write` | 冻结草稿并提交审批 |
 | POST | `/files/{id}/candidates/{version_id}/approve`、`/reject` | 当前审批角色成员或 admin | 批准时同事务创建远端发布任务，驳回则不发布；提交人可自审，无 `config:approve` 或 `config:write` 要求 |
 | POST | `/files/{id}/sync`、`/files/{id}/versions/{version_id}/publish` | `config:write` | 创建手动同步任务；指定版本发布用于失败后人工重试，漂移弹窗重新发布时请求体传 `confirmed_snapshot_id`，返回 `202` |
@@ -309,5 +310,6 @@ notify:read notify:write notify:test system:config
 `GET /files` 支持 `keyword` 名称搜索、`platform_instance_id` 实例筛选和 `status` 标签筛选（`clean` 一致、`drifted` 存在漂移、`remote_missing` 远端缺失、`sync_failed` 同步失败、`unpublished` 待首次发布、`archived` 已归档）。筛选可组合，计数和分页均基于筛选结果；归档优先于漂移状态，一致仅包含已有正式版本的活跃文件。`sort_by=last_synced_at` 配合 `sort_order=asc|desc` 按最近同步时间排序，未同步记录始终置后，同时间按 ID 降序；未指定排序字段时保持 ID 降序。
 
 文件格式限定 `properties`、YAML、JSON、TEXT 和 Consul KV；仅生产环境。正文响应基于 `secret:read` 脱敏，敏感键、服务账号 JSON 字符串和带签名/令牌参数的 URL 用占位符隐藏；无密钥权限的编辑只能保留这些既有值。任务错误和审计不包含正文与凭据。
+版本比较响应包含 `version_id`、`version_no`、`content_format`、`content`、`base_version_id`、`base_version_no`、`base_content` 和 `has_changes`。审批正文接口额外保留 `file_id`、`file_name`。生成候选或导入漂移时冻结当前正式版本作为基准，跳过未生效候选；无旧正式版本时基准 ID/版本号为空、正文为空字符串。双方保留注释，`has_changes` 根据原始正文判断，敏感值脱敏后内容相同仍提示存在隐藏变更。历史版本不会随后续发布切换基准。旧数据由迁移 `0024` 按现存发布时间和版本号回填；此前重新发布已覆盖的发布时间无法完整还原，因此旧记录的回填仅使用仍留存的时间信息。
 审批通过仅表示发布任务已入队；Worker 写入并回读一致后版本才变为正式版本。远端暂不可用时首次执行后最多自动重试 3 次（间隔 2、4、8 秒）；写入结果不确定时只重试回读，不重复写入，普通人工重试也继承这一限制。明确确认漂移覆盖时，`confirmed_snapshot_id` 必须是当前文件最近一次同步的漂移/远端缺失快照，任务将它持久化为本次写入基线；Worker 执行时再次核对文件仍处于该漂移状态，远端正文在确认后再次变化也停止写入。此确认是新的人工发布操作，不沿用旧任务的不确定写入标记。远端漂移或确定性拒绝不自动重试，最终失败的已批准版本可人工重试。过期任务或丧失配置文件操作锁的 Worker 不得继续写入。
 工作台 `/dashboard/summary` 的 `todo_total` 为工单审批与配置审批待办之和；无工单审批权限的用户只计算其配置待办。前端“待办审批”分为工单审批与配置审批页签；配置文件详情只展示版本记录，审批统一在待办页处理。

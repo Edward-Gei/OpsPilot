@@ -9,6 +9,8 @@ import DriftCompareDrawer from './DriftCompareDrawer.vue'
 import ApplicationConfigList from './ApplicationConfigList.vue'
 import NewConfigDrawer from './NewConfigDrawer.vue'
 import ApplicationConfigDetail from './ApplicationConfigDetail.vue'
+import ConfigVersionCompare from './ConfigVersionCompare.vue'
+import TodoList from '@/views/ticket/TodoList.vue'
 
 const api = vi.hoisted(() => ({
   getConfigFile: vi.fn(), getDriftView: vi.fn(), listVersions: vi.fn(),
@@ -17,7 +19,8 @@ const api = vi.hoisted(() => ({
   listPlatformInstances: vi.fn(), listApprovalRoles: vi.fn(), listCmdbApplications: vi.fn(),
   listNacosNamespaces: vi.fn(), discoverConfigResources: vi.fn(), createConfigFile: vi.fn(),
   getDraft: vi.fn(), saveDraft: vi.fn(), discardDraft: vi.fn(), submitCandidate: vi.fn(),
-  listConfigFileTasks: vi.fn(), getVersionContent: vi.fn(), readSecret: false,
+  listConfigFileTasks: vi.fn(), getVersionContent: vi.fn(), getVersionComparison: vi.fn(),
+  listConfigApprovalTodo: vi.fn(), getConfigApprovalContent: vi.fn(), readSecret: false,
 }))
 vi.mock('@/api/applicationConfig', () => api)
 vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: (perm: string) => perm === 'config:write' || (perm === 'secret:read' && api.readSecret) }) }))
@@ -68,6 +71,12 @@ beforeEach(() => {
   api.listCmdbApplications.mockResolvedValue({ items: [] })
   api.listConfigFileTasks.mockResolvedValue({ items: [] })
   api.getVersionContent.mockResolvedValue({ content: '# 正式版本\nkey: published\n' })
+  api.getVersionComparison.mockResolvedValue({ version_id: 6, version_no: 6, content_format: 'yaml',
+    content: '# 新注释\nkey: updated\n', base_version_id: 4, base_version_no: 4,
+    base_content: '# 旧注释\nkey: old\n', has_changes: true })
+  api.listConfigApprovalTodo.mockResolvedValue({ items: [{ version_id: 6, file_id: 2, file_name: 'test-2.yaml',
+    version_no: 6, approval_role_name: '审批角色', submitter_name: '提交人', submitted_at: '2026-10-09T10:00:00' }], total: 1 })
+  api.getConfigApprovalContent.mockImplementation(() => api.getVersionComparison())
   api.getDraft.mockResolvedValue({ id: null, content: '# 正式版本\nkey: published\n', base_version_id: 6, base_snapshot_id: 1 })
   api.saveDraft.mockResolvedValue(null)
   api.discardDraft.mockResolvedValue(null)
@@ -92,6 +101,23 @@ describe('编辑页草稿恢复', () => {
     await wrapper.findAll('button').find(button => button.text().includes(text))!.trigger('click')
     await flushPromises()
   }
+
+  it('版本记录查看显示旧正式版本和所选版本的只读差异', async () => {
+    const wrapper = mountDetail()
+    await flushPromises()
+    await wrapper.find('[role="tab"][id$="-versions"]').trigger('click')
+    await wrapper.find('.ant-table button').trigger('click')
+    await flushPromises()
+    expect(api.getVersionComparison).toHaveBeenCalledWith(2, 6)
+    const dialog = document.querySelector('.ant-modal-body')!
+    expect(dialog.textContent).toContain('旧正式版本 v4')
+    expect(dialog.textContent).toContain('当前查看版本 v6')
+    expect(dialog.textContent).toContain('# 旧注释')
+    expect(dialog.textContent).toContain('# 新注释')
+    expect(dialog.querySelectorAll('.cm-mergeView').length).toBe(1)
+    expect(dialog.querySelector('[contenteditable="true"]')).toBeNull()
+    wrapper.unmount()
+  })
 
   it('重新进入编辑页自动展示已保存草稿和未发布提示', async () => {
     api.getDraft.mockResolvedValue({ id: 9, content: '# 保存的注释\nkey: draft\n', base_version_id: 6, base_snapshot_id: 1 })
@@ -231,6 +257,35 @@ describe('编辑页草稿恢复', () => {
     expect(wrapper.findComponent(ConfigContentEditor).props('readonly')).toBe(true)
     expect(wrapper.findComponent(ConfigContentEditor).props('modelValue')).toBe('# 正式版本\nkey: published\n')
     expect(wrapper.text()).not.toContain('保存草稿')
+    wrapper.unmount()
+  })
+})
+
+describe('版本差异与审批预览', () => {
+  it('审批详情直接使用授权响应的双方正文，不借用历史读取权限', async () => {
+    const wrapper = mount(TodoList, { attachTo: document.body, global: { stubs: { TicketDetailDrawer: true } } })
+    await flushPromises()
+    await wrapper.find('.ant-table button').trigger('click')
+    await flushPromises()
+    expect(api.getConfigApprovalContent).toHaveBeenCalledWith(6)
+    const drawer = document.querySelector('.ant-drawer-body')!
+    expect(drawer.textContent).toContain('旧正式版本 v4')
+    expect(drawer.textContent).toContain('# 旧注释')
+    expect(drawer.textContent).toContain('# 新注释')
+    expect(drawer.querySelector('[contenteditable="true"]')).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('首版显示空基准，纯敏感差异不能误报无变更', async () => {
+    const comparison = { version_id: 1, version_no: 1, content_format: 'yaml' as const, content: 'password: masked\n',
+      base_version_id: null, base_version_no: null, base_content: '', has_changes: true }
+    const wrapper = mount(ConfigVersionCompare, { props: { comparison } })
+    expect(wrapper.text()).toContain('空内容（无旧正式版本）')
+    await wrapper.setProps({ comparison: { ...comparison, base_version_id: 2, base_version_no: 2, base_content: comparison.content } })
+    expect(wrapper.text()).toContain('当前权限无法查看具体变化')
+    expect(wrapper.text()).not.toContain('无变更')
+    await wrapper.setProps({ comparison: { ...comparison, base_content: comparison.content, has_changes: false } })
+    expect(wrapper.text()).toContain('无变更')
     wrapper.unmount()
   })
 })

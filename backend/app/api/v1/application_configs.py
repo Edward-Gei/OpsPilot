@@ -455,6 +455,20 @@ async def get_version_content(
     return ok({"version_id": version.id, "content": redact_content(normalized, "secret:read" in perms)})
 
 
+@router.get("/files/{file_id}/versions/{version_id}/comparison", summary="读取按权限脱敏的版本差异对照")
+async def get_version_comparison(
+    file_id: int,
+    version_id: int,
+    session: DbSession,
+    actor: User = Depends(require_perm("config:read")),
+) -> dict:
+    """版本历史与审批共用生成时基准，普通正文读取接口保持原行为。"""
+    config_file = await application_config_service.get_config_file(session, file_id)
+    version = await application_config_service.get_candidate(session, file_id, version_id)
+    perms = await rbac_service.get_user_perms(session, actor.id)
+    return ok(await application_config_service.version_comparison(session, config_file, version, "secret:read" in perms))
+
+
 @router.post("/files/{file_id}/candidates", summary="提交候选版本")
 async def submit_candidate(
     file_id: int,

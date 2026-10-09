@@ -9,7 +9,7 @@ import { useUserStore } from '@/stores/user'
 import { makeResizable, onResizeColumn } from '@/utils/table'
 import { fmtTime } from './meta'
 import TicketDetailDrawer from './TicketDetailDrawer.vue'
-import ConfigContentEditor from '@/views/application-config/ConfigContentEditor.vue'
+import ConfigVersionCompare from '@/views/application-config/ConfigVersionCompare.vue'
 
 const user = useUserStore()
 const canApproveTicket = computed(() => user.hasPerm('ticket:approve'))
@@ -188,7 +188,7 @@ onMounted(() => { if (canApproveTicket.value) void loadList(); void loadConfigs(
     <!-- 审批抽屉：详情 + 通过/驳回操作区 -->
     <TicketDetailDrawer v-if="canApproveTicket" v-model:open="detailOpen" :ticket-id="detailId" show-approve
       @changed="onTicketChanged" />
-    <a-drawer v-model:open="configOpen" :width="'min(760px, 100vw)'" :title="`配置审批 · ${selectedConfig?.file_name || ''}`">
+    <a-drawer v-model:open="configOpen" :width="'min(1400px, 100vw)'" :title="`配置审批 · ${selectedConfig?.file_name || ''}`">
       <template v-if="selectedConfig">
         <a-descriptions bordered size="small" :column="1" class="config-approval-summary">
           <a-descriptions-item label="候选版本">v{{ selectedConfig.version_no }}</a-descriptions-item>
@@ -197,8 +197,7 @@ onMounted(() => { if (canApproveTicket.value) void loadList(); void loadConfigs(
           <a-descriptions-item label="提交时间">{{ fmtTime(selectedConfig.submitted_at) }}</a-descriptions-item>
         </a-descriptions>
         <a-spin :spinning="!configContent">
-          <ConfigContentEditor v-if="configContent" :format="configContent.content_format" :model-value="configContent.content"
-            readonly :masked="!user.hasPerm('secret:read')" :can-read-secret="user.hasPerm('secret:read')" />
+          <ConfigVersionCompare v-if="configContent" :comparison="configContent" />
         </a-spin>
       </template>
       <template #footer>

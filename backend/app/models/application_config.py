@@ -117,6 +117,7 @@ class ConfigVersion(Base):
     source: Mapped[str] = mapped_column(String(24), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False)
     content_enc: Mapped[str] = mapped_column(MTEXT, nullable=False)
+    base_version_id: Mapped[int | None] = mapped_column(UBIGINT)
     base_snapshot_id: Mapped[int | None] = mapped_column(UBIGINT)
     approval_role_id: Mapped[int | None] = mapped_column(UBIGINT)
     submitted_by: Mapped[int | None] = mapped_column(UBIGINT)

@@ -6,6 +6,7 @@ import { ArrowLeftOutlined, CloudSyncOutlined, DeleteOutlined, EditOutlined, Eye
 import * as api from '@/api/applicationConfig'
 import { useUserStore } from '@/stores/user'
 import ConfigContentEditor from './ConfigContentEditor.vue'
+import ConfigVersionCompare from './ConfigVersionCompare.vue'
 import DriftCompareDrawer from './DriftCompareDrawer.vue'
 
 const route = useRoute()
@@ -35,7 +36,7 @@ const syncStarting = ref(false)
 const busy = ref(false)
 const previewOpen = ref(false)
 const previewVersion = ref<api.ConfigVersion | null>(null)
-const previewContent = ref('')
+const previewComparison = ref<api.ConfigVersionComparison | null>(null)
 const viewingVersionId = ref<number | null>(null)
 const metadataOpen = ref(false)
 const metadata = ref({ name: '', description: '', approval_role_id: 0, application_ids: [] as number[] })
@@ -86,7 +87,7 @@ async function viewVersion(version: api.ConfigVersion) {
   // 独立预览不切换页签，也不覆盖当前正文。
   viewingVersionId.value = version.id
   try {
-    previewContent.value = (await api.getVersionContent(fileId.value, version.id)).content
+    previewComparison.value = await api.getVersionComparison(fileId.value, version.id)
     previewVersion.value = version
     previewOpen.value = true
   } finally { viewingVersionId.value = null }
@@ -182,7 +183,7 @@ watch(fileId, () => {
   selectedVersion.value = null
   previewOpen.value = false
   previewVersion.value = null
-  previewContent.value = ''
+  previewComparison.value = null
   void load()
 })
 watch(canEdit, (editing) => {
@@ -267,11 +268,10 @@ watch(canEdit, (editing) => {
         <a-form-item label="审批角色"><a-select v-model:value="metadata.approval_role_id" :options="roles.map((item) => ({ label: item.name, value: item.id }))" /></a-form-item>
         <a-form-item label="关联 CMDB 应用"><a-select v-model:value="metadata.application_ids" mode="multiple" option-filter-prop="label" :options="applications.map((item) => ({ label: item.name, value: item.id }))" /></a-form-item></a-form>
     </a-modal>
-    <a-modal v-model:open="previewOpen" centered :width="'min(900px, calc(100vw - 32px))'"
-      :title="`版本 v${previewVersion?.version_no ?? ''} 内容`"
+    <a-modal v-model:open="previewOpen" centered :width="'min(1400px, calc(100vw - 32px))'"
+      :title="`版本 v${previewVersion?.version_no ?? ''} 变更对照`"
       :body-style="{ maxHeight: 'calc(100vh - 180px)', overflowY: 'auto' }">
-      <ConfigContentEditor v-if="previewVersion" :model-value="previewContent" :format="file.content_format"
-        readonly :masked="!canReadSecret" :can-read-secret="canReadSecret" />
+      <ConfigVersionCompare v-if="previewComparison" :comparison="previewComparison" />
       <template #footer><a-button @click="previewOpen = false">关闭</a-button></template>
     </a-modal>
     <DriftCompareDrawer v-model:open="driftOpen" :file-id="fileId" :can-write="canEdit" @resolved="load" />

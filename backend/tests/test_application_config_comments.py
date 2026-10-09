@@ -66,6 +66,11 @@ async def test_comments_survive_import_draft_publish_and_comment_only_drift(
     assert saved.json()["code"] == 0
     candidate = await client.post(f"{prefix}/candidates", headers=headers)
     candidate_id = candidate.json()["data"]["id"]
+    comparison = (await client.get(f"{prefix}/versions/{candidate_id}/comparison", headers=headers)).json()["data"]
+    assert comparison["base_version_id"] == version_id
+    assert comparison["base_content"] == original
+    assert comparison["content"] == changed
+    assert comparison["has_changes"] is True
     approved = await client.post(f"{prefix}/candidates/{candidate_id}/approve", headers=headers)
     assert approved.json()["code"] == 0
     async with db_factory() as session:
@@ -83,6 +88,8 @@ async def test_comments_survive_import_draft_publish_and_comment_only_drift(
     assert view.json()["data"]["baseline_content"] == changed
     assert view.json()["data"]["external_content"] == original
     imported = await client.post(f"{prefix}/drift/import", headers=headers)
+    comparison = (await client.get(f"{prefix}/versions/{imported.json()['data']['id']}/comparison", headers=headers)).json()["data"]
+    assert comparison["base_version_id"] == candidate_id
     assert imported.json()["code"] == 0
     preview = await client.get(f'{prefix}/versions/{imported.json()["data"]["id"]}/content', headers=headers)
     assert preview.json()["data"]["content"] == original

@@ -125,13 +125,20 @@ export interface ConfigApprovalTodo {
   submitted_at: string
 }
 
-export interface ConfigApprovalContent {
+export interface ConfigVersionComparison {
   version_id: number
-  file_id: number
-  file_name: string
   version_no: number
   content_format: ConfigFormat
   content: string
+  base_version_id: number | null
+  base_version_no: number | null
+  base_content: string
+  has_changes: boolean
+}
+
+export interface ConfigApprovalContent extends ConfigVersionComparison {
+  file_id: number
+  file_name: string
 }
 
 export interface DriftView {
@@ -288,6 +295,10 @@ export function getVersionContent(id: number, versionId: number) {
   return request<{ version_id: number; content: string }>({
     url: `${prefix}/files/${id}/versions/${versionId}/content`, method: 'get',
   })
+}
+
+export function getVersionComparison(id: number, versionId: number) {
+  return request<ConfigVersionComparison>({ url: `${prefix}/files/${id}/versions/${versionId}/comparison`, method: 'get' })
 }
 
 export function submitCandidate(id: number) {

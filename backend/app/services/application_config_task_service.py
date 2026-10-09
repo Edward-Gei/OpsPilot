@@ -658,6 +658,7 @@ async def import_latest_external_snapshot(session: AsyncSession, file_id: int, a
     version = ConfigVersion(
         config_file_id=file_id, version_no=(next_no or 0) + 1,
         source="external_import", status=ConfigVersionStatus.PUBLISHED.value,
+        base_version_id=config_file.current_version_id,
         content_enc=snapshot.content_enc, base_snapshot_id=snapshot.id,
         published_at=datetime.now(),
     )

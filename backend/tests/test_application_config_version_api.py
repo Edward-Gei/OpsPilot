@@ -1,9 +1,12 @@
 """草稿、候选版本和当前成员审批测试。"""
+from datetime import datetime
+
 import pytest
 from sqlalchemy import delete, select
 
-from app.models.application_config import ConfigDraft, ConfigTask, ConfigVersion
-from app.models.auth import Role, UserRole
+from app.core.security import encrypt_text
+from app.models.application_config import ConfigDraft, ConfigFile, ConfigTask, ConfigVersion
+from app.models.auth import Permission, Role, RolePermission, UserRole
 from app.services import rbac_service
 
 from tests.conftest import auth_header, login_for_tokens
@@ -138,6 +141,8 @@ async def test_config_approval_todo_is_scoped_to_current_members_and_admin(clien
     assert preview.json()["code"] == 0
     assert "p@ss" not in preview.json()["data"]["content"]
     assert "pool" in preview.json()["data"]["content"]
+    assert preview.json()["data"]["base_content"] == ""
+    assert preview.json()["data"]["base_version_no"] is None
     admin_todo = await client.get(base, headers=admin)
     assert admin_todo.json()["data"]["total"] == 1
 
@@ -158,3 +163,89 @@ async def test_candidate_response_loads_server_timestamp_without_returning(clien
     candidate = await client.post(f"/api/v1/application-configs/files/{file_id}/candidates", headers=ops)
     assert candidate.json()["code"] == 0
     assert candidate.json()["data"]["created_at"] is not None
+
+
+async def test_version_comparison_freezes_formal_baseline_and_redacts_both_sides(client, seed, db_factory):
+    """跳过驳回版本，后续发布不改变候选生成时的对照；双方均脱敏。"""
+    file_id, admin, ops = await _created_file(client, seed)
+    async with db_factory() as session:
+        baseline = ConfigVersion(config_file_id=file_id, version_no=1, source="external_import",
+                                 status="published", content_enc=encrypt_text("# 旧注释\ndb:\n  password: old-secret\n  pool: 5\n"),
+                                 published_at=datetime.now())
+        session.add(baseline)
+        session.add(ConfigVersion(config_file_id=file_id, version_no=2, source="opspilot_publish",
+                                  status="rejected", content_enc=encrypt_text("wrong: baseline\n")))
+        await session.flush()
+        config_file = await session.get(ConfigFile, file_id)
+        config_file.current_version_id = baseline.id
+        baseline_id = baseline.id
+        await session.commit()
+    candidate = await client.post(f"/api/v1/application-configs/files/{file_id}/candidates", headers=ops)
+    version_id = candidate.json()["data"]["id"]
+    async with db_factory() as session:
+        newer = ConfigVersion(config_file_id=file_id, version_no=4, source="external_import",
+                              status="published", content_enc=encrypt_text("newer: version\n"), published_at=datetime.now())
+        session.add(newer)
+        await session.flush()
+        (await session.get(ConfigFile, file_id)).current_version_id = newer.id
+        secret_id = (await session.execute(select(Permission.id).where(Permission.code == "secret:read"))).scalar_one()
+        await session.execute(delete(RolePermission).where(RolePermission.role_id == seed["roles"]["ops"],
+                                                          RolePermission.permission_id == secret_id))
+        await session.commit()
+    await rbac_service.invalidate_user_perms(seed["users"]["ops1"])
+    path = f"/api/v1/application-configs/files/{file_id}/versions/{version_id}/comparison"
+    response = await client.get(path, headers=ops)
+    assert response.status_code == 200
+    comparison = response.json()["data"]
+    assert comparison["base_version_id"] == baseline_id
+    assert comparison["base_version_no"] == 1
+    assert comparison["version_no"] == 3
+    assert comparison["has_changes"] is True
+    assert "# 旧注释" in comparison["base_content"]
+    assert "old-secret" not in comparison["base_content"]
+    assert "p@ss" not in comparison["content"]
+    approval = await client.get(f"/api/v1/application-configs/approval-todo/{version_id}/content", headers=ops)
+    assert approval.json()["data"]["base_content"] == comparison["base_content"]
+    unmasked = (await client.get(path, headers=admin)).json()["data"]
+    assert "old-secret" in unmasked["base_content"]
+    assert "p@ss" in unmasked["content"]
+    wrong_file = await client.get(f"/api/v1/application-configs/files/{file_id + 1}/versions/{version_id}/comparison", headers=admin)
+    assert wrong_file.status_code == 404
+
+
+async def test_first_version_compares_with_empty_content(client, seed):
+    file_id, admin, _ops = await _created_file(client, seed)
+    candidate = await client.post(f"/api/v1/application-configs/files/{file_id}/candidates", headers=admin)
+    version_id = candidate.json()["data"]["id"]
+    response = await client.get(f"/api/v1/application-configs/files/{file_id}/versions/{version_id}/comparison", headers=admin)
+    assert response.status_code == 200
+    assert response.json()["data"]["base_content"] == ""
+    assert response.json()["data"]["base_version_no"] is None
+    assert response.json()["data"]["has_changes"] is True
+
+
+async def test_comparison_sensitive_only_changes_and_cross_file_baseline(client, seed, db_factory):
+    """脱敏后相同仍报告变更；错误的跨文件基准不得返回正文。"""
+    file_id, admin, ops = await _created_file(client, seed)
+    async with db_factory() as session:
+        baseline = ConfigVersion(config_file_id=file_id, version_no=1, source="external_import", status="published",
+                                 content_enc=encrypt_text("db:\n  password: old-secret\n  pool: 10\n"))
+        session.add(baseline)
+        await session.flush()
+        (await session.get(ConfigFile, file_id)).current_version_id = baseline.id
+        baseline_id = baseline.id
+        secret_id = (await session.execute(select(Permission.id).where(Permission.code == "secret:read"))).scalar_one()
+        await session.execute(delete(RolePermission).where(RolePermission.role_id == seed["roles"]["ops"],
+                                                          RolePermission.permission_id == secret_id))
+        await session.commit()
+    await rbac_service.invalidate_user_perms(seed["users"]["ops1"])
+    candidate = await client.post(f"/api/v1/application-configs/files/{file_id}/candidates", headers=ops)
+    version_id = candidate.json()["data"]["id"]
+    path = f"/api/v1/application-configs/files/{file_id}/versions/{version_id}/comparison"
+    data = (await client.get(path, headers=ops)).json()["data"]
+    assert data["content"] == data["base_content"]
+    assert data["has_changes"] is True
+    async with db_factory() as session:
+        (await session.get(ConfigVersion, baseline_id)).config_file_id = file_id + 1
+        await session.commit()
+    assert (await client.get(path, headers=admin)).status_code == 404
