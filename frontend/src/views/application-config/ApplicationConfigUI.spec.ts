@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { config, flushPromises, mount } from '@vue/test-utils'
 import Antd from 'ant-design-vue'
 import { createPinia } from 'pinia'
+import { reactive } from 'vue'
 import ConfigContentEditor from './ConfigContentEditor.vue'
 import DriftCompareDrawer from './DriftCompareDrawer.vue'
 import ApplicationConfigList from './ApplicationConfigList.vue'
 import NewConfigDrawer from './NewConfigDrawer.vue'
+import ApplicationConfigDetail from './ApplicationConfigDetail.vue'
 
 const api = vi.hoisted(() => ({
   getConfigFile: vi.fn(), getDriftView: vi.fn(), listVersions: vi.fn(),
@@ -14,10 +16,13 @@ const api = vi.hoisted(() => ({
   listConfigFiles: vi.fn(), listConfigImportTasks: vi.fn(), syncConfigFile: vi.fn(),
   listPlatformInstances: vi.fn(), listApprovalRoles: vi.fn(), listCmdbApplications: vi.fn(),
   listNacosNamespaces: vi.fn(), discoverConfigResources: vi.fn(), createConfigFile: vi.fn(),
+  getDraft: vi.fn(), saveDraft: vi.fn(), discardDraft: vi.fn(), submitCandidate: vi.fn(),
+  listConfigFileTasks: vi.fn(), getVersionContent: vi.fn(), readSecret: false,
 }))
 vi.mock('@/api/applicationConfig', () => api)
-vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: (perm: string) => perm === 'config:write' }) }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
+vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: (perm: string) => perm === 'config:write' || (perm === 'secret:read' && api.readSecret) }) }))
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }), useRoute: () => detailRoute }))
+const detailRoute = reactive({ name: 'application-config-edit', params: { id: '2' } })
 
 const file = (id: number) => ({
   id, name: `test-${id}.yaml`, description: null, platform_instance_id: 1,
@@ -47,6 +52,9 @@ window.matchMedia = vi.fn().mockImplementation((media: string) => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  detailRoute.name = 'application-config-edit'
+  detailRoute.params.id = '2'
+  api.readSecret = false
   api.getConfigFile.mockResolvedValue(file(2))
   api.getDriftView.mockResolvedValue(drift)
   api.listVersions.mockResolvedValue({ items: [{ id: 6, version_no: 6, status: 'published' }] })
@@ -58,6 +66,12 @@ beforeEach(() => {
   ] })
   api.listApprovalRoles.mockResolvedValue({ items: [{ id: 3, name: '审批角色' }] })
   api.listCmdbApplications.mockResolvedValue({ items: [] })
+  api.listConfigFileTasks.mockResolvedValue({ items: [] })
+  api.getVersionContent.mockResolvedValue({ content: '# 正式版本\nkey: published\n' })
+  api.getDraft.mockResolvedValue({ id: null, content: '# 正式版本\nkey: published\n', base_version_id: 6, base_snapshot_id: 1 })
+  api.saveDraft.mockResolvedValue(null)
+  api.discardDraft.mockResolvedValue(null)
+  api.submitCandidate.mockResolvedValue({ id: 7 })
   api.listNacosNamespaces.mockResolvedValue({ items: [
     { id: '', name: 'public' }, { id: 'stage-id', name: 'stage' },
   ] })
@@ -68,6 +82,158 @@ beforeEach(() => {
   ] })
 })
 afterEach(() => { document.body.innerHTML = '' })
+
+describe('编辑页草稿恢复', () => {
+  function mountDetail() {
+    return mount(ApplicationConfigDetail, { attachTo: document.body,
+      global: { stubs: { DriftCompareDrawer: true } } })
+  }
+  async function clickButton(wrapper: ReturnType<typeof mountDetail>, text: string) {
+    await wrapper.findAll('button').find(button => button.text().includes(text))!.trigger('click')
+    await flushPromises()
+  }
+
+  it('重新进入编辑页自动展示已保存草稿和未发布提示', async () => {
+    api.getDraft.mockResolvedValue({ id: 9, content: '# 保存的注释\nkey: draft\n', base_version_id: 6, base_snapshot_id: 1 })
+    const wrapper = mountDetail()
+    await flushPromises()
+    expect(wrapper.findComponent(ConfigContentEditor).props('modelValue')).toBe('# 保存的注释\nkey: draft\n')
+    expect(wrapper.text()).toContain('已保存草稿')
+    expect(wrapper.text()).toContain('尚未发布')
+    wrapper.unmount()
+  })
+
+  it('保存后持续提示未发布，再次进入仍显示保存正文', async () => {
+    const wrapper = mountDetail()
+    await flushPromises()
+    await clickButton(wrapper, '编辑草稿')
+    wrapper.findComponent(ConfigContentEditor).vm.$emit('update:modelValue', '# 新注释\nkey: modified\n')
+    await flushPromises()
+    expect(wrapper.text()).toContain('尚未保存')
+    await clickButton(wrapper, '保存草稿')
+    expect(wrapper.text()).toContain('已保存草稿')
+    expect(wrapper.text()).not.toContain('尚未保存')
+    expect(wrapper.findComponent(ConfigContentEditor).props('modelValue')).toBe('# 新注释\nkey: modified\n')
+    api.getDraft.mockResolvedValue({ id: 9, content: '# 新注释\nkey: modified\n', base_version_id: 6, base_snapshot_id: 1 })
+    wrapper.unmount()
+    const reopened = mountDetail()
+    await flushPromises()
+    expect(reopened.findComponent(ConfigContentEditor).props('modelValue')).toBe('# 新注释\nkey: modified\n')
+    reopened.unmount()
+  })
+
+  it('没有保存草稿时展示正式版本，手动打开草稿不显示已保存提示', async () => {
+    const wrapper = mountDetail()
+    await flushPromises()
+    expect(wrapper.findComponent(ConfigContentEditor).props('readonly')).toBe(true)
+    expect(wrapper.text()).not.toContain('已保存草稿')
+    await clickButton(wrapper, '编辑草稿')
+    expect(wrapper.text()).not.toContain('已保存草稿')
+    wrapper.unmount()
+  })
+
+  it('丢弃已保存草稿后恢复正式内容并清除提示', async () => {
+    api.getDraft.mockResolvedValue({ id: 9, content: 'key: draft', base_version_id: 6, base_snapshot_id: 1 })
+    const wrapper = mountDetail()
+    await flushPromises()
+    wrapper.findAllComponents({ name: 'APopconfirm' }).find(item => item.props('title') === '确认丢弃草稿？')!.vm.$emit('confirm')
+    await flushPromises()
+    expect(wrapper.findComponent(ConfigContentEditor).props('modelValue')).toBe('# 正式版本\nkey: published\n')
+    expect(wrapper.text()).not.toContain('已保存草稿')
+    wrapper.unmount()
+  })
+
+  it('TEXT 无敏感信息读取权限时恢复草稿状态但不回填正文', async () => {
+    api.getConfigFile.mockResolvedValue({ ...file(2), content_format: 'text' })
+    api.getDraft.mockResolvedValue({ id: 9, content: '******', base_version_id: 6, base_snapshot_id: 1 })
+    const wrapper = mountDetail()
+    await flushPromises()
+    expect(wrapper.findComponent(ConfigContentEditor).props('modelValue')).toBe('')
+    expect(wrapper.text()).toContain('已保存草稿')
+    wrapper.unmount()
+  })
+
+  it('只读查看页仍展示正式版本，不提供草稿编辑操作', async () => {
+    detailRoute.name = 'application-config-detail'
+    api.getDraft.mockResolvedValue({ id: 9, content: 'key: draft', base_version_id: 6, base_snapshot_id: 1 })
+    const wrapper = mountDetail()
+    await flushPromises()
+    expect(wrapper.findComponent(ConfigContentEditor).props('modelValue')).toBe('# 正式版本\nkey: published\n')
+    expect(wrapper.findComponent(ConfigContentEditor).props('readonly')).toBe(true)
+    expect(wrapper.text()).not.toContain('保存草稿')
+    wrapper.unmount()
+  })
+
+  it('从只读页切换到编辑页恢复草稿，切回只读显示正式版本', async () => {
+    detailRoute.name = 'application-config-detail'
+    api.getDraft.mockResolvedValue({ id: 9, content: 'key: draft', base_version_id: 6, base_snapshot_id: 1 })
+    const wrapper = mountDetail()
+    await flushPromises()
+    detailRoute.name = 'application-config-edit'
+    await flushPromises()
+    expect(wrapper.findComponent(ConfigContentEditor).props('modelValue')).toBe('key: draft')
+    detailRoute.name = 'application-config-detail'
+    await flushPromises()
+    expect(wrapper.findComponent(ConfigContentEditor).props('modelValue')).toBe('# 正式版本\nkey: published\n')
+    wrapper.unmount()
+  })
+
+  it('编辑信息刷新页面不会覆盖尚未保存的草稿输入', async () => {
+    api.getDraft.mockResolvedValue({ id: 9, content: 'key: draft', base_version_id: 6, base_snapshot_id: 1 })
+    const wrapper = mountDetail()
+    await flushPromises()
+    wrapper.findComponent(ConfigContentEditor).vm.$emit('update:modelValue', 'key: unsaved')
+    // 漂移处理完成会刷新元信息，当前编辑缓冲仍应保留。
+    wrapper.findComponent({ name: 'DriftCompareDrawer' }).vm.$emit('resolved')
+    await flushPromises()
+    expect(wrapper.findComponent(ConfigContentEditor).props('modelValue')).toBe('key: unsaved')
+    expect(wrapper.text()).toContain('尚未保存')
+    wrapper.unmount()
+  })
+
+  it('提交审批后清除草稿提示并展示候选版本', async () => {
+    api.getDraft.mockResolvedValue({ id: 9, content: 'key: draft', base_version_id: 6, base_snapshot_id: 1 })
+    const wrapper = mountDetail()
+    await flushPromises()
+    api.getDraft.mockResolvedValue({ id: null, content: '# 正式版本\nkey: published\n', base_version_id: 6, base_snapshot_id: 1 })
+    api.listVersions.mockResolvedValue({ items: [{ id: 6, version_no: 6, status: 'published' },
+      { id: 7, version_no: 7, status: 'pending_approval', source: 'opspilot_publish' }] })
+    await clickButton(wrapper, '提交审批')
+    expect(wrapper.text()).not.toContain('已保存草稿')
+    expect(wrapper.text()).toContain('待审批')
+    wrapper.unmount()
+  })
+
+  it('保存失败时保留未保存提示，不误报草稿已保存', async () => {
+    const errors: unknown[] = []
+    const wrapper = mount(ApplicationConfigDetail, { attachTo: document.body,
+      global: { stubs: { DriftCompareDrawer: true }, config: { errorHandler: error => errors.push(error) } } })
+    await flushPromises()
+    await clickButton(wrapper, '编辑草稿')
+    wrapper.findComponent(ConfigContentEditor).vm.$emit('update:modelValue', 'key: unsaved')
+    api.saveDraft.mockRejectedValueOnce(new Error('save failed'))
+    await clickButton(wrapper, '保存草稿')
+    expect(errors).toHaveLength(1)
+    expect(wrapper.text()).toContain('尚未保存')
+    expect(wrapper.text()).not.toContain('已保存草稿')
+    wrapper.unmount()
+  })
+
+  it('草稿请求返回前切换到只读页，不回填草稿或暴露编辑操作', async () => {
+    let resolveDraft!: (draft: unknown) => void
+    api.getDraft.mockImplementationOnce(() => new Promise(resolve => { resolveDraft = resolve }))
+    const wrapper = mountDetail()
+    await flushPromises()
+    detailRoute.name = 'application-config-detail'
+    await flushPromises()
+    resolveDraft({ id: 9, content: 'key: draft', base_version_id: 6, base_snapshot_id: 1 })
+    await flushPromises()
+    expect(wrapper.findComponent(ConfigContentEditor).props('readonly')).toBe(true)
+    expect(wrapper.findComponent(ConfigContentEditor).props('modelValue')).toBe('# 正式版本\nkey: published\n')
+    expect(wrapper.text()).not.toContain('保存草稿')
+    wrapper.unmount()
+  })
+})
 
 describe('漂移确认', () => {
   it('导入成功后关闭弹窗并通知刷新', async () => {

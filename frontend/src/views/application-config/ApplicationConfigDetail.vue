@@ -28,6 +28,7 @@ const versionContent = ref('')
 const draftLoaded = ref(false)
 const draftContent = ref('')
 const draftDirty = ref(false)
+const draftSaved = ref(false)
 const driftOpen = ref(false)
 const task = ref<api.ConfigTask | null>(null)
 const syncStarting = ref(false)
@@ -71,6 +72,7 @@ async function load() {
   applications.value = apps.items
   publishTasks.value = tasks.items
   if (detail.current_version_id && selectedVersion.value !== detail.current_version_id) await showVersion(detail.current_version_id)
+  if (canEdit.value && detail.status === 'active' && !draftLoaded.value) await loadDraft(true)
   if (tasks.items.some((item) => item.kind === 'publish' && ['queued', 'running'].includes(item.status))) {
     refreshTimer = window.setTimeout(() => void load(), 2000)
   }
@@ -89,17 +91,22 @@ async function viewVersion(version: api.ConfigVersion) {
     previewOpen.value = true
   } finally { viewingVersionId.value = null }
 }
-async function loadDraft() {
+async function loadDraft(existingOnly = false) {
   if (!canEdit.value || !file.value || file.value.status !== 'active') return
-  const draft = await api.getDraft(fileId.value)
+  const id = fileId.value
+  const draft = await api.getDraft(id)
+  if (id !== fileId.value || !canEdit.value || file.value?.status !== 'active') return
+  // 自动恢复仅载入持久化草稿，刷新时保留正在编辑的内容。
+  if (existingOnly && draft.id === null) return
   // TEXT 在缺少 secret:read 时只能完整替换，不将旧正文载入输入框。
   draftContent.value = file.value.content_format === 'text' && !canReadSecret.value ? '' : draft.content
   draftLoaded.value = true
   draftDirty.value = false
+  draftSaved.value = draft.id !== null
 }
 async function saveDraft() {
   busy.value = true
-  try { await api.saveDraft(fileId.value, draftContent.value); draftDirty.value = false; message.success('草稿已保存') }
+  try { await api.saveDraft(fileId.value, draftContent.value); draftDirty.value = false; draftSaved.value = true; message.success('草稿已保存') }
   finally { busy.value = false }
 }
 async function submit() {
@@ -110,6 +117,7 @@ async function submit() {
     message.success('已提交审批')
     draftLoaded.value = false
     draftDirty.value = false
+    draftSaved.value = false
     await load()
     activeTab.value = 'versions'
   } finally { busy.value = false }
@@ -118,6 +126,7 @@ async function discard() {
   await api.discardDraft(fileId.value)
   draftLoaded.value = false
   draftDirty.value = false
+  draftSaved.value = false
   message.success('草稿已丢弃')
 }
 async function poll(id: number, kind: 'sync' | 'publish') {
@@ -167,13 +176,19 @@ onMounted(load)
 onBeforeUnmount(stopPolling)
 watch(fileId, () => {
   draftLoaded.value = false
+  draftDirty.value = false
+  draftSaved.value = false
+  draftContent.value = ''
   selectedVersion.value = null
   previewOpen.value = false
   previewVersion.value = null
   previewContent.value = ''
   void load()
 })
-watch(canEdit, (editing) => { if (!editing) { draftLoaded.value = false; metadataOpen.value = false } })
+watch(canEdit, (editing) => {
+  if (editing) void load()
+  else { draftLoaded.value = false; draftDirty.value = false; draftSaved.value = false; metadataOpen.value = false }
+})
 </script>
 
 <template>
@@ -213,11 +228,13 @@ watch(canEdit, (editing) => { if (!editing) { draftLoaded.value = false; metadat
     </a-descriptions>
     <a-tabs v-model:active-key="activeTab">
       <a-tab-pane key="content" :tab="canEdit ? '内容与草稿' : '配置内容'">
-        <div class="content-head"><strong>{{ selectedVersion ? `版本 v${versions.find((item) => item.id === selectedVersion)?.version_no}` : '尚无正式版本' }}</strong>
-          <a-button v-if="canEdit && file.status === 'active' && !draftLoaded" class="op-btn-blue" @click="loadDraft"><EditOutlined />编辑草稿</a-button></div>
+        <div class="content-head"><strong>{{ draftLoaded ? '草稿内容' : selectedVersion ? `版本 v${versions.find((item) => item.id === selectedVersion)?.version_no}` : '尚无正式版本' }}</strong>
+          <a-button v-if="canEdit && file.status === 'active' && !draftLoaded" class="op-btn-blue" @click="loadDraft()"><EditOutlined />编辑草稿</a-button></div>
         <ConfigContentEditor v-if="selectedVersion && !draftLoaded" :model-value="versionContent" :format="file.content_format" readonly :masked="!canReadSecret" :can-read-secret="canReadSecret" />
         <a-empty v-else-if="!draftLoaded" description="尚无正式版本" />
         <template v-if="draftLoaded">
+          <a-alert v-if="draftDirty || draftSaved" class="draft-notice" show-icon :type="draftDirty ? 'warning' : 'info'"
+            :message="draftDirty ? '内容有修改，尚未保存' : '存在已保存草稿，尚未发布到远端'" />
           <ConfigContentEditor :model-value="draftContent" :format="file.content_format" :masked="!canReadSecret" :can-read-secret="canReadSecret"
             @update:model-value="draftContent = $event; draftDirty = true" />
           <a-space class="draft-actions"><a-button class="op-btn-green" :loading="busy" @click="saveDraft"><SaveOutlined />保存草稿</a-button>
@@ -268,6 +285,7 @@ watch(canEdit, (editing) => { if (!editing) { draftLoaded.value = false; metadat
 .related-app-tag { max-width: 100%; white-space: normal; overflow-wrap: anywhere; margin-inline-end: 0; }
 .content-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .draft-actions { margin-top: 12px; }
+.draft-notice { margin-bottom: 12px; }
 @media (max-width: 680px) {
   .op-hero-extra { display: none; }
   .detail-summary { overflow-x: auto; }
