@@ -45,13 +45,21 @@ beforeEach(() => {
 })
 afterEach(() => { document.body.innerHTML = '' })
 
-it('应用详情展示关联工单模板名称并链接到模板详情', async () => {
+it('应用详情以三列表格展示关联模板、流程模板和启停状态，并保留详情链接', async () => {
   api.routeQuery = { id: '7' }
   api.getApp.mockResolvedValue({ ...app, hosts: [], config_files: [],
-    ticket_templates: [{ id: 13, name: '订单发布入口', status: 'enabled' }] })
+    ticket_templates: [
+      { id: 13, name: '订单发布入口', status: 'enabled', process_template_id: 23, process_template_name: '订单发布流程' },
+      { id: 14, name: '订单回滚入口', status: 'disabled', process_template_id: 24, process_template_name: '订单回滚流程' },
+    ] })
   const wrapper = mount(AppList, { attachTo: document.body })
   await flushPromises()
-  expect(document.body.textContent).toContain('关联工单模板（1）')
+  expect(document.body.textContent).toContain('关联工单模板（2）')
+  const table = document.querySelector('a[href="/job/templates/tickets?id=13"]')?.closest('table')
+  expect(table).not.toBeNull()
+  expect([...table!.querySelectorAll('thead th')].map(item => item.textContent)).toEqual(['模板名称', '流程模板', '状态'])
+  expect(document.querySelector('a[href="/job/templates/processes?id=23"]')?.textContent).toBe('订单发布流程')
+  expect([...table!.querySelectorAll('tbody tr')].map(item => item.lastElementChild?.textContent)).toEqual(['启用', '停用'])
   expect(document.querySelector('a[href="/job/templates/tickets?id=13"]')?.textContent).toBe('订单发布入口')
   wrapper.unmount()
 })

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.response import Errors
 from app.models.cmdb import AppHost, Application, Host
 from app.models.application_config import ConfigFile, ConfigFileApplication, ConfigPlatformInstance
-from app.models.job import TicketTemplate, TicketTemplateApplication
+from app.models.job import ProcessTemplate, TicketTemplate, TicketTemplateApplication
 
 
 # ---------- 主机 ----------
@@ -368,11 +368,15 @@ async def update_app(
 async def get_app_ticket_templates(session: AsyncSession, app_id: int) -> list[dict]:
     """应用详情仅展示关联模板元信息，不暴露脚本、参数及密钥引用。"""
     rows = await session.execute(
-        select(TicketTemplate.id, TicketTemplate.name, TicketTemplate.status)
+        select(TicketTemplate.id, TicketTemplate.name, TicketTemplate.status,
+               TicketTemplate.process_template_id, ProcessTemplate.name.label("process_template_name"))
         .join(TicketTemplateApplication, TicketTemplateApplication.template_id == TicketTemplate.id)
+        .outerjoin(ProcessTemplate, ProcessTemplate.id == TicketTemplate.process_template_id)
         .where(TicketTemplateApplication.app_id == app_id).order_by(TicketTemplate.id)
     )
-    return [{"id": row.id, "name": row.name, "status": row.status} for row in rows]
+    return [{"id": row.id, "name": row.name, "status": row.status,
+             "process_template_id": row.process_template_id,
+             "process_template_name": row.process_template_name} for row in rows]
 
 
 async def delete_app(session: AsyncSession, app_id: int) -> Application:

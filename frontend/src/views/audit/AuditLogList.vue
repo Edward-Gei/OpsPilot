@@ -24,6 +24,9 @@ const moduleOptions = [
   { label: '资产', value: 'cmdb' },
   { label: '凭据', value: 'credential' },
   { label: '模板', value: 'template' },
+  { label: '作业管理', value: 'job' },
+  { label: '域名管理', value: 'domain' },
+  { label: '应用配置', value: 'config' },
   { label: '工单', value: 'ticket' },
   { label: '执行', value: 'execution' },
   { label: '通知', value: 'notify' },
@@ -36,7 +39,7 @@ const moduleText: Record<string, string> = Object.fromEntries(
 // 模块彩色标签（固定映射保证同模块颜色稳定）
 const moduleColors: Record<string, string> = {
   auth: 'geekblue', user: 'blue', role: 'purple', cmdb: 'cyan',
-  credential: 'green', template: 'magenta', ticket: 'volcano',
+  credential: 'green', template: 'magenta', job: 'magenta', domain: 'cyan', config: 'purple', ticket: 'volcano',
   execution: 'orange', notify: 'gold', system: 'lime', audit: 'red',
 }
 

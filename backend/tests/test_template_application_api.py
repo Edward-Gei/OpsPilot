@@ -37,8 +37,12 @@ async def test_template_applications_many_to_many_and_reverse_detail(client):
                               {"id": app_ids[1], "name": "支付应用"}]
     for app_id in app_ids:
         app = (await client.get(f"/api/v1/cmdb/apps/{app_id}", headers=admin)).json()["data"]
-        assert app["ticket_templates"] == [{"id": ids[0], "name": "发布入口", "status": "enabled"},
-                                            {"id": ids[1], "name": "回滚入口", "status": "enabled"}]
+        assert app["ticket_templates"] == [
+            {"id": ids[0], "name": "发布入口", "status": "enabled",
+             "process_template_id": payload["process_template_id"], "process_template_name": "可复用发布流程"},
+            {"id": ids[1], "name": "回滚入口", "status": "enabled",
+             "process_template_id": payload["process_template_id"], "process_template_name": "可复用发布流程"},
+        ]
 
 
 async def test_template_applications_replace_clear_and_legacy_update(client):
@@ -107,5 +111,7 @@ async def test_application_binding_permissions_and_safe_reverse_metadata(client,
         await session.commit()
     reader_headers = auth_header(await login_for_tokens(client, "app_reader"))
     app = (await client.get(f"/api/v1/cmdb/apps/{app_ids[0]}", headers=reader_headers)).json()["data"]
-    assert set(app["ticket_templates"][0]) == {"id", "name", "status"}
+    assert set(app["ticket_templates"][0]) == {
+        "id", "name", "status", "process_template_id", "process_template_name",
+    }
     assert (await client.get(url, headers=reader_headers)).status_code == 403

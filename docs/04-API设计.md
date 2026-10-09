@@ -192,7 +192,7 @@
 
 模板创建/更新可提交 `app_ids: [应用ID, ...]`，仅允许存在且不重复的正整数 ID；`[]` 解除全部绑定。创建时省略表示不绑定，更新时省略则保留原关联，以兼容旧客户端；显式 `null` 无效。创建非空绑定及更新显式提交 `app_ids` 时额外要求 `cmdb:read`，候选应用复用分页 `GET /cmdb/apps`。
 
-`GET /templates/{id}` 额外返回 `app_ids` 和 `apps: [{id,name}]`；`GET /cmdb/apps/{id}` 额外返回 `ticket_templates: [{id,name,status}]`。双向关联仅提供名称等元信息，应用详情不会返回模板脚本或密钥引用。完整详情分别沿用 `template:read` 与 `cmdb:read` 权限。
+`GET /templates/{id}` 额外返回 `app_ids` 和 `apps: [{id,name}]`；`GET /cmdb/apps/{id}` 额外返回 `ticket_templates: [{id,name,status,process_template_id,process_template_name}]`，流程模板已缺失时名称为 `null`。应用详情以“模板名称、流程模板、状态”三列表格展示关联工单模板，名称可跳转详情。双向关联仅提供名称等元信息，应用详情不会返回模板脚本或密钥引用。完整详情分别沿用 `template:read` 与 `cmdb:read` 权限。
 
 ### 7.3 `/tickets`
 
@@ -256,6 +256,8 @@
 | --- | --- | --- | --- |
 | GET | `/audit/logs` | `audit:read` | 时间、操作人、模块、动作、结果和对象关键字组合筛选 |
 | GET | `/audit/logs/export` | `audit:export` | 当前筛选导出 CSV 或 XLSX，最多 100000 行；导出行为写审计 |
+
+安全审计页面的模块列表、详情及筛选使用中文名称，筛选值仍提交原始模块编码。当前写入模块为 `auth`（认证）、`user`（用户）、`cmdb`（资产）、`job`（作业管理）、`domain`（域名管理）、`config`（应用配置）、`ticket`（工单）、`execution`（执行）、`notify`（通知）、`system`（系统）、`audit`（审计）；筛选兼容 `role`（角色）、`credential`（凭据）、`template`（模板）历史编码。
 
 ## 11. 系统、工作台和搜索
 

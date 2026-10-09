@@ -732,12 +732,33 @@ onMounted(() => {
 
           <div class="detail-hosts-title">关联工单模板（{{ detail.ticket_templates?.length || 0 }}）</div>
           <a-empty v-if="!detail.ticket_templates?.length" description="暂无关联工单模板" />
-          <a-space v-else wrap>
-            <a-tag v-for="template in detail.ticket_templates" :key="template.id" color="blue">
-              <a v-if="canReadTemplates" :href="`/job/templates/tickets?id=${template.id}`">{{ template.name }}</a>
-              <span v-else>{{ template.name }}</span>
-            </a-tag>
-          </a-space>
+          <a-table
+            v-else
+            bordered
+            :columns="[
+              { title: '模板名称', dataIndex: 'name', key: 'name' },
+              { title: '流程模板', dataIndex: 'process_template_name', key: 'process' },
+              { title: '状态', key: 'status', width: 80 },
+            ]"
+            :data-source="detail.ticket_templates"
+            row-key="id"
+            size="small"
+            :pagination="false"
+          >
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'name'">
+                <a v-if="canReadTemplates" :href="`/job/templates/tickets?id=${record.id}`">{{ record.name }}</a>
+                <span v-else>{{ record.name }}</span>
+              </template>
+              <template v-else-if="column.key === 'process'">
+                <a v-if="canReadTemplates && record.process_template_name" :href="`/job/templates/processes?id=${record.process_template_id}`">{{ record.process_template_name }}</a>
+                <span v-else>{{ record.process_template_name || '—' }}</span>
+              </template>
+              <a-tag v-else-if="column.key === 'status'" :color="record.status === 'enabled' ? 'success' : 'default'">
+                {{ record.status === 'enabled' ? '启用' : '停用' }}
+              </a-tag>
+            </template>
+          </a-table>
 
           <div class="detail-hosts-title">关联配置文件（{{ detail.config_files.length }}）</div>
           <a-empty v-if="!detail.config_files.length" description="暂无关联配置文件" />
