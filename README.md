@@ -1,4 +1,4 @@
-# OpsPilot V1
+# OpsPilot
 
 OpsPilot 是面向企业内网的自动化运维平台：CMDB 资产台账、作业主机、工单模板、可复用流程模板、审批、串行执行、实时日志、通知和审计组成完整闭环。
 
@@ -74,7 +74,7 @@ docker compose up -d
 
 ## 目录
 
-应用配置通过独立主菜单维护生产配置文件，支持 Apollo、Nacos、Consul 的 HTTP 接入、版本审批、手动同步及漂移处理。配置文件与 CMDB 应用可多对多关联；仅删除本地归档记录，不删除远端配置。平台真实版本联调状态见[兼容性记录](docs/application-configuration-provider-compatibility.md)。
+应用配置通过独立主菜单维护生产配置文件，支持 Apollo、Nacos、Consul 的 HTTP 接入、版本审批、手动同步及漂移处理。配置文件与 CMDB 应用可多对多关联；仅删除本地归档记录，不删除远端配置。平台真实版本联调状态见[兼容性记录](docs/应用配置平台兼容性记录.md)。
 
 ```text
 backend/  FastAPI API、数据库模型、迁移和 Worker

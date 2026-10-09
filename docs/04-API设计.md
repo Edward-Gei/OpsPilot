@@ -268,7 +268,24 @@
 | GET | `/healthz` | 公开 | DB/Redis 健康检查 |
 | GET | `/dashboard/summary` | 登录 | 按权限返回概览各段 |
 | GET | `/dashboard/ticket-trend` | `ticket:read` | 日/周/月/年提单趋势 |
+| GET | `/dashboard/activity-trend` | `ticket:read` 或 `execution:read` | 工单提交与完成执行双系列趋势；无对应权限的系列为 `null` |
 | GET | `/search?keyword=` | 登录 | 按权限裁剪的主机、应用、Zone、工单和模板聚合搜索；Zone 仅搜索名称和描述 |
+
+工作台展示主机、应用、托管 Zone、有效配置文件、本月工单和个人待办六项指标，以及工单与执行趋势、应用配置状态、主机环境与状态、应用部署方式、域名资源与同步、工单状态、DNS 记录类型、今日审计模块八类图表；各项按当前用户读取权限展示。主机状态来自 CMDB 登记值，域名与配置状态来自本地最近同步结果，不代表实时监控。
+
+`GET /dashboard/summary` 保留原字段，并按权限新增以下统计：
+
+| 字段 | 权限 | 内容与口径 |
+| --- | --- | --- |
+| `cmdb.host_environment_status` | `cmdb:read` | `[{environment,status,count}]`，按主机环境与登记状态计数 |
+| `cmdb.app_deploy_type` | `cmdb:read` | `{部署方式:应用数量}` |
+| `domain` | `domain:read` | `zone_total`、`record_total`、`provider_dist`、`sync_status`、`record_type_dist`；记录总量与类型均按有效 Zone 关联的本地记录集行计数，不按单条记录的值数量计数 |
+| `config` | `config:read` | `file_total`、`status_dist`；排除已归档，先按 `drifted`、`remote_missing`、`sync_failed` 分类，其余按正式版本是否存在区分 `clean` 与 `unpublished`，五类互斥且合计等于文件总量 |
+| `audit` | `audit:read` | `today_total`、`result_dist`、`module_dist`，按今日零点至当前时间统计 |
+| `todo_breakdown` | 当前用户待办 | `{ticket,config}`，沿用个人工单与配置审批待办口径 |
+| `attention` | 各对象的读取权限 | 最多六条 `[{module,id,name,status,updated_at}]`，包含未归档配置的漂移/远端缺失/同步失败、域名同步失败、执行失败/中断，合并按时间倒序；执行时间取完成时间，缺失时取创建时间；仅返回名称和状态等元信息 |
+
+无读取权限的统计段为 `null`，关注事项不包含无权限模块。`activity-trend` 接受 `granularity=day|week|month|year`（默认 `day`），分别返回近 30 天、12 周、12 月、5 年的自然时间桶并补零，结构为 `{granularity,items:[{period,tickets,executions}]}`。工单按创建时间计数；完成执行只统计 `success/failed/terminated/interrupted` 且完成时间非空的记录，按完成时间计数；未来时间不计入。两项读取权限均无时返回 403；旧 `ticket-trend` 的响应结构保留。
 
 ## 12. 权限点全集
 
