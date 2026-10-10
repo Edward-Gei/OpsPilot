@@ -33,6 +33,7 @@ const draftSaved = ref(false)
 const driftOpen = ref(false)
 const task = ref<api.ConfigTask | null>(null)
 const syncStarting = ref(false)
+const publishStartingId = ref<number | null>(null)
 const busy = ref(false)
 const previewOpen = ref(false)
 const previewVersion = ref<api.ConfigVersion | null>(null)
@@ -55,6 +56,10 @@ function statusText(status: string) {
 }
 function publishTaskFor(versionId: number) {
   return publishTasks.value.find((item) => item.kind === 'publish' && item.config_version_id === versionId)
+}
+function publishingVersion(versionId: number) {
+  return publishStartingId.value === versionId || (task.value?.kind === 'publish'
+    && task.value.config_version_id === versionId && ['queued', 'running'].includes(task.value.status))
 }
 function versionStatus(version: api.ConfigVersion) {
   const task = publishTaskFor(version.id)
@@ -145,12 +150,14 @@ async function poll(id: number, kind: 'sync' | 'publish') {
   } catch { timer = window.setTimeout(() => void poll(id, kind), 5000) }
 }
 async function start(kind: 'sync' | 'publish', versionId?: number) {
+  if (syncStarting.value || publishStartingId.value !== null || (task.value && ['queued', 'running'].includes(task.value.status))) return
   stopPolling()
   syncStarting.value = kind === 'sync'
+  publishStartingId.value = kind === 'publish' ? versionId! : null
   try {
     task.value = kind === 'sync' ? await api.syncConfigFile(fileId.value) : await api.publishVersion(fileId.value, versionId!)
     void poll(task.value.id, kind)
-  } finally { syncStarting.value = false }
+  } finally { syncStarting.value = false; publishStartingId.value = null }
 }
 async function openMetadata() {
   if (!file.value) return
@@ -204,7 +211,7 @@ watch(canEdit, (editing) => {
       <a-button class="op-btn-cyan" @click="router.push('/application-configs')"><ArrowLeftOutlined />返回列表</a-button>
       <a-button v-if="canEdit && file.status === 'active'" class="op-btn-green"
         :loading="syncStarting || (task?.kind === 'sync' && ['queued', 'running'].includes(task.status))"
-        :disabled="task?.status === 'queued' || task?.status === 'running'" @click="start('sync')"><CloudSyncOutlined />手动同步</a-button>
+        :disabled="publishStartingId !== null || task?.status === 'queued' || task?.status === 'running'" @click="start('sync')"><CloudSyncOutlined />手动同步</a-button>
       <a-button v-if="file.drift_status === 'drifted' || file.drift_status === 'remote_missing'" class="op-btn-orange" @click="driftOpen = true"><WarningOutlined />查看漂移</a-button>
       <a-button v-if="canEdit" class="op-btn-blue" @click="openMetadata"><EditOutlined />编辑信息</a-button>
       <a-popconfirm v-if="canEdit && canDelete && file.status === 'active'" title="归档后不可编辑或同步，外部内容不变。确认归档？" @confirm="archive"><a-button class="op-btn-purple"><InboxOutlined />归档</a-button></a-popconfirm>
@@ -244,19 +251,28 @@ watch(canEdit, (editing) => {
         </template>
       </a-tab-pane>
       <a-tab-pane key="versions" tab="版本记录">
-        <a-table :data-source="versions" row-key="id" size="small" :scroll="{ x: 830 }" :columns="[
+        <a-table :data-source="versions" row-key="id" size="small" :scroll="{ x: 1800 }" :columns="[
           { title: '版本', dataIndex: 'version_no', key: 'number', width: 80 },
           { title: '状态', key: 'status', width: 120 }, { title: '来源', key: 'source', width: 130 },
-          { title: '审批角色 ID', dataIndex: 'approval_role_id', key: 'role', width: 120 },
-          { title: '提交人 ID', dataIndex: 'submitted_by', key: 'submitter', width: 110 },
-          { title: '操作', key: 'actions', width: canEdit ? 190 : 80 },
+          { title: '审批角色', dataIndex: 'approval_role_name', key: 'role', width: 120 },
+          { title: '提交人', dataIndex: 'submitter_name', key: 'submitter', width: 110 },
+          { title: '提交时间', dataIndex: 'submitted_at', key: 'submitted_at', width: 180 },
+          { title: '审批时间', dataIndex: 'approved_at', key: 'approved_at', width: 180 },
+          { title: '完成时间', dataIndex: 'completed_at', key: 'completed_at', width: 180 },
+          { title: '审批人', dataIndex: 'approver_name', key: 'approver', width: 110 },
+          { title: '失败原因', dataIndex: 'failure_reason', key: 'failure_reason', width: 280 },
+          { title: '操作', key: 'actions', width: canEdit ? 190 : 80, fixed: 'right' },
         ]">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'status'"><a-tooltip :title="publishTaskFor(record.id)?.last_error || undefined"><a-tag>{{ versionStatus(record as api.ConfigVersion) }}</a-tag></a-tooltip></template>
             <template v-else-if="column.key === 'source'">{{ record.source === 'external_import' ? '外部导入' : 'OpsPilot 发布' }}</template>
+            <template v-else-if="['submitted_at', 'approved_at', 'completed_at'].includes(column.key)">{{ record[column.key] ? new Date(record[column.key]).toLocaleString() : '—' }}</template>
+            <template v-else-if="['role', 'submitter', 'approver', 'failure_reason'].includes(column.key)">{{ record[column.dataIndex] || '—' }}</template>
             <template v-else-if="column.key === 'actions'"><a-space size="small">
               <a-button size="small" class="op-btn-cyan" :loading="viewingVersionId === record.id" @click="viewVersion(record as api.ConfigVersion)"><EyeOutlined />查看</a-button>
-              <a-button v-if="canEdit && file?.status === 'active' && file.drift_status === 'clean' && record.status === 'approved' && publishTaskFor(record.id)?.status === 'failed'" size="small" class="op-btn-orange" @click="start('publish', record.id)"><ReloadOutlined />重试发布</a-button>
+              <a-button v-if="canEdit && file?.status === 'active' && file.drift_status === 'clean' && (publishingVersion(record.id) || (record.status === 'approved' && publishTaskFor(record.id)?.status === 'failed'))" size="small" class="op-btn-orange"
+                :loading="publishingVersion(record.id)" :disabled="syncStarting || publishStartingId !== null || task?.status === 'queued' || task?.status === 'running'"
+                @click="start('publish', record.id)"><ReloadOutlined />重试发布</a-button>
             </a-space></template>
           </template>
         </a-table>

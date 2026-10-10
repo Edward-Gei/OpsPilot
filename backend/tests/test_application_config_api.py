@@ -5,14 +5,77 @@ from datetime import datetime
 from sqlalchemy import delete, select
 
 from app.config_providers.nacos import NacosAdapter
-from app.models.application_config import ConfigFile, ConfigTask
-from app.models.auth import Permission, Role, RolePermission, UserRole
+from app.models.application_config import ConfigFile, ConfigTask, ConfigVersion
+from app.models.auth import Permission, Role, RolePermission, User, UserRole
 from app.models.cmdb import Application
 
 from tests.conftest import auth_header, login_for_tokens
 
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_version_records_include_names_times_and_latest_publish_failure(client, db_factory, seed):
+    """仅配置读取权限也可查看版本元信息，最近任务不被同步任务截断或污染。"""
+    from app.core.security import encrypt_text
+
+    async with db_factory() as session:
+        user = await session.get(User, seed['users']['ops1'])
+        user.display_name = '配置提交人'
+        file = ConfigFile(name='version-records', platform_instance_id=1, locator={}, locator_key='records',
+                          content_format='yaml', approval_role_id=seed['roles']['ops'])
+        session.add(file)
+        await session.flush()
+        versions = [ConfigVersion(config_file_id=file.id, version_no=number, source=source, status=status,
+                                  content_enc=encrypt_text('key: value\n'), **extra) for number, source, status, extra in [
+            (1, 'opspilot_publish', 'approved', {'approval_role_id': seed['roles']['ops'],
+                'submitted_by': user.id, 'approved_by': seed['users']['admin'],
+                'created_at': datetime(2026, 10, 10, 10), 'approved_at': datetime(2026, 10, 10, 11)}),
+            (2, 'external_import', 'published', {'published_at': datetime(2026, 10, 10, 12)}),
+            (3, 'opspilot_publish', 'rejected', {'approval_role_id': 9999, 'submitted_by': 9999,
+                'approved_by': 9999, 'rejected_at': datetime(2026, 10, 10, 13), 'reject_reason': '需补充参数'}),
+        ]]
+        session.add_all(versions)
+        await session.flush()
+        for status, error, finished in [('failed', '旧失败', datetime(2026, 10, 10, 11, 1)),
+                                         ('failed', '远端拒绝', datetime(2026, 10, 10, 11, 2))]:
+            session.add(ConfigTask(kind='publish', config_file_id=file.id, config_version_id=versions[0].id,
+                                   status=status, last_error=error, finished_at=finished,
+                                   created_by=user.id, actor_name=user.username))
+        session.add_all([ConfigTask(kind='sync', config_file_id=file.id, status='failed', last_error='同步失败',
+                                   created_by=user.id, actor_name=user.username) for _ in range(51)])
+        await session.commit()
+        file_id = file.id
+    headers = auth_header(await login_for_tokens(client, 'ops1'))
+    response = await client.get(f'/api/v1/application-configs/files/{file_id}/versions', headers=headers)
+    assert response.json()['code'] == 0
+    rejected, imported, failed = response.json()['data']['items']
+    assert failed['approval_role_name'] == '运维'
+    assert failed['submitter_name'] == '配置提交人'
+    assert failed['approver_name'] == 'admin'
+    assert failed['submitted_at'] == '2026-10-10T10:00:00'
+    assert failed['approved_at'] == '2026-10-10T11:00:00'
+    assert failed['completed_at'] == '2026-10-10T11:02:00'
+    assert failed['failure_reason'] == '远端拒绝'
+    assert imported['submitted_at'] is None and imported['approved_at'] is None
+    assert imported['completed_at'] == '2026-10-10T12:00:00' and imported['failure_reason'] is None
+    assert rejected['approval_role_name'] is None and rejected['submitter_name'] is None and rejected['approver_name'] is None
+    assert rejected['completed_at'] == '2026-10-10T13:00:00' and rejected['failure_reason'] == '需补充参数'
+    async with db_factory() as session:
+        retry = ConfigTask(kind='publish', config_file_id=file_id, config_version_id=failed['id'],
+                           status='queued', created_by=seed['users']['ops1'], actor_name='ops1')
+        session.add(retry)
+        await session.commit()
+        retry_id = retry.id
+    retrying = (await client.get(f'/api/v1/application-configs/files/{file_id}/versions', headers=headers)).json()['data']['items'][-1]
+    assert retrying['completed_at'] is None and retrying['failure_reason'] is None
+    async with db_factory() as session:
+        retry = await session.get(ConfigTask, retry_id)
+        retry.status = 'success'
+        retry.finished_at = datetime(2026, 10, 10, 14)
+        await session.commit()
+    succeeded = (await client.get(f'/api/v1/application-configs/files/{file_id}/versions', headers=headers)).json()['data']['items'][-1]
+    assert succeeded['completed_at'] == '2026-10-10T14:00:00' and succeeded['failure_reason'] is None
 
 
 async def test_file_list_filters_display_status_and_sorts_before_pagination(client, db_factory, seed):

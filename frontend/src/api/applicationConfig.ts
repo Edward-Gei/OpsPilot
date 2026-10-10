@@ -110,6 +110,13 @@ export interface ConfigVersion {
   approval_role_id: number | null
   submitted_by: number | null
   approved_by: number | null
+  approval_role_name?: string | null
+  submitter_name?: string | null
+  approver_name?: string | null
+  submitted_at?: string | null
+  approved_at?: string | null
+  completed_at?: string | null
+  failure_reason?: string | null
   can_approve?: boolean
   created_at: string | null
   published_at: string | null

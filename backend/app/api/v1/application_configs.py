@@ -2,7 +2,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app import audit
 from app.core.deps import CurrentUser, DbSession, get_client_ip, require_perm
@@ -430,9 +430,37 @@ async def list_versions(
     actor: User = Depends(require_perm("config:read")),
 ) -> dict:
     versions = await application_config_service.list_versions(session, file_id)
+    # 批量读取展示名称与各版本最近发布结果，不依赖详情中最近 50 个任务。
+    role_ids = {version.approval_role_id for version in versions if version.approval_role_id is not None}
+    user_ids = {user_id for version in versions for user_id in (version.submitted_by, version.approved_by) if user_id is not None}
+    role_names = dict((await session.execute(select(Role.id, Role.name).where(Role.id.in_(role_ids)))).all())
+    user_names = {user_id: display_name or username for user_id, display_name, username in (
+        await session.execute(select(User.id, User.display_name, User.username).where(User.id.in_(user_ids)))
+    ).all()}
+    latest_ids = select(func.max(ConfigTask.id)).where(
+        ConfigTask.config_file_id == file_id, ConfigTask.kind == "publish",
+    ).group_by(ConfigTask.config_version_id)
+    latest_tasks = {task.config_version_id: task for task in (
+        await session.execute(select(ConfigTask).where(ConfigTask.id.in_(latest_ids)))
+    ).scalars()}
     items = []
     for version in versions:
         item = application_config_service.version_to_dict(version)
+        task = latest_tasks.get(version.id)
+        completed_at = task.finished_at if task else None
+        if task is None and version.status == "published":
+            completed_at = version.published_at
+        elif task is None and version.status == "rejected":
+            completed_at = version.rejected_at
+        item.update({
+            "approval_role_name": role_names.get(version.approval_role_id),
+            "submitter_name": user_names.get(version.submitted_by),
+            "approver_name": user_names.get(version.approved_by),
+            "submitted_at": item["created_at"] if version.source == "opspilot_publish" else None,
+            "approved_at": version.approved_at.isoformat() if version.approved_at else None,
+            "completed_at": completed_at.isoformat() if completed_at else None,
+            "failure_reason": version.reject_reason if version.status == "rejected" else task.last_error if task and task.status == "failed" else None,
+        })
         item["can_approve"] = (
             version.status == "pending_approval" and version.approval_role_id is not None
             and await application_config_service.can_approve_candidate(session, actor.id, version.approval_role_id)

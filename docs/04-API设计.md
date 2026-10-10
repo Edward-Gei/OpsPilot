@@ -340,5 +340,7 @@ notify:read notify:write notify:test system:config
 
 文件格式限定 `properties`、YAML、JSON、TEXT 和 Consul KV；仅生产环境。正文响应基于 `secret:read` 脱敏，敏感键、服务账号 JSON 字符串和带签名/令牌参数的 URL 用占位符隐藏；无密钥权限的编辑只能保留这些既有值。任务错误和审计不包含正文与凭据。
 版本比较响应包含 `version_id`、`version_no`、`content_format`、`content`、`base_version_id`、`base_version_no`、`base_content` 和 `has_changes`。审批正文接口额外保留 `file_id`、`file_name`。生成候选或导入漂移时冻结当前正式版本作为基准，跳过未生效候选；无旧正式版本时基准 ID/版本号为空、正文为空字符串。双方保留注释，`has_changes` 根据原始正文判断，敏感值脱敏后内容相同仍提示存在隐藏变更。历史版本不会随后续发布切换基准。旧数据由迁移 `0024` 按现存发布时间和版本号回填；此前重新发布已覆盖的发布时间无法完整还原，因此旧记录的回填仅使用仍留存的时间信息。
+
+版本列表额外返回 `approval_role_name`、`submitter_name`、`approver_name`、`submitted_at`、`approved_at`、`completed_at` 和 `failure_reason`。用户名称优先显示名、其次用户名；角色或用户已不存在时名称为 null。`submitted_at` 为 OpsPilot 候选创建时间，外部导入为空；`completed_at` 优先取最近发布任务结束时间，无任务时回退正式版本发布时间或驳回时间。`failure_reason` 取最近发布失败原因或驳回原因，最近任务正在运行或成功时为空。此接口仍只需 `config:read`，不要求用户或角色管理权限。
 审批通过仅表示发布任务已入队；Worker 写入并回读一致后版本才变为正式版本。远端暂不可用时首次执行后最多自动重试 3 次（间隔 2、4、8 秒）；写入结果不确定时只重试回读，不重复写入，普通人工重试也继承这一限制。明确确认漂移覆盖时，`confirmed_snapshot_id` 必须是当前文件最近一次同步的漂移/远端缺失快照，任务将它持久化为本次写入基线；Worker 执行时再次核对文件仍处于该漂移状态，远端正文在确认后再次变化也停止写入。此确认是新的人工发布操作，不沿用旧任务的不确定写入标记。远端漂移或确定性拒绝不自动重试，最终失败的已批准版本可人工重试。过期任务或丧失配置文件操作锁的 Worker 不得继续写入。
 工作台 `/dashboard/summary` 的 `todo_total` 为工单审批与配置审批待办之和；无工单审批权限的用户只计算其配置待办。前端“待办审批”分为工单审批与配置审批页签；配置文件详情只展示版本记录，审批统一在待办页处理。

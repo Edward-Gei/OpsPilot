@@ -102,6 +102,53 @@ describe('编辑页草稿恢复', () => {
     await flushPromises()
   }
 
+  it('重试发布从请求发起到任务结束保持加载，失败后可再次点击', async () => {
+    api.getConfigFile.mockResolvedValue({ ...file(2), drift_status: 'clean' })
+    api.listVersions.mockResolvedValue({ items: [{ id: 6, version_no: 6, status: 'approved' }] })
+    api.listConfigFileTasks.mockResolvedValue({ items: [{ ...task(11, 2, 'failed'), kind: 'publish', config_version_id: 6 }] })
+    let resolvePublish!: (value: unknown) => void
+    let resolveTask!: (value: unknown) => void
+    api.publishVersion.mockImplementation(() => new Promise((resolve) => { resolvePublish = resolve }))
+    api.getConfigTask.mockImplementation(() => new Promise((resolve) => { resolveTask = resolve }))
+    const wrapper = mountDetail()
+    await flushPromises()
+    await wrapper.find('[role="tab"][id$="-versions"]').trigger('click')
+    const retry = () => wrapper.findAll('button').find(button => button.text().includes('重试发布'))!
+    await retry().trigger('click')
+    expect(retry().classes()).toContain('ant-btn-loading')
+    expect(retry().attributes('disabled')).toBeDefined()
+    resolvePublish({ ...task(12, 2, 'queued'), kind: 'publish', config_version_id: 6 })
+    await flushPromises()
+    expect(retry().classes()).toContain('ant-btn-loading')
+    api.listVersions.mockResolvedValue({ items: [{ id: 6, version_no: 6, status: 'publishing' }] })
+    await (wrapper.vm as unknown as { load: () => Promise<void> }).load()
+    await flushPromises()
+    expect(retry()).toBeDefined()
+    expect(retry().classes()).toContain('ant-btn-loading')
+    api.listVersions.mockResolvedValue({ items: [{ id: 6, version_no: 6, status: 'approved' }] })
+    resolveTask({ ...task(12, 2, 'failed'), kind: 'publish', config_version_id: 6, last_error: '远端拒绝' })
+    await flushPromises()
+    expect(retry().classes()).not.toContain('ant-btn-loading')
+    expect(retry().attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('版本记录展示名称、三项时间、审批人和失败原因', async () => {
+    api.listVersions.mockResolvedValue({ items: [{ id: 6, version_no: 6, status: 'approved', source: 'opspilot_publish',
+      approval_role_id: 1, submitted_by: 1, approval_role_name: '生产审批', submitter_name: '张三', approver_name: '李四',
+      submitted_at: '2026-10-10T10:00:00', approved_at: '2026-10-10T11:00:00', completed_at: '2026-10-10T11:02:00',
+      failure_reason: '远端拒绝' }] })
+    const wrapper = mountDetail()
+    await flushPromises()
+    await wrapper.find('[role="tab"][id$="-versions"]').trigger('click')
+    const table = wrapper.find('.ant-table')
+    for (const title of ['审批角色', '提交人', '提交时间', '审批时间', '完成时间', '审批人', '失败原因']) expect(table.text()).toContain(title)
+    for (const text of ['生产审批', '张三', '李四', '远端拒绝']) expect(table.text()).toContain(text)
+    expect(table.text()).not.toContain('角色 ID')
+    expect(table.text()).toContain(new Date('2026-10-10T11:02:00').toLocaleString())
+    wrapper.unmount()
+  })
+
   it('版本记录查看显示旧正式版本和所选版本的只读差异', async () => {
     const wrapper = mountDetail()
     await flushPromises()
