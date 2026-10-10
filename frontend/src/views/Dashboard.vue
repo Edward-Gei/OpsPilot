@@ -192,14 +192,18 @@ onUnmounted(() => { stopped = true; ++trendRequest; if (pollTimer) window.clearI
         </button>
       </div>
     </header>
-    <div v-if="initialLoading" role="status" aria-label="正在加载工作台" class="loading-banner"><a-spin />正在加载工作台…</div>
     <div v-if="summaryFailed" class="error-banner" role="alert">
       <span>{{ summary ? '更新失败，当前展示上次成功加载的数据' : '暂时无法加载工作台，请稍后重试' }}</span>
       <button data-testid="summary-retry" @click="loadSummary()">重试</button>
     </div>
-    <div v-if="initialLoading" class="data-stats" :style="{ '--kpi-count': loadingKpiCount, '--kpi-tablet': Math.min(loadingKpiCount, 3), '--kpi-mobile': Math.min(loadingKpiCount, 2) }">
-      <div v-for="index in loadingKpiCount" :key="index" class="data-stat skeleton-card"><span /><strong /><small /></div>
-    </div>
+    <a-spin v-if="initialLoading" role="status" aria-label="正在加载工作台">
+      <div class="dashboard-loading-placeholder" aria-hidden="true">
+        <div class="data-stats" :style="{ '--kpi-count': loadingKpiCount, '--kpi-tablet': Math.min(loadingKpiCount, 3), '--kpi-mobile': Math.min(loadingKpiCount, 2) }">
+          <div v-for="index in loadingKpiCount" :key="index" class="data-stat skeleton-card"><span /><strong /><small /></div>
+        </div>
+        <div class="loading-panels"><div v-for="index in 3" :key="index" class="data-panel skeleton-panel" /></div>
+      </div>
+    </a-spin>
     <div v-else-if="kpis.length" class="data-stats" :style="{ '--kpi-count': kpis.length, '--kpi-tablet': Math.min(kpis.length, 3), '--kpi-mobile': Math.min(kpis.length, 2) }">
       <button v-for="kpi in kpis" :key="kpi.label" class="data-stat" :style="{ '--stat-accent': kpi.color }" data-testid="dashboard-kpi" @click="router.push(kpi.path)">
         <div class="data-stat-label"><span>{{ kpi.label }}</span><component :is="kpi.icon" :style="{ color: kpi.color }" /></div>
@@ -210,8 +214,7 @@ onUnmounted(() => { stopped = true; ++trendRequest; if (pollTimer) window.clearI
       <span v-for="alert in alerts" :key="alert.label" :style="{ '--alert-color': alert.color }"><i />{{ alert.label }} <b>{{ alert.value }}</b></span>
       <a v-if="hasAttentionAccess" href="#dashboard-attention">查看关注事项 →</a>
     </div>
-    <div v-if="initialLoading" class="loading-panels" aria-hidden="true"><div v-for="index in 3" :key="index" class="data-panel skeleton-panel" /></div>
-    <template v-else-if="summary">
+    <template v-if="summary">
       <div v-if="canTrend || config" class="data-grid-top" :class="{ 'single-panel': !canTrend || !config }">
         <section v-if="canTrend" class="data-panel trend-panel">
           <div class="data-head"><div><h2>工单与执行趋势</h2><p>{{ periodDescription }}</p></div><div class="trend-tabs" aria-label="趋势周期"><button v-for="option in periodOptions" :key="option.value" :data-granularity="option.value" :aria-pressed="granularity === option.value" :class="{ active: granularity === option.value }" @click="granularity = option.value">{{ option.label }}</button></div></div>

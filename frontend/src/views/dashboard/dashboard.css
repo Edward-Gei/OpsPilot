@@ -432,12 +432,10 @@
   gap: 18px;
   white-space: nowrap;
 }
-.loading-banner {
+.dashboard-loading-placeholder {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  color: var(--text-3);
+  flex-direction: column;
+  gap: 18px;
 }
 .error-banner {
   display: flex;
@@ -460,9 +458,7 @@
   font-size: 11px;
 }
 .skeleton-card span,.skeleton-card strong,.skeleton-card small,.skeleton-panel {
-  background: linear-gradient(90deg,var(--bg-hover) 25%,var(--border) 50%,var(--bg-hover) 75%);
-  background-size: 200% 100%;
-  animation: skeleton 1.5s infinite;
+  background: var(--bg-hover);
 }
 .skeleton-card span {
   height: 14px;
@@ -486,11 +482,6 @@
 }
 .skeleton-panel {
   height: 240px;
-}
-@keyframes skeleton {
-  to {
-    background-position: -200% 0;
-  }
 }
 @media(min-width:1550px) {
   .data-panel {

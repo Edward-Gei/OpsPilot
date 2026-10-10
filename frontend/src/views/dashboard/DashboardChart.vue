@@ -76,7 +76,7 @@ onUnmounted(() => { disposed = true; observer?.disconnect(); window.removeEventL
   <div class="dashboard-chart" :class="{ 'donut-layout': kind === 'donut', 'chart-is-empty': !hasData && !loading }" :style="chartStyle" data-testid="dashboard-chart">
     <div class="chart-canvas-wrap" :class="{ 'donut-canvas': kind === 'donut' }">
       <div ref="el" class="chart-canvas" role="img" :aria-label="label" />
-      <div v-if="loading" class="chart-overlay" role="status">趋势加载中…</div>
+      <div v-if="loading" class="chart-overlay" role="status" aria-label="正在加载趋势"><a-spin /></div>
       <div v-else-if="!hasData || zeroTrend" class="chart-overlay chart-empty-state" :data-testid="!hasData ? 'chart-empty' : 'chart-zero-trend'">
         <div class="empty-illustration" aria-hidden="true"><InboxOutlined /><i /><i /></div>
         <strong>{{ failed ? '趋势暂时无法加载' : zeroTrend ? '本周期暂无工单或完成执行' : '暂无数据' }}</strong>
