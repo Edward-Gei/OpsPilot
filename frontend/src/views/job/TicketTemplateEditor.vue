@@ -6,6 +6,7 @@ import { DeleteOutlined, PlusOutlined } from '@ant-design/icons-vue'
 import * as api from '@/api/job'
 import { listJobHosts, type JobHost } from '@/api/jobHost'
 import { listRoleOptions } from '@/api/system'
+import { listApps } from '@/api/cmdb'
 import { receiverOptions, typeOptions } from './meta'
 import CodeEditor from '@/components/CodeEditor.vue'
 import { useUserStore } from '@/stores/user'
@@ -18,6 +19,7 @@ const props = defineProps<{
 const emit = defineEmits<{ 'update:open': [boolean]; saved: [] }>()
 const userStore = useUserStore()
 const canReadSecret = userStore.hasPerm('secret:read')
+const canReadApps = userStore.hasPerm('cmdb:read')
 
 type HostOption = Pick<JobHost, 'id' | 'name' | 'enabled'>
 const loading = ref(false)
@@ -27,6 +29,7 @@ const hosts = ref<HostOption[]>([])
 const processes = ref<api.ProcessTemplateItem[]>([])
 const roles = ref<{ id: number; name: string }[]>([])
 const scriptCredentials = ref<api.CredentialItem[]>([])
+const apps = ref<{ id: number; name: string }[]>([])
 const form = reactive<api.TicketTemplateForm>(emptyForm())
 const generatorScript = computed({ get: () => form.generator_script || '', set: (value: string) => (form.generator_script = value) })
 
@@ -34,13 +37,14 @@ function emptyForm(): api.TicketTemplateForm {
   return {
     name: '', type: 'daily_ops', description: '', job_host_id: undefined as unknown as number,
     process_template_id: undefined as unknown as number, params_schema: [], generator_script: '', generator_timeout: 60, allow_withdraw: true, concurrency_control_enabled: false,
-    credential_refs: [], notify_rules: [], visible_role_ids: [], status: 'enabled',
+    app_ids: [], credential_refs: [], notify_rules: [], visible_role_ids: [], status: 'enabled',
   }
 }
 
 function emptyParam(): api.TicketParam { return { name: '', label: '', source: 'user', input_type: 'text', options: [], default: '', required: false, description: '' } }
 
 const roleOptions = computed(() => roles.value.map((role) => ({ label: role.name, value: role.id })))
+const appOptions = computed(() => apps.value.map((app) => ({ label: app.name, value: app.id })))
 const receiverSelectOptions = computed(() => receiverOptions(roles.value))
 const hostSelectOptions = computed(() => hosts.value.map((host) => ({
   label: `${host.name}${host.enabled ? '' : '（已停用）'}`,
@@ -71,6 +75,7 @@ async function load(): Promise<void> {
       listJobHosts({ page: 1, page_size: 100 }),
       api.listProcessTemplates({ page: 1, page_size: 100 }),
       listRoleOptions(),
+      loadApps(),
     ])
     hosts.value = hostData.items.map((host) => ({ id: host.id, name: host.name, enabled: host.enabled }))
     processes.value = processData.items
@@ -93,6 +98,7 @@ async function load(): Promise<void> {
       description: data.description || '',
       job_host_id: data.job_host_id,
       process_template_id: data.process_template_id,
+      app_ids: [...(data.app_ids || [])],
       params_schema: (data.params_schema || []).map((p) => ({ ...emptyParam(), ...p, options: [...(p.options || [])] })),
       generator_script: data.generator_script || '',
       generator_timeout: data.generator_timeout || 60,
@@ -105,9 +111,25 @@ async function load(): Promise<void> {
       visible_role_ids: [...(data.visible_role_ids || [])],
       status: props.copyFromId && !props.templateId ? 'enabled' : data.status,
     })
+    if (!canReadApps) apps.value = data.apps || []
   } finally {
     loading.value = false
   }
+}
+
+/** 应用按页加载完整候选集，避免仅能绑定前 100 个应用。 */
+async function loadApps(): Promise<void> {
+  apps.value = []
+  if (!canReadApps) return
+  let page = 1
+  let total = 0
+  do {
+    const data = await listApps({ page, page_size: 100, sort_by: 'name', sort_order: 'asc' })
+    apps.value.push(...data.items.map((app) => ({ id: app.id, name: app.name })))
+    total = data.total
+    page += 1
+    if (!data.items.length) break
+  } while (apps.value.length < total)
 }
 
 function addParam(): void { form.params_schema.push(emptyParam()) }
@@ -155,6 +177,7 @@ function validate(): string | null {
     credentialIds.add(ref.credential_id)
   }
   if (props.copyFromId && !props.templateId) {
+    if (!canReadApps && form.app_ids?.length) return '复制含应用绑定的模板需要 CMDB 查看权限'
     const process = processes.value.find((item) => item.id === form.process_template_id)
     if (process?.status === 'disabled') return '停用流程模板不能用于复制创建工单模板'
   }
@@ -168,6 +191,7 @@ async function save(): Promise<void> {
   saving.value = true
   try {
     const payload = { ...form, description: form.description || undefined, generator_script: form.generator_script || undefined, credential_refs: form.credential_refs.map((ref) => ({ alias: ref.alias, credential_id: ref.credential_id })), params_schema: form.params_schema.map((p) => ({ ...p, label: p.label || undefined, default: p.default || undefined, description: p.description || undefined })) }
+    if (!canReadApps) delete payload.app_ids
     if (props.templateId) await api.updateTemplate(props.templateId, payload)
     else await api.createTemplate(payload)
     message.success('工单模板已保存')
@@ -200,6 +224,9 @@ async function save(): Promise<void> {
               <a-form-item label="作业主机" required class="form-col"><a-select v-model:value="form.job_host_id" show-search option-filter-prop="label" :options="hostSelectOptions" /></a-form-item>
               <a-form-item label="流程模板" required class="form-col"><a-select v-model:value="form.process_template_id" show-search option-filter-prop="label" :options="processSelectOptions" /></a-form-item>
             </div>
+            <a-form-item label="适用应用" extra="可绑定多个应用，仅用于记录模板适用范围。">
+              <a-select v-model:value="form.app_ids" mode="multiple" show-search allow-clear option-filter-prop="label" :options="appOptions" :disabled="!canReadApps" placeholder="搜索并选择适用应用（可选）" />
+            </a-form-item>
             <a-form-item label="说明"><a-textarea v-model:value="form.description" :rows="3" /></a-form-item>
             <template v-if="canReadSecret">
               <a-divider orientation="left" :orientation-margin="0">脚本密钥引用</a-divider>

@@ -1,7 +1,7 @@
 """工单模板请求模型：维护业务入口及本入口的参数契约。"""
 
 import re
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -51,6 +51,7 @@ class TicketTemplateUpsertRequest(BaseModel):
     description: str | None = Field(default=None, max_length=512)
     job_host_id: int
     process_template_id: int
+    app_ids: list[Annotated[int, Field(strict=True, gt=0)]] = Field(default_factory=list)
     params_schema: list[TicketParam] = Field(default_factory=list, max_length=100)
     generator_script: str | None = None
     generator_timeout: int | None = Field(default=60, ge=1, le=3600)
@@ -65,6 +66,8 @@ class TicketTemplateUpsertRequest(BaseModel):
     def validate_params(self) -> "TicketTemplateUpsertRequest":
         """保证当前工单入口的参数定义和动态脚本彼此一致。"""
         names = [p.name for p in self.params_schema]
+        if len(self.app_ids) != len(set(self.app_ids)):
+            raise ValueError("同一应用不能重复绑定")
         if len(names) != len(set(names)):
             raise ValueError("工单参数名称不能重复")
         generated = [p for p in self.params_schema if p.source == "generated"]

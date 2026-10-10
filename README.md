@@ -1,10 +1,10 @@
-# OpsPilot V1
+# OpsPilot
 
 OpsPilot 是面向企业内网的自动化运维平台：CMDB 资产台账、作业主机、工单模板、可复用流程模板、审批、串行执行、实时日志、通知和审计组成完整闭环。
 
 技术栈：FastAPI + 异步 SQLAlchemy + MySQL 8 + Redis 7 + `asyncssh`；Vue 3 + TypeScript + Ant Design Vue 4；Docker Compose 单机部署。
 
-设计文档见 [`docs/`](docs/)，生产和内网部署见 [`deploy/DEPLOYMENT.md`](deploy/DEPLOYMENT.md)。
+文档入口见 [`docs/README.md`](docs/README.md)，生产和内网部署见 [`deploy/DEPLOYMENT.md`](deploy/DEPLOYMENT.md)。
 
 ## 快速部署
 
@@ -74,9 +74,11 @@ docker compose up -d
 
 ## 目录
 
+应用配置通过独立主菜单维护生产配置文件，支持 Apollo、Nacos、Consul 的 HTTP 接入、版本审批、手动同步及漂移处理。配置文件与 CMDB 应用可多对多关联；仅删除本地归档记录，不删除远端配置。平台真实版本联调状态见[兼容性记录](docs/应用配置平台兼容性记录.md)。
+
 ```text
 backend/  FastAPI API、数据库模型、迁移和 Worker
 frontend/ Vue 3 单页应用，构建后由 Nginx 提供静态资源
 deploy/   Compose、Nginx、初始化 SQL、备份和离线镜像脚本
-docs/     产品、架构、数据库、API、任务和模板设计
+docs/     产品、架构、数据库、API、功能说明与开发验收指南
 ```

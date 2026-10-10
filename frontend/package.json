@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test": "vitest run",
     "type-check": "vue-tsc --noEmit",
     "preview": "vite preview"
   },
@@ -14,6 +15,7 @@
     "@codemirror/lang-yaml": "^6.1.2",
     "@codemirror/language": "^6.10.3",
     "@codemirror/legacy-modes": "^6.4.1",
+    "@codemirror/merge": "^6.12.2",
     "@codemirror/state": "^6.4.1",
     "@codemirror/theme-one-dark": "^6.1.2",
     "@codemirror/view": "^6.34.1",
@@ -30,8 +32,11 @@
   "devDependencies": {
     "@types/qrcode": "^1.5.5",
     "@vitejs/plugin-vue": "^5.1.4",
+    "@vue/test-utils": "^2.4.6",
+    "jsdom": "^25.0.1",
     "typescript": "^5.6.3",
     "vite": "^5.4.9",
+    "vitest": "^2.1.9",
     "vue-tsc": "^2.1.6"
   }
 }

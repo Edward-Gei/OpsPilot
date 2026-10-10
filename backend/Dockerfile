@@ -15,7 +15,7 @@ COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini .
 COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
 
 # 非 root 运行；/data/logs 为执行日志卷挂载点
 RUN useradd -m -u 1000 opspilot && mkdir -p /data/logs && chown -R opspilot:opspilot /app /data/logs

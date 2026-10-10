@@ -332,7 +332,7 @@ function onOidcLogin() {
           <a class="back-link" @click="backToPassword"><LeftOutlined /> 返回重新登录</a>
         </template>
 
-        <div class="foot">© 2026 OpsPilot · V1.0</div>
+        <div class="foot">© 2026 OpsPilot · v1.2</div>
       </div>
     </div>
   </div>

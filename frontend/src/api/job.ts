@@ -102,6 +102,7 @@ export interface TicketTemplateForm {
   description?: string
   job_host_id: number
   process_template_id: number
+  app_ids?: number[]
   params_schema: TicketParam[]
   generator_script?: string | null
   generator_timeout?: number | null
@@ -177,6 +178,8 @@ export interface TemplateItem {
 
 /** 工单模板详情：业务入口配置和流程引用。 */
 export interface TemplateDetail extends TemplateItem {
+  app_ids: number[]
+  apps: { id: number; name: string }[]
   process_template?: { id: number; name: string; status: TemplateStatus }
 }
 

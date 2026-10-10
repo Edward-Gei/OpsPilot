@@ -3,7 +3,8 @@
 // M3 模板内容编辑与版本回看共用；v-model 双向绑定
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { basicSetup, EditorView } from 'codemirror'
-import { Compartment, EditorState } from '@codemirror/state'
+import { Compartment, EditorState, RangeSetBuilder, StateField } from '@codemirror/state'
+import { Decoration, type DecorationSet } from '@codemirror/view'
 import { StreamLanguage } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { shell } from '@codemirror/legacy-modes/mode/shell'
@@ -18,8 +19,9 @@ const props = withDefaults(
     lang?: 'shell' | 'yaml' | 'json'
     readonly?: boolean
     height?: string
+    indentGuides?: boolean
   }>(),
-  { lang: 'shell', readonly: false, height: '320px' },
+  { lang: 'shell', readonly: false, height: '320px', indentGuides: false },
 )
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
 const insertText = (text: string) => {
@@ -46,11 +48,33 @@ function langExt(lang: 'shell' | 'yaml' | 'json') {
   return StreamLanguage.define(shell)
 }
 
+// 只标记有正文的行首缩进，避免空行出现与实际层级无关的引导线。
+const indentGuides = StateField.define<DecorationSet>({
+  create: (state) => buildIndentGuides(state),
+  update: (guides, transaction) => transaction.docChanged ? buildIndentGuides(transaction.state) : guides,
+  provide: (field) => EditorView.decorations.from(field),
+})
+
+function buildIndentGuides(state: EditorState): DecorationSet {
+  const marks = new RangeSetBuilder<Decoration>()
+  for (let number = 1; number <= state.doc.lines; number++) {
+    const line = state.doc.line(number)
+    const whitespace = /^[ \t]+(?=\S)/.exec(line.text)?.[0]
+    if (whitespace) marks.add(line.from, line.from + whitespace.length, Decoration.mark({ class: 'cm-indent-guides' }))
+  }
+  return marks.finish()
+}
+
 /** 主题扩展：暗色用 oneDark，浅色用默认亮色并统一基础样式 */
 function themeExt(mode: string) {
   const base = EditorView.theme({
     '&': { height: props.height, fontSize: '13px' },
     '.cm-scroller': { fontFamily: "Consolas, 'Courier New', monospace" },
+    '.cm-indent-guides': {
+      backgroundImage: 'linear-gradient(to right, transparent calc(1ch - 1px), var(--border, #d9d9d9) calc(1ch - 1px), var(--border, #d9d9d9) 1ch, transparent 1ch)',
+      backgroundSize: '2ch 100%',
+      backgroundRepeat: 'repeat-x',
+    },
   })
   return mode === 'dark' ? [oneDark, base] : [base]
 }
@@ -65,6 +89,7 @@ onMounted(() => {
         langComp.of(langExt(props.lang)),
         themeComp.of(themeExt(themeStore.mode)),
         readonlyComp.of([EditorState.readOnly.of(props.readonly), EditorView.editable.of(!props.readonly)]),
+        ...(props.indentGuides ? [indentGuides] : []),
         // 编辑内容同步回 v-model
         EditorView.updateListener.of((u) => {
           if (u.docChanged) emit('update:modelValue', u.state.doc.toString())

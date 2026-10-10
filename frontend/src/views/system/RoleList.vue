@@ -3,7 +3,7 @@
 // admin 角色不可编辑或删除，其他内置角色允许编辑但不可删除，由后端兜底
 import { computed, onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
-import { PlusOutlined, SafetyCertificateOutlined, TeamOutlined } from '@ant-design/icons-vue'
+import { InboxOutlined, LockOutlined, PlusOutlined, SafetyCertificateOutlined, TeamOutlined } from '@ant-design/icons-vue'
 import * as sysApi from '@/api/system'
 import { useUserStore } from '@/stores/user'
 
@@ -11,14 +11,8 @@ const userStore = useUserStore()
 const canWrite = userStore.hasPerm('role:write')
 const canEditRole = (role: sysApi.RoleItem) => canWrite && role.code !== 'admin'
 
-// 角色头像渐变色（按卡片顺序循环，提升辨识度）
-const avatarGrads = [
-  'var(--grad-blue)',
-  'var(--grad-purple)',
-  'var(--grad-green)',
-  'var(--grad-orange)',
-  'var(--grad-red)',
-]
+// 与工作台一致的淡彩主题，按卡片顺序循环区分角色。
+const roleColors = ['#4b7bf2', '#9b80e7', '#43b99c', '#efb24e', '#e98287']
 // 权限标签按模块着色，一眼区分所属域
 const moduleTagColors: Record<string, string> = {
   user: 'geekblue',
@@ -146,7 +140,7 @@ onMounted(loadAll)
 </script>
 
 <template>
-  <div>
+  <div class="role-page">
     <!-- 彩色横幅：页面标识 + 角色数 -->
     <div class="op-hero op-hero--violet">
       <div class="op-hero-icon"><SafetyCertificateOutlined /></div>
@@ -168,12 +162,16 @@ onMounted(loadAll)
     </div>
 
     <a-spin :spinning="loading">
+      <div v-if="!loading && !roles.length" class="role-empty">
+        <div class="empty-icon"><InboxOutlined /></div>
+        <b>暂无角色</b>
+        <span>{{ canWrite ? '点击新建角色，设置名称与权限后即可使用' : '当前没有可展示的角色' }}</span>
+      </div>
       <div class="role-grid">
-        <a-card v-for="(role, idx) in roles" :key="role.id" class="role-card">
+        <a-card v-for="(role, idx) in roles" :key="role.id" class="role-card" :style="{ '--role-accent': roleColors[idx % roleColors.length] }">
           <div class="role-head">
             <div class="role-title">
-              <!-- 渐变头像：按顺序循环配色 -->
-              <span class="op-icon-grad" :style="{ background: avatarGrads[idx % avatarGrads.length] }">
+              <span class="op-icon-grad role-icon">
                 <SafetyCertificateOutlined />
               </span>
               <div>
@@ -194,7 +192,7 @@ onMounted(loadAll)
               {{ permNameMap[code] || code }}
             </a-tag>
             <a-tag v-if="role.permissions.length > 6">+{{ role.permissions.length - 6 }}</a-tag>
-            <span v-if="!role.permissions.length" class="muted">无权限点</span>
+            <span v-if="!role.permissions.length" class="muted"><LockOutlined /> 尚未配置权限点</span>
           </div>
           <div v-if="canEditRole(role)" class="role-actions">
             <a-button size="small" @click="openEdit(role)">
@@ -268,22 +266,31 @@ onMounted(loadAll)
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 12px 16px;
+  border: 1px solid color-mix(in srgb,#9b80e7 12%,var(--border));
+  border-radius: 12px;
+  background: linear-gradient(100deg,color-mix(in srgb,#9b80e7 6%,var(--bg-card)),var(--bg-card));
 }
 .hint {
   font-size: 12px;
-  color: var(--text-3);
+  color: var(--text-2);
 }
 .role-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%,320px), 1fr));
+  gap: 14px;
 }
 .role-card {
   border-radius: 14px;
   height: 100%;
+  background: linear-gradient(140deg,color-mix(in srgb,var(--role-accent) 7%,var(--bg-card)),var(--bg-card) 70%);
+  border-color: color-mix(in srgb,var(--role-accent) 18%,var(--border));
+  box-shadow: 0 5px 18px color-mix(in srgb,var(--role-accent) 5%,transparent);
 }
 .role-card :deep(.ant-card-body) {
+  padding: 20px;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -297,6 +304,13 @@ onMounted(loadAll)
   display: flex;
   align-items: flex-start;
   gap: 10px;
+}
+.role-icon {
+  color: var(--role-accent);
+  background: color-mix(in srgb,var(--role-accent) 13%,transparent);
+  box-shadow: none;
+  border: 1px solid color-mix(in srgb,var(--role-accent) 16%,transparent);
+  flex-shrink: 0;
 }
 .role-head b {
   font-size: 15px;
@@ -312,8 +326,11 @@ onMounted(loadAll)
 }
 .member {
   font-size: 12px;
-  color: var(--text-3);
+  color: var(--text-2);
   white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: 7px;
+  background: color-mix(in srgb,var(--role-accent) 8%,var(--bg-card));
 }
 .role-desc {
   font-size: 13px;
@@ -328,7 +345,13 @@ onMounted(loadAll)
   margin-bottom: 6px;
 }
 .muted {
-  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb,var(--role-accent) 5%,var(--bg-card));
   font-size: 12px;
 }
 .role-actions {
@@ -359,11 +382,58 @@ onMounted(loadAll)
 .pg-title {
   font-size: 12px;
   font-weight: 600;
-  color: var(--text-3);
+  color: var(--text-2);
   margin-bottom: 6px;
 }
 .perm-group :deep(.ant-checkbox-wrapper) {
   margin-right: 16px;
   margin-bottom: 4px;
+}
+.pg-title::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 11px;
+  margin-right: 7px;
+  background: #9b80e7;
+  border-radius: 2px;
+  vertical-align: -1px;
+}
+.perm-group {
+  padding: 12px;
+  border: 1px solid color-mix(in srgb,#9b80e7 12%,var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb,#9b80e7 4%,var(--bg-card));
+}
+.role-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 46px 20px;
+  border: 1px solid color-mix(in srgb,#9b80e7 16%,var(--border));
+  border-radius: 14px;
+  background: radial-gradient(ellipse at center,color-mix(in srgb,#9b80e7 7%,var(--bg-card)),var(--bg-card));
+}
+.empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  height: 58px;
+  margin-bottom: 4px;
+  border: 1px solid color-mix(in srgb,#9b80e7 18%,transparent);
+  border-radius: 50%;
+  color: #9b80e7;
+  background: color-mix(in srgb,#9b80e7 9%,var(--bg-card));
+  box-shadow: 0 0 0 7px color-mix(in srgb,#9b80e7 3%,transparent);
+  font-size: 26px;
+}
+.role-empty b { color: var(--text-1); font-size: 14px; }
+.role-empty>span { color: var(--text-2); font-size: 12px; text-align: center; }
+@media (max-width: 900px) {
+  .role-page .op-hero { flex-wrap: wrap; padding: 18px; }
+  .role-page .op-hero-extra { flex-wrap: wrap; }
+  .toolbar { flex-wrap: wrap; }
 }
 </style>

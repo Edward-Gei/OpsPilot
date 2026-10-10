@@ -56,6 +56,8 @@ async def create_template(req: TicketTemplateUpsertRequest, request: Request, se
                           actor: User = Depends(require_perm("template:write"))):
     if req.credential_refs and not await _can_view_secret_refs(session, actor):
         raise BizError(Errors.NO_PERM, "缺少权限: secret:read", 403)
+    if req.app_ids and "cmdb:read" not in await rbac_service.get_user_perms(session, actor.id):
+        raise BizError(Errors.NO_PERM, "缺少权限: cmdb:read", 403)
     tpl = await template_service.create_template(session, created_by=actor.id, data=req.model_dump())
     audit.log(module="job", action="template.create", actor_id=actor.id, actor_name=actor.username,
               source_ip=get_client_ip(request), target_type="template", target_id=str(tpl.id), target_name=tpl.name)
@@ -72,6 +74,8 @@ async def get_template(template_id: int, session: DbSession, actor: User = Depen
         if await _can_view_secret_refs(session, actor) else None,
     )
     data["process_template"] = {"id": process.id, "name": process.name, "status": process.status}
+    data["apps"] = await template_service.get_template_apps(session, template_id)
+    data["app_ids"] = [app["id"] for app in data["apps"]]
     return ok(data)
 
 
@@ -81,7 +85,13 @@ async def update_template(template_id: int, req: TicketTemplateUpsertRequest, re
     existing = await template_service.get_template_or_404(session, template_id)
     if (req.credential_refs or existing.credential_refs) and not await _can_view_secret_refs(session, actor):
         raise BizError(Errors.NO_PERM, "缺少权限: secret:read", 403)
-    tpl = await template_service.update_template(session, template_id, data=req.model_dump())
+    data = req.model_dump()
+    # 旧客户端省略字段时保留关联；显式修改应用绑定需具备 CMDB 读取权限。
+    if "app_ids" not in req.model_fields_set:
+        data.pop("app_ids")
+    elif "cmdb:read" not in await rbac_service.get_user_perms(session, actor.id):
+        raise BizError(Errors.NO_PERM, "缺少权限: cmdb:read", 403)
+    tpl = await template_service.update_template(session, template_id, data=data)
     audit.log(module="job", action="template.update", actor_id=actor.id, actor_name=actor.username,
               source_ip=get_client_ip(request), target_type="template", target_id=str(tpl.id), target_name=tpl.name)
     return ok({"id": tpl.id})

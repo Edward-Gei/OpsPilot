@@ -1,0 +1,48 @@
+# 与常规部署并行运行的本地验收覆盖；密码和密钥经 --env-file 插值传入。
+name: opspilot-config-acceptance
+
+services:
+  mysql:
+    container_name: opspilot-config-mysql
+  redis:
+    container_name: opspilot-config-redis
+  api:
+    container_name: opspilot-config-api
+    image: opspilot-config-test:local
+    extra_hosts:
+      - "stage-admin.mitrade.com:119.28.109.141"
+    volumes:
+      - ../backend:/app:ro
+      - ./docker-entrypoint.acceptance.sh:/docker-entrypoint.sh:ro
+    env_file: !reset []
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: ${MYSQL_USER:-opspilot}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?required}
+      MYSQL_DB: ${MYSQL_DB:-opspilot}
+      REDIS_HOST: redis
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?required}
+      SECRET_ENCRYPT_KEY: ${SECRET_ENCRYPT_KEY:?required}
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:?required}
+      PUBLIC_BASE_URL: http://127.0.0.1:53022
+      RUN_MIGRATIONS: "1"
+  worker:
+    container_name: opspilot-config-worker
+    image: opspilot-config-test:local
+    extra_hosts:
+      - "stage-admin.mitrade.com:119.28.109.141"
+    volumes:
+      - ../backend:/app:ro
+      - ./docker-entrypoint.acceptance.sh:/docker-entrypoint.sh:ro
+    env_file: !reset []
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: ${MYSQL_USER:-opspilot}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?required}
+      MYSQL_DB: ${MYSQL_DB:-opspilot}
+      REDIS_HOST: redis
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?required}
+      SECRET_ENCRYPT_KEY: ${SECRET_ENCRYPT_KEY:?required}
+      RUN_MIGRATIONS: "0"
+  nginx:
+    container_name: opspilot-config-nginx

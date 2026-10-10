@@ -13,6 +13,7 @@ from app.core.constants import CredentialAuthType
 from app.core.security import encrypt_text
 from app.models.cmdb import JobHost
 from app.models.domain import DnsZone
+from app.models.application_config import ConfigPlatformInstance
 from app.models.job import Credential
 from app.models.ticket import Ticket
 from app.models.job import TicketTemplate
@@ -168,6 +169,14 @@ async def delete_credential(session: AsyncSession, credential_id: int) -> Creden
     ).scalar_one()
     if zone_count:
         raise Errors.rejected(f"凭据被 {zone_count} 个 Zone 引用，无法删除")
+    config_count = (
+        await session.execute(
+            select(func.count()).select_from(ConfigPlatformInstance)
+            .where(ConfigPlatformInstance.credential_id == credential_id)
+        )
+    ).scalar_one()
+    if config_count:
+        raise Errors.rejected(f"凭据被 {config_count} 个配置平台实例引用，无法删除")
     if is_script_secret(cred):
         template_refs = (await session.execute(select(TicketTemplate.credential_refs))).scalars()
         template_count = sum(

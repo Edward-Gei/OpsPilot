@@ -1,11 +1,10 @@
-# OpsPilot V1 API 设计
+# OpsPilot API 设计
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | v1.0 |
-| 状态 | 竣工，与 `backend/app/api/v1/` 路由同步 |
+| 文档定位 | 当前路由与 Schema 参考 |
 | Base URL | `/api/v1` |
-| 最终契约 | 运行中的 FastAPI OpenAPI：`/api/v1/docs` |
+| 最终契约 | 运行中的 OpenAPI：`/api/v1/openapi.json`；交互文档：`/api/v1/docs` |
 
 ## 1. 通用约定
 
@@ -19,7 +18,9 @@
 
 失败响应沿用相同包裹结构，业务 code 与 HTTP 状态码同时表达错误。常见 code：`40001` 参数错误、`40101` 未认证、`40102` Token 过期、`40103` 需要 MFA、`40104` 需要绑定 MFA、`40105` 需要改密、`40301` 无权限、`40302` 对象越权、`40401` 不存在、`40901` 状态冲突、`42201` 业务拒绝、`42901` 限流/锁定、`50001` 内部错误。
 
-分页请求为 `page` 和 `page_size`，最大 100；分页数据为 `{items,total,page,page_size}`。时间使用带时区 ISO8601。
+除明确注明的根路径外，本文接口均相对于 `/api/v1`；应用配置章节还须加上该章节注明的模块前缀。
+
+分页请求通常为 `page` 和 `page_size`，常用上限为 100，具体限制以接口 Schema 为准；分页数据为 `{items,total,page,page_size}`。时间使用带时区 ISO8601。
 
 ## 2. 认证和个人账号
 
@@ -65,7 +66,7 @@
 | PUT | `/users/{id}/password` | `user:write` | 管理员重置用户密码 |
 | PUT | `/users/{id}/mfa` | `user:mfa` | 管理员启用、禁用或重置 MFA |
 | GET | `/roles` | `role:read` | 角色、权限和成员数 |
-| GET | `/roles/permissions` | `role:read` | 30 个权限点 |
+| GET | `/roles/permissions` | `role:read` | 40 个权限点，见 §12 |
 | GET | `/roles/options` | `template:read` | 角色 ID/名称轻量选项 |
 | POST | `/roles` | `role:write` | 创建自定义角色 |
 | PUT | `/roles/{id}` | `role:write` | 更新角色；admin 权限矩阵不可改 |
@@ -91,12 +92,14 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/cmdb/apps` | `cmdb:read` | 应用分页；关键词匹配应用名、所属系统、运维负责人和开发负责人，并支持部署方式、项目类型、所属业务线和服务级别筛选 |
+| GET | `/cmdb/apps` | `cmdb:read` | 应用分页；关键词匹配应用名、所属系统、运维负责人、开发负责人和服务端口，并支持部署方式、项目类型、所属业务线和服务级别筛选及列排序 |
 | POST | `/cmdb/apps` | `cmdb:write` | 创建应用和主机关联 |
-| GET | `/cmdb/apps/{id}` | `cmdb:read` | 应用详情 |
+| GET | `/cmdb/apps/{id}` | `cmdb:read` | 应用详情，含关联主机、配置文件元信息及关联工单模板（名称、流程模板、状态）；不含配置正文，无需 `config:read`；模板名称跳转受 `template:read` 控制 |
 | PUT | `/cmdb/apps/{id}` | `cmdb:write` | 编辑应用和主机关联 |
 | DELETE | `/cmdb/apps/{id}` | `cmdb:delete` | 删除应用 |
 | GET | `/cmdb/apps/export` | `cmdb:read` | 按当前筛选导出完整用户可见应用台账 |
+
+应用列表的 `sort_by` 可取 `name`、`language`、`deploy_type`、`project_type`、`host_count`、`business_line`、`system_name`、`service_level`、`ops_owner`、`dev_owner`、`service_port`、`cpu_quota`、`mem_quota`、`description`、`created_at`；`sort_order` 为 `asc` 或 `desc`。排序先于分页，关联主机数按数值排序，服务端口和配额作为文本排序；未指定时按应用 ID 倒序。列表与导出共用关键词匹配规则。
 
 ## 5. 凭据和作业主机
 
@@ -188,6 +191,10 @@
 | PUT | `/templates/{id}/status` | `template:write` | 启停 |
 | DELETE | `/templates/{id}` | `template:delete` | 有进行中工单时拒绝 |
 
+模板创建/更新可提交 `app_ids: [应用ID, ...]`，仅允许存在且不重复的正整数 ID；`[]` 解除全部绑定。创建时省略表示不绑定，更新时省略则保留原关联，以兼容旧客户端；显式 `null` 无效。创建非空绑定及更新显式提交 `app_ids` 时额外要求 `cmdb:read`，候选应用复用分页 `GET /cmdb/apps`。
+
+`GET /templates/{id}` 额外返回 `app_ids` 和 `apps: [{id,name}]`；`GET /cmdb/apps/{id}` 额外返回 `ticket_templates: [{id,name,status,process_template_id,process_template_name}]`，流程模板已缺失时名称为 `null`。应用详情以“模板名称、流程模板、状态”三列表格展示关联工单模板，名称可跳转详情。双向关联仅提供名称等元信息，应用详情不会返回模板脚本或密钥引用。完整详情分别沿用 `template:read` 与 `cmdb:read` 权限。
+
 ### 7.3 `/tickets`
 
 | 方法 | 路径 | 权限 | 说明 |
@@ -251,23 +258,46 @@
 | GET | `/audit/logs` | `audit:read` | 时间、操作人、模块、动作、结果和对象关键字组合筛选 |
 | GET | `/audit/logs/export` | `audit:export` | 当前筛选导出 CSV 或 XLSX，最多 100000 行；导出行为写审计 |
 
+安全审计页面的模块列表、详情及筛选使用中文名称，筛选值仍提交原始模块编码。当前写入模块为 `auth`（认证）、`user`（用户）、`cmdb`（资产）、`job`（作业管理）、`domain`（域名管理）、`config`（应用配置）、`ticket`（工单）、`execution`（执行）、`notify`（通知）、`system`（系统）、`audit`（审计）；筛选兼容 `role`（角色）、`credential`（凭据）、`template`（模板）历史编码。
+
 ## 11. 系统、工作台和搜索
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/system/configs` | `system:config` | 读取预置配置，敏感字段掩码 |
 | PUT | `/system/configs` | `system:config` | 批量更新预置配置，掩码值保留原 secret |
-| GET | `/healthz` | 公开 | DB/Redis 健康检查 |
+| GET | `/healthz` | 公开 | 根路径，不加 `/api/v1`；DB/Redis 健康检查 |
+| GET | `/ping` | 公开 | API 存活检查 |
 | GET | `/dashboard/summary` | 登录 | 按权限返回概览各段 |
 | GET | `/dashboard/ticket-trend` | `ticket:read` | 日/周/月/年提单趋势 |
+| GET | `/dashboard/activity-trend` | `ticket:read` 或 `execution:read` | 工单提交与完成执行双系列趋势；无对应权限的系列为 `null` |
 | GET | `/search?keyword=` | 登录 | 按权限裁剪的主机、应用、Zone、工单和模板聚合搜索；Zone 仅搜索名称和描述 |
 
+工作台展示主机、应用、托管 Zone、有效配置文件、本月工单和个人待办六项指标，以及工单与执行趋势、应用配置状态、主机环境与状态、应用部署方式、域名资源与同步、工单状态、DNS 记录类型、今日审计模块八类图表；各项按当前用户读取权限展示。主机状态来自 CMDB 登记值，域名与配置状态来自本地最近同步结果，不代表实时监控。
+
+`GET /dashboard/summary` 保留原字段，并按权限新增以下统计：
+
+| 字段 | 权限 | 内容与口径 |
+| --- | --- | --- |
+| `cmdb.host_environment_status` | `cmdb:read` | `[{environment,status,count}]`，按主机环境与登记状态计数 |
+| `cmdb.app_deploy_type` | `cmdb:read` | `{部署方式:应用数量}` |
+| `domain` | `domain:read` | `zone_total`、`record_total`、`provider_dist`、`sync_status`、`record_type_dist`；记录总量与类型均按有效 Zone 关联的本地记录集行计数，不按单条记录的值数量计数 |
+| `config` | `config:read` | `file_total`、`status_dist`；排除已归档，先按 `drifted`、`remote_missing`、`sync_failed` 分类，其余按正式版本是否存在区分 `clean` 与 `unpublished`，五类互斥且合计等于文件总量 |
+| `audit` | `audit:read` | `today_total`、`result_dist`、`module_dist`，按今日零点至当前时间统计 |
+| `todo_breakdown` | 当前用户待办 | `{ticket,config}`，沿用个人工单与配置审批待办口径 |
+| `attention` | 各对象的读取权限 | 最多六条 `[{module,id,name,status,updated_at}]`，包含未归档配置的漂移/远端缺失/同步失败、域名同步失败、执行失败/中断，合并按时间倒序；执行时间取完成时间，缺失时取创建时间；仅返回名称和状态等元信息 |
+
+无读取权限的统计段为 `null`，关注事项不包含无权限模块。`activity-trend` 接受 `granularity=day|week|month|year`（默认 `day`），分别返回近 30 天、12 周、12 月、5 年的自然时间桶并补零，结构为 `{granularity,items:[{period,tickets,executions}]}`。工单按创建时间计数；完成执行只统计 `success/failed/terminated/interrupted` 且完成时间非空的记录，按完成时间计数；未来时间不计入。两项读取权限均无时返回 403；旧 `ticket-trend` 的响应结构保留。
+
 ## 12. 权限点全集
+
+当前共 40 个权限点，事实来源为 `backend/app/core/constants.py` 的 `PERMISSIONS`。
 
 ```text
 user:read user:write user:mfa role:read role:write
 cmdb:read cmdb:write cmdb:delete cmdb:import
 domain:read domain:write domain:delete
+config:read config:write config:delete config:instance
 credential:read credential:write credential:delete
 secret:read secret:write secret:delete
 template:read template:write template:delete
@@ -277,3 +307,40 @@ execution:read execution:control execution:force_control
 audit:read audit:export
 notify:read notify:write notify:test system:config
 ```
+
+## 13. 应用配置 `/application-configs`
+
+本节表内路径相对于 `/api/v1/application-configs`，例如实例列表完整路径为 `/api/v1/application-configs/platform-instances`。
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET/POST | `/platform-instances` | `config:read` / `config:instance` | 实例列表、创建；凭据只返回 ID，不返回密钥 |
+| PUT/DELETE | `/platform-instances/{id}` | `config:instance` | 修改实例；仅已停用且无引用可删除 |
+| POST | `/platform-instances/{id}/probe` | `config:instance` | 连通性测试 |
+| GET | `/platform-instances/{id}/namespaces` | `config:write` | 读取 Nacos 命名空间选项，仅返回名称与 ID；默认 `public` 的 ID 为空字符串 |
+| GET | `/compatible-credentials` | `config:instance` | 按平台筛选凭据名称和认证类型 |
+| GET | `/approval-roles`、`/cmdb-applications` | `config:read` | 角色与关联应用选项，不授予审批权；应用选项返回全量名称/ID，支持 `keyword` 按名称筛选 |
+| GET | `/approval-todo` | 已登录用户 | 分页返回当前审批角色成员可处理的候选版本；admin 可见所有待审批候选，无 `ticket:approve` 或 `config:read` 要求 |
+| GET | `/approval-todo/{version_id}/content` | 当前审批角色成员或 admin | 返回候选及冻结旧正式版本的差异对照；双方按 `secret:read` 脱敏，无权或候选已处理时返回 404 |
+| POST | `/discover`、`/import-tasks` | `config:write` | 发现远端资源、创建多选接入任务；任务返回 `202` |
+| GET | `/import-tasks` | `config:read` | 最近 20 项接入任务及逐项结果 |
+| GET/POST | `/files` | `config:read` / `config:write` | 分页列表、手工新建本地配置与草稿 |
+| GET/PUT | `/files/{id}` | `config:read` / `config:write` | 详情、名称、审批角色与 CMDB 多对多关联 |
+| POST/DELETE | `/files/{id}/archive`、`/files/{id}` | `config:delete` | 先归档，再删除本地记录；永不删除远端 |
+| GET/PUT/DELETE | `/files/{id}/draft` | `config:read` / `config:write` | 读取、保存、丢弃草稿 |
+| GET | `/files/{id}/versions`、`/files/{id}/versions/{version_id}/content` | `config:read` | 版本与按权限脱敏的正文 |
+| GET | `/files/{id}/versions/{version_id}/comparison` | `config:read` | 读取版本生成时旧正式版本与所选版本的只读对照；双方按 `secret:read` 脱敏 |
+| POST | `/files/{id}/candidates` | `config:write` | 冻结草稿并提交审批 |
+| POST | `/files/{id}/candidates/{version_id}/approve`、`/reject` | 当前审批角色成员或 admin | 批准时同事务创建远端发布任务，驳回则不发布；提交人可自审，无 `config:approve` 或 `config:write` 要求 |
+| POST | `/files/{id}/sync`、`/files/{id}/versions/{version_id}/publish` | `config:write` | 创建手动同步任务；指定版本发布用于失败后人工重试，漂移弹窗重新发布时请求体传 `confirmed_snapshot_id`，返回 `202` |
+| GET/POST | `/files/{id}/drift`、`/files/{id}/drift/import` | `config:read` / `config:write` | 双栏脱敏快照包含 `latest_snapshot_id`；导入仅创建内部正式版本，不写外部 |
+| GET | `/tasks/{id}`、`/files/{id}/tasks` | `config:read` | 查询任务逐项进度、单文件最近 50 项任务摘要 |
+
+`GET /files` 支持 `keyword` 名称搜索、`platform_instance_id` 实例筛选和 `status` 标签筛选（`clean` 一致、`drifted` 存在漂移、`remote_missing` 远端缺失、`sync_failed` 同步失败、`unpublished` 待首次发布、`archived` 已归档）。筛选可组合，计数和分页均基于筛选结果；归档优先于漂移状态，一致仅包含已有正式版本的活跃文件。`sort_by=last_synced_at` 配合 `sort_order=asc|desc` 按最近同步时间排序，未同步记录始终置后，同时间按 ID 降序；未指定排序字段时保持 ID 降序。
+
+文件格式限定 `properties`、YAML、JSON、TEXT 和 Consul KV；仅生产环境。正文响应基于 `secret:read` 脱敏，敏感键、服务账号 JSON 字符串和带签名/令牌参数的 URL 用占位符隐藏；无密钥权限的编辑只能保留这些既有值。任务错误和审计不包含正文与凭据。
+版本比较响应包含 `version_id`、`version_no`、`content_format`、`content`、`base_version_id`、`base_version_no`、`base_content` 和 `has_changes`。审批正文接口额外保留 `file_id`、`file_name`。生成候选或导入漂移时冻结当前正式版本作为基准，跳过未生效候选；无旧正式版本时基准 ID/版本号为空、正文为空字符串。双方保留注释，`has_changes` 根据原始正文判断，敏感值脱敏后内容相同仍提示存在隐藏变更。历史版本不会随后续发布切换基准。旧数据由迁移 `0024` 按现存发布时间和版本号回填；此前重新发布已覆盖的发布时间无法完整还原，因此旧记录的回填仅使用仍留存的时间信息。
+
+版本列表额外返回 `approval_role_name`、`submitter_name`、`approver_name`、`submitted_at`、`approved_at`、`completed_at` 和 `failure_reason`。用户名称优先显示名、其次用户名；角色或用户已不存在时名称为 null。`submitted_at` 为 OpsPilot 候选创建时间，外部导入为空；`completed_at` 优先取最近发布任务结束时间，无任务时回退正式版本发布时间或驳回时间。`failure_reason` 取最近发布失败原因或驳回原因，最近任务正在运行或成功时为空。此接口仍只需 `config:read`，不要求用户或角色管理权限。
+审批通过仅表示发布任务已入队；Worker 写入并回读一致后版本才变为正式版本。远端暂不可用时首次执行后最多自动重试 3 次（间隔 2、4、8 秒）；写入结果不确定时只重试回读，不重复写入，普通人工重试也继承这一限制。明确确认漂移覆盖时，`confirmed_snapshot_id` 必须是当前文件最近一次同步的漂移/远端缺失快照，任务将它持久化为本次写入基线；Worker 执行时再次核对文件仍处于该漂移状态，远端正文在确认后再次变化也停止写入。此确认是新的人工发布操作，不沿用旧任务的不确定写入标记。远端漂移或确定性拒绝不自动重试，最终失败的已批准版本可人工重试。过期任务或丧失配置文件操作锁的 Worker 不得继续写入。
+工作台 `/dashboard/summary` 的 `todo_total` 为工单审批与配置审批待办之和；无工单审批权限的用户只计算其配置待办。前端“待办审批”分为工单审批与配置审批页签；配置文件详情只展示版本记录，审批统一在待办页处理。

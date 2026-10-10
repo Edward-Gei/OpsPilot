@@ -12,6 +12,7 @@ from app.core import redis as redis_mod
 from app.core.response import Errors
 from app.core.security import hash_password
 from app.models.auth import Permission, Role, RolePermission, User, UserRole
+from app.models.application_config import ConfigFile
 
 _PERM_CACHE_TTL = 3600  # 权限缓存 1 小时，变更时主动失效
 
@@ -284,6 +285,11 @@ async def delete_role(session: AsyncSession, role_id: int) -> Role:
     ).scalar_one_or_none()
     if member is not None:
         raise Errors.rejected("角色下仍有用户，请先移除后再删除")
+    config_ref = (
+        await session.execute(select(ConfigFile.id).where(ConfigFile.approval_role_id == role_id).limit(1))
+    ).scalar_one_or_none()
+    if config_ref is not None:
+        raise Errors.rejected("角色仍被配置文件用作审批角色，无法删除")
     for rp in (
         await session.execute(select(RolePermission).where(RolePermission.role_id == role_id))
     ).scalars():
