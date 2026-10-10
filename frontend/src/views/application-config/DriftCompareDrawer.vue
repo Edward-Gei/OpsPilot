@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { ArrowLeftOutlined, ArrowRightOutlined } from '@ant-design/icons-vue'
 import * as api from '@/api/applicationConfig'
-import ConfigContentEditor from './ConfigContentEditor.vue'
+import ConfigDiffEditor from './ConfigDiffEditor.vue'
 
 const props = defineProps<{ open: boolean; fileId: number; canWrite: boolean }>()
 const emit = defineEmits<{ 'update:open': [value: boolean]; resolved: [] }>()
@@ -13,6 +13,7 @@ const versions = ref<api.ConfigVersion[]>([])
 const selectedVersionId = ref<number | undefined>()
 const left = ref('')
 const right = ref('')
+const changeCount = ref(0)
 const action = ref<'import' | 'publish' | null>(null)
 const loading = ref(false)
 const task = ref<api.ConfigTask | null>(null)
@@ -93,30 +94,31 @@ async function confirm() {
           {{ drift.drift_status === 'remote_missing' ? '远端缺失' : drift.drift_status === 'drifted' ? '存在漂移' : '已一致' }}
         </a-tag>
       </div>
-      <div class="drift-compare">
-        <section class="drift-pane">
+      <div class="drift-legend"><span>共 {{ changeCount }} 处可见差异</span>
+        <span>− 左侧：删除 / 修改前</span><span>+ 右侧：新增 / 修改后</span></div>
+      <ConfigDiffEditor :left="left" :right="right" :format="file.content_format"
+        left-label="OpsPilot 版本内容" right-label="外部配置内容" @change-count="changeCount = $event">
+        <template #left-header>
           <div class="drift-pane-head"><b>OpsPilot 版本</b>
             <a-select v-if="versions.length" :value="selectedVersionId" size="small" class="version-select"
               :options="versions.map((item) => ({ label: `v${item.version_no} (${item.status})`, value: item.id }))"
               @change="chooseVersion" />
           </div>
-          <ConfigContentEditor :model-value="left" :format="file.content_format" readonly :masked="true" />
-        </section>
-        <div class="drift-transfer" role="group" aria-label="漂移处理方式">
-          <a-tooltip title="导入外部内容为新版本">
-            <a-button :disabled="!canImport || loading" aria-label="导入外部内容为新版本" @click="previewImport"><ArrowLeftOutlined /></a-button>
-          </a-tooltip>
-          <a-tooltip title="重新发布 OpsPilot 版本">
-            <a-button :disabled="!canPublish || loading" aria-label="重新发布 OpsPilot 版本" @click="previewPublish"><ArrowRightOutlined /></a-button>
-          </a-tooltip>
-        </div>
-        <section class="drift-pane">
-          <div class="drift-pane-head"><b>外部配置</b><span v-if="!drift.external_exists">远端缺失</span></div>
-          <ConfigContentEditor v-if="drift.external_exists || action === 'publish'" :model-value="right"
-            :format="file.content_format" readonly :masked="true" />
-          <a-empty v-else description="远端配置不存在" class="remote-empty" />
-        </section>
-      </div>
+        </template>
+        <template #right-header>
+          <div class="drift-pane-head"><b>外部配置</b><span v-if="!drift.external_exists && action !== 'publish'">远端缺失</span></div>
+        </template>
+        <template #controls>
+          <div class="drift-transfer" role="group" aria-label="漂移处理方式">
+            <a-tooltip title="导入外部内容为新版本">
+              <a-button :disabled="!canImport || loading" aria-label="导入外部内容为新版本" @click="previewImport"><ArrowLeftOutlined /></a-button>
+            </a-tooltip>
+            <a-tooltip title="重新发布 OpsPilot 版本">
+              <a-button :disabled="!canPublish || loading" aria-label="重新发布 OpsPilot 版本" @click="previewPublish"><ArrowRightOutlined /></a-button>
+            </a-tooltip>
+          </div>
+        </template>
+      </ConfigDiffEditor>
       <a-alert v-if="task && task.status !== 'success'" class="drift-task" type="warning" show-icon
         :message="task.status === 'queued' || task.status === 'running' ? '正在发布并回读外部配置' : task.last_error || '发布失败'" />
     </div>
@@ -130,19 +132,14 @@ async function confirm() {
 <style scoped>
 .drift-body { min-width: 0; }
 .drift-context { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-.drift-compare { display: grid; grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr); gap: 12px; align-items: stretch; }
-.drift-pane { min-width: 0; }
-.drift-pane-head { height: 38px; display: flex; align-items: flex-start; gap: 12px; justify-content: space-between; }
+.drift-legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 12px; color: var(--text-2); }
+.drift-pane-head { min-height: 24px; display: flex; align-items: center; gap: 12px; justify-content: space-between; }
 .version-select { width: min(220px, 65%); }
-.drift-pane :deep(textarea) { height: min(60vh, 600px); min-height: 350px; resize: none; overflow: auto; }
-.drift-pane :deep(.code-editor .cm-editor) { height: min(60vh, 600px); min-height: 350px; }
 .drift-transfer { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
-.remote-empty { height: min(60vh, 600px); min-height: 350px; display: flex; flex-direction: column; justify-content: center; border: 1px solid var(--border-color, #d9d9d9); }
 .drift-task { margin-top: 14px; }
 @media (max-width: 740px) {
-  .drift-compare { grid-template-columns: minmax(0, 1fr); }
-  .drift-transfer { flex-direction: row; min-height: 44px; }
-  .drift-pane :deep(textarea), .remote-empty { height: 230px; min-height: 230px; }
-  .drift-pane :deep(.code-editor .cm-editor) { height: 230px; min-height: 230px; }
+  .drift-pane-head { flex-wrap: wrap; }
+  .version-select { width: 100%; }
+  .drift-transfer { flex-direction: row; }
 }
 </style>

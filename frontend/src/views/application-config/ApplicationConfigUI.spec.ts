@@ -291,6 +291,56 @@ describe('版本差异与审批预览', () => {
 })
 
 describe('漂移确认', () => {
+  it('注释漂移高亮双方差异，选择导入后按覆盖预览重新比较', async () => {
+    api.getDriftView.mockResolvedValue({ ...drift,
+      baseline_content: '# test1\nkey: same\n', external_content: '# test3\nkey: same\n' })
+    const wrapper = mount(DriftCompareDrawer, { props: { open: true, fileId: 2, canWrite: true }, attachTo: document.body })
+    await flushPromises()
+    const modal = document.querySelector('.ant-modal-body')!
+    expect(modal.querySelector('.cm-merge-a .cm-changedText')?.textContent).toContain('1')
+    expect(modal.querySelector('.cm-merge-b .cm-changedText')?.textContent).toContain('3')
+    expect(modal.querySelector('[contenteditable="true"]')).toBeNull()
+    ;(modal.querySelector('button[aria-label="导入外部内容为新版本"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(modal.querySelectorAll('.cm-changedLine')).toHaveLength(0)
+    expect(modal.querySelector('.cm-merge-a .cm-content')?.textContent).toContain('# test3')
+    expect(modal.querySelector('.cm-merge-b .cm-content')?.textContent).toContain('# test3')
+    expect(api.importDrift).not.toHaveBeenCalled()
+    expect(api.publishVersion).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('切换版本重新高亮，重新发布方向只预览所选版本', async () => {
+    const wrapper = mount(DriftCompareDrawer, { props: { open: true, fileId: 2, canWrite: true }, attachTo: document.body })
+    await flushPromises()
+    api.getDriftView.mockResolvedValue({ ...drift, baseline_version_id: 4, baseline_content: 'key: previous\n' })
+    wrapper.findComponent({ name: 'ASelect' }).vm.$emit('change', 4)
+    await flushPromises()
+    const modal = document.querySelector('.ant-modal-body')!
+    expect(modal.querySelector('.cm-merge-a .cm-content')?.textContent).toContain('key: previous')
+    expect(modal.querySelectorAll('.cm-changedLine').length).toBeGreaterThan(0)
+    ;(modal.querySelector('button[aria-label="重新发布 OpsPilot 版本"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(modal.querySelectorAll('.cm-changedLine')).toHaveLength(0)
+    expect(modal.querySelector('.cm-merge-b .cm-content')?.textContent).toContain('key: previous')
+    expect(api.publishVersion).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('远端缺失时显示说明并高亮本地内容，保留重新发布预览', async () => {
+    api.getDriftView.mockResolvedValue({ ...drift, drift_status: 'remote_missing', external_exists: false, external_content: null })
+    const wrapper = mount(DriftCompareDrawer, { props: { open: true, fileId: 2, canWrite: true }, attachTo: document.body })
+    await flushPromises()
+    const modal = document.querySelector('.ant-modal-body')!
+    expect(modal.textContent).toContain('远端缺失')
+    expect(modal.querySelectorAll('.cm-merge-a .cm-changedLine').length).toBeGreaterThan(0)
+    expect((modal.querySelector('button[aria-label="导入外部内容为新版本"]') as HTMLButtonElement).disabled).toBe(true)
+    ;(modal.querySelector('button[aria-label="重新发布 OpsPilot 版本"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(modal.querySelector('.cm-merge-b .cm-content')?.textContent).toContain('key: internal')
+    wrapper.unmount()
+  })
+
   it('导入成功后关闭弹窗并通知刷新', async () => {
     api.importDrift.mockResolvedValue({})
     const wrapper = mount(DriftCompareDrawer, { props: { open: true, fileId: 2, canWrite: true }, attachTo: document.body })
