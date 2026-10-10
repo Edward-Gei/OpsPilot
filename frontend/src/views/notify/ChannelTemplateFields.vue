@@ -210,14 +210,16 @@ function formatJson() {
 </template>
 
 <style scoped>
-.tpl-fields { margin-top: 4px; padding-top: 12px; border-top: 1px dashed var(--border-color, #e5e7eb); }
+.tpl-fields { margin-top: 4px; padding: 16px; border: 1px solid color-mix(in srgb,var(--block-accent) 12%,var(--border)); border-radius: 10px; background: color-mix(in srgb,var(--block-accent) 3%,var(--bg-card)); }
 .tpl-head { font-weight: 600; margin-bottom: 14px; }
+.tpl-head::before { content: ''; display: inline-block; width: 3px; height: 12px; margin-right: 7px; border-radius: 2px; background: var(--block-accent); vertical-align: -1px; }
 .tpl-head span, .tpl-editor-head span, .tpl-default-head span { font-weight: 400; font-size: 12px; color: var(--text-3); margin-left: 6px; }
-.tpl-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 20px; }
-.tpl-events { border-right: 1px solid var(--border); padding-right: 14px; }
+.tpl-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 16px; }
+.tpl-events { border-right: 1px solid color-mix(in srgb,var(--block-accent) 12%,var(--border)); padding-right: 14px; }
 .tpl-section-label { color: var(--text-3); font-size: 12px; font-weight: 600; margin-bottom: 8px; }
 .tpl-event { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 38px; padding: 0 9px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; text-align: left; }
-.tpl-event:hover, .tpl-event.active { color: var(--primary); background: var(--bg-hover); border-color: var(--border); }
+.tpl-event:hover, .tpl-event.active { color: var(--text-1); background: color-mix(in srgb,var(--block-accent) 9%,var(--bg-card)); border-color: color-mix(in srgb,var(--block-accent) 20%,var(--border)); }
+.tpl-event.active { box-shadow: inset 3px 0 var(--block-accent); }
 .tpl-event small { color: var(--text-3); white-space: nowrap; font-size: 11px; }
 .tpl-editor-area { min-width: 0; }
 .tpl-editor-head, .tpl-default-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
@@ -232,7 +234,8 @@ function formatJson() {
 .tpl-var { cursor: pointer; user-select: none; }
 .tpl-var:hover { color: var(--primary); border-color: var(--primary); }
 .tpl-var small { color: var(--text-3); }
-.tpl-default { border-top: 1px dashed var(--border); padding-top: 16px; }
+.tpl-default { border-top: 1px dashed color-mix(in srgb,var(--block-accent) 16%,var(--border)); padding-top: 14px; }
 .tpl-default-text { min-height: 180px; margin: 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-hover); color: var(--text-2); white-space: pre-wrap; font: 12px/1.6 Consolas, monospace; }
 @media (max-width: 760px) { .tpl-layout { grid-template-columns: 1fr; } .tpl-events { border-right: 0; border-bottom: 1px solid var(--border); padding: 0 0 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; } .tpl-section-label { grid-column: 1 / -1; } }
+@media (max-width: 900px) { .tpl-editor-head,.tpl-default-head { flex-wrap: wrap; } .tpl-head span { display: block; margin: 5px 0 0; } }
 </style>

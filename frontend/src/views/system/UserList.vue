@@ -324,7 +324,7 @@ onMounted(() => {
         ]"
         @change="onSearch"
       />
-      <template v-if="canWrite">
+      <div v-if="canWrite" class="toolbar-actions">
         <a-popconfirm
           :title="`确认禁用选中的 ${selectedKeys.length} 个用户？`"
           :disabled="!selectedKeys.length"
@@ -335,7 +335,7 @@ onMounted(() => {
           </a-button>
         </a-popconfirm>
         <a-button type="primary" @click="openCreate"><PlusOutlined />新建用户</a-button>
-      </template>
+      </div>
     </div>
 
     <!-- 列表：列间分割线 + 选择框/操作列固定 + 其余列可拖拽调宽 -->
@@ -482,6 +482,12 @@ onMounted(() => {
   display: flex;
   gap: 10px;
   margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.toolbar-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
 }
 .kw {
   width: 260px;

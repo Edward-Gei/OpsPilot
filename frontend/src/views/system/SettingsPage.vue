@@ -153,7 +153,7 @@ onMounted(loadConfigs)
 
 <template>
   <a-spin :spinning="loading">
-    <div>
+    <div class="settings-page">
       <!-- 彩色横幅：铺满内容区（不受下方配置卡片限宽约束），带实时状态统计 -->
       <div class="op-hero op-hero--teal">
         <div class="op-hero-icon"><SettingOutlined /></div>
@@ -170,9 +170,9 @@ onMounted(loadConfigs)
 
       <div class="settings">
       <!-- 安全策略 -->
-      <a-card class="block block--wide collapsible-block">
+      <a-card class="block block--wide collapsible-block security-block">
         <div class="block-head" :class="{ 'is-collapsed': collapsedSettings.security }" @click="toggleSetting('security')">
-          <div class="op-icon-grad" style="background: var(--grad-blue)"><SafetyCertificateOutlined /></div>
+          <div class="op-icon-grad block-icon"><SafetyCertificateOutlined /></div>
           <div class="block-title">
             <b>安全策略</b>
             <span>MFA 多因子认证、登录令牌有效期与密码策略</span>
@@ -198,7 +198,7 @@ onMounted(loadConfigs)
 
         <div class="field">
           <div class="field-label"><ClockCircleOutlined /> 登录令牌有效期</div>
-          <a-space :size="16" wrap>
+          <a-space :size="16" wrap :style="{ marginBottom: 0 }">
             <span class="inline-item">
               Access Token
               <a-input-number
@@ -225,7 +225,7 @@ onMounted(loadConfigs)
 
         <div class="field">
           <div class="field-label"><KeyOutlined /> 密码策略</div>
-          <a-space :size="16" wrap>
+          <a-space :size="16" wrap :style="{ marginBottom: 0 }">
             <span class="inline-item">
               最小长度
               <a-input-number v-model:value="pwdPolicy.min_length" :min="6" :max="32" />
@@ -250,14 +250,14 @@ onMounted(loadConfigs)
       </a-card>
 
       <!-- LDAP 认证源 -->
-      <a-card class="block collapsible-block">
+      <a-card class="block collapsible-block ldap-block">
         <div class="block-head" :class="{ 'is-collapsed': collapsedSettings.ldap }" @click="toggleSetting('ldap')">
-          <div class="op-icon-grad" style="background: var(--grad-purple)"><ApiOutlined /></div>
+          <div class="op-icon-grad block-icon"><ApiOutlined /></div>
           <div class="block-title">
             <b>LDAP 认证</b>
             <span>企业目录账号密码登录，首次登录自动创建用户</span>
           </div>
-          <a-switch v-model:checked="ldapEnabled" class="head-switch" @click.stop />
+          <a-switch v-model:checked="ldapEnabled" class="head-switch" @click="(_checked: boolean, event: MouseEvent) => event.stopPropagation()" />
           <a-button type="primary" :loading="saving === 'ldap'" @click.stop="onSaveLdap">保存</a-button>
           <DownOutlined class="collapse-icon" />
         </div>
@@ -294,19 +294,22 @@ onMounted(loadConfigs)
             </a-form-item>
           </div>
         </template>
-        <div v-else class="disabled-tip">已停用：登录时不再尝试 LDAP 认证源</div>
+        <div v-else class="disabled-tip">
+          <div class="empty-icon"><ApiOutlined /></div>
+          <div><b>LDAP 已停用</b><span>登录时不再尝试 LDAP 认证源</span><small>打开上方开关可配置企业目录登录</small></div>
+        </div>
         </div>
       </a-card>
 
       <!-- OIDC 认证源 -->
-      <a-card class="block collapsible-block">
+      <a-card class="block collapsible-block oidc-block">
         <div class="block-head" :class="{ 'is-collapsed': collapsedSettings.oidc }" @click="toggleSetting('oidc')">
-          <div class="op-icon-grad" style="background: var(--grad-orange)"><KeyOutlined /></div>
+          <div class="op-icon-grad block-icon"><KeyOutlined /></div>
           <div class="block-title">
             <b>OIDC / OAuth2 认证</b>
             <span>授权码模式单点登录，登录页显示 SSO 入口</span>
           </div>
-          <a-switch v-model:checked="oidcEnabled" class="head-switch" @click.stop />
+          <a-switch v-model:checked="oidcEnabled" class="head-switch" @click="(_checked: boolean, event: MouseEvent) => event.stopPropagation()" />
           <a-button type="primary" :loading="saving === 'oidc'" @click.stop="onSaveOidc">保存</a-button>
           <DownOutlined class="collapse-icon" />
         </div>
@@ -355,14 +358,17 @@ onMounted(loadConfigs)
             </a-form-item>
           </div>
         </template>
-        <div v-else class="disabled-tip">已停用：登录页不显示 SSO 入口</div>
+        <div v-else class="disabled-tip">
+          <div class="empty-icon"><KeyOutlined /></div>
+          <div><b>OIDC 已停用</b><span>登录页不显示 SSO 入口</span><small>打开上方开关可配置单点登录</small></div>
+        </div>
         </div>
       </a-card>
 
       <!-- 作业主机配置：脚本统一在作业主机上执行，增删改/连通性测试内嵌本页 -->
-      <a-card class="block block--wide collapsible-block">
+      <a-card class="block block--wide collapsible-block hosts-block">
         <div class="block-head" :class="{ 'is-collapsed': collapsedSettings.hosts }" @click="toggleSetting('hosts')">
-          <div class="op-icon-grad" style="background: var(--grad-green)"><CloudServerOutlined /></div>
+          <div class="op-icon-grad block-icon"><CloudServerOutlined /></div>
           <div class="block-title">
             <b>作业主机</b>
             <span>模板脚本统一在作业主机上执行（登录密文加密存储，任何接口不回显）</span>
@@ -381,14 +387,29 @@ onMounted(loadConfigs)
 <style scoped>
 .settings {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 16px;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 14px;
   width: 100%;
   align-items: start;
 }
 .block {
+  --block-accent: #4b7bf2;
   border-radius: 14px;
   min-width: 0;
+  background: linear-gradient(145deg,color-mix(in srgb,var(--block-accent) 6%,var(--bg-card)),var(--bg-card) 65%);
+  border-color: color-mix(in srgb,var(--block-accent) 18%,var(--border));
+  box-shadow: 0 5px 18px color-mix(in srgb,var(--block-accent) 5%,transparent);
+}
+.ldap-block { --block-accent: #9b80e7; }
+.oidc-block { --block-accent: #efb24e; }
+.hosts-block { --block-accent: #43b99c; }
+.block :deep(.ant-card-body) { padding: 20px; }
+.block-icon {
+  flex-shrink: 0;
+  color: var(--block-accent);
+  background: color-mix(in srgb,var(--block-accent) 13%,transparent);
+  border: 1px solid color-mix(in srgb,var(--block-accent) 16%,transparent);
+  box-shadow: none;
 }
 .collapsible-block .block-head {
   cursor: pointer;
@@ -408,13 +429,13 @@ onMounted(loadConfigs)
   min-width: 0;
 }
 .block--wide {
-  grid-column: auto;
+  grid-column: 1 / -1;
 }
 .block-head {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 .block-title {
   flex: 1;
@@ -424,6 +445,16 @@ onMounted(loadConfigs)
   font-size: 15px;
   color: var(--text-1);
   display: block;
+}
+.block-title b::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 12px;
+  margin-right: 7px;
+  border-radius: 2px;
+  background: var(--block-accent);
+  vertical-align: -1px;
 }
 .block-title span {
   font-size: 12px;
@@ -435,9 +466,13 @@ onMounted(loadConfigs)
   margin-right: 4px;
 }
 .field {
-  padding: 14px 0;
-  border-top: 1px solid var(--border);
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  border: 1px solid color-mix(in srgb,var(--block-accent) 11%,var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb,var(--block-accent) 3%,var(--bg-card));
 }
+.field:last-child { margin-bottom: 0; }
 .field-label {
   font-size: 13px;
   font-weight: 600;
@@ -447,6 +482,7 @@ onMounted(loadConfigs)
   align-items: center;
   gap: 6px;
 }
+.field-label>.anticon { color: var(--block-accent); }
 .field-tip {
   font-size: 12px;
   color: var(--text-3);
@@ -461,20 +497,57 @@ onMounted(loadConfigs)
 }
 .grid2 {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2,minmax(0,1fr));
   column-gap: 16px;
 }
 .grid2 :deep(.ant-form-item) {
   margin-bottom: 14px;
+  min-width: 0;
 }
+.grid2 :deep(.ant-form-item-label>label) { white-space: normal; height: auto; }
 .disabled-tip {
+  display: flex;
+  align-items: center;
+  gap: 18px;
   font-size: 13px;
-  color: var(--text-3);
-  padding: 6px 0;
+  color: var(--text-2);
+  padding: 22px;
+  min-height: 128px;
+  border-radius: 10px;
+  background: radial-gradient(ellipse at left,color-mix(in srgb,var(--block-accent) 7%,var(--bg-card)),var(--bg-card));
 }
-@media (max-width: 960px) {
+.disabled-tip b { display: block; font-size: 14px; color: var(--text-1); }
+.disabled-tip span,.disabled-tip small { display: block; margin-top: 5px; font-size: 12px; }
+.disabled-tip small { color: var(--text-3); }
+.empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 54px;
+  height: 54px;
+  border: 1px solid color-mix(in srgb,var(--block-accent) 18%,transparent);
+  border-radius: 50%;
+  color: var(--block-accent);
+  background: color-mix(in srgb,var(--block-accent) 9%,var(--bg-card));
+  box-shadow: 0 0 0 7px color-mix(in srgb,var(--block-accent) 3%,transparent);
+  font-size: 24px;
+}
+@media (min-width: 1450px) {
+  .security-block .block-body { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
+  .security-block .field { margin-bottom: 0; }
+}
+@media (max-width: 1280px) {
   .settings {
     grid-template-columns: 1fr;
   }
+}
+@media (max-width: 900px) {
+  .settings-page .op-hero { flex-wrap: wrap; padding: 18px; }
+  .settings-page .op-hero-extra { flex-wrap: wrap; }
+  .block-head { flex-wrap: wrap; gap: 10px; }
+  .block-title { min-width: 160px; }
+  .grid2 { grid-template-columns: 1fr; }
+  .disabled-tip { padding: 20px 16px; }
 }
 </style>

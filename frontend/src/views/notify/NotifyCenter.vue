@@ -7,6 +7,8 @@ import {
   ApiOutlined,
   BellOutlined,
   DownOutlined,
+  HistoryOutlined,
+  InboxOutlined,
   MailOutlined,
   SendOutlined,
   WindowsOutlined,
@@ -265,7 +267,7 @@ onMounted(async () => {
 
 <template>
   <a-spin :spinning="loading">
-    <div>
+    <div class="notify-page">
       <!-- 彩色横幅：与 M1 系统设置同款式（op-hero），随渠道/映射状态实时联动 -->
       <div class="op-hero op-hero--amber">
         <div class="op-hero-icon"><BellOutlined /></div>
@@ -280,19 +282,19 @@ onMounted(async () => {
         </div>
       </div>
 
-      <a-tabs v-model:activeKey="activeTab">
+      <a-tabs v-model:activeKey="activeTab" class="notify-tabs">
         <!-- ===== Tab 1 渠道配置 ===== -->
         <a-tab-pane key="channels" tab="渠道配置">
           <div class="blocks">
             <!-- Email -->
-            <a-card class="block collapsible-block">
+            <a-card class="block collapsible-block email-block">
               <div class="block-head" :class="{ 'is-collapsed': collapsedChannels.email }" @click="toggleChannel('email')">
-                <div class="op-icon-grad" style="background: var(--grad-blue)"><MailOutlined /></div>
+                <div class="op-icon-grad block-icon"><MailOutlined /></div>
                 <div class="block-title">
                   <b>邮件 Email</b>
                   <span>SMTP 发送；收件人取工单相关用户的邮箱（未配置邮箱的用户跳过）</span>
                 </div>
-                <a-switch v-model:checked="channelForms.email.enabled" class="head-switch" :disabled="!canWrite" @click.stop />
+                <a-switch v-model:checked="channelForms.email.enabled" class="head-switch" :disabled="!canWrite" @click="(_checked: boolean, event: MouseEvent) => event.stopPropagation()" />
                 <a-button
                   v-if="canTest"
                   :loading="testingChannel === 'email'"
@@ -331,7 +333,7 @@ onMounted(async () => {
                     <a-input v-model:value="channelForms.email.config.from_addr" placeholder="留空使用账号" />
                   </a-form-item>
                   <a-form-item label="加密方式">
-                    <a-space :size="16">
+                    <a-space :size="16" wrap :style="{ marginBottom: 0 }">
                       <span class="inline-item">
                         SSL/TLS（465）
                         <a-switch v-model:checked="channelForms.email.config.use_tls" />
@@ -365,19 +367,22 @@ onMounted(async () => {
                   show-icon
                 />
               </template>
-              <div v-else class="disabled-tip">已停用：邮件事件将记为发送失败（渠道未启用）</div>
+              <div v-else class="disabled-tip">
+                <div class="empty-icon"><MailOutlined /></div>
+                <div><b>邮件渠道已停用</b><span>邮件事件将记为发送失败（渠道未启用）</span><small>{{ canWrite ? '打开上方开关，配置并保存后即可发送邮件通知' : '启用邮件渠道后，可发送邮件通知' }}</small></div>
+              </div>
               </div>
             </a-card>
 
             <!-- Webhook -->
-            <a-card class="block collapsible-block">
+            <a-card class="block collapsible-block webhook-block">
               <div class="block-head" :class="{ 'is-collapsed': collapsedChannels.webhook }" @click="toggleChannel('webhook')">
-                <div class="op-icon-grad" style="background: var(--grad-purple)"><ApiOutlined /></div>
+                <div class="op-icon-grad block-icon"><ApiOutlined /></div>
                 <div class="block-title">
                   <b>Webhook</b>
                   <span>JSON POST 到全局地址；配置签名密钥后附 HMAC-SHA256 签名头（X-Ops-Signature）</span>
                 </div>
-                <a-switch v-model:checked="channelForms.webhook.enabled" class="head-switch" :disabled="!canWrite" @click.stop />
+                <a-switch v-model:checked="channelForms.webhook.enabled" class="head-switch" :disabled="!canWrite" @click="(_checked: boolean, event: MouseEvent) => event.stopPropagation()" />
                 <a-button
                   v-if="canTest"
                   :loading="testingChannel === 'webhook'"
@@ -420,19 +425,22 @@ onMounted(async () => {
                   show-icon
                 />
               </template>
-              <div v-else class="disabled-tip">已停用：Webhook 事件将记为发送失败（渠道未启用）</div>
+              <div v-else class="disabled-tip">
+                <div class="empty-icon"><ApiOutlined /></div>
+                <div><b>Webhook 渠道已停用</b><span>Webhook 事件将记为发送失败（渠道未启用）</span><small>{{ canWrite ? '打开上方开关，配置并保存后即可推送通知' : '启用 Webhook 渠道后，可推送通知' }}</small></div>
+              </div>
               </div>
             </a-card>
 
             <!-- Teams -->
-            <a-card class="block collapsible-block">
+            <a-card class="block collapsible-block teams-block">
               <div class="block-head" :class="{ 'is-collapsed': collapsedChannels.teams }" @click="toggleChannel('teams')">
-                <div class="op-icon-grad" style="background: var(--grad-green)"><WindowsOutlined /></div>
+                <div class="op-icon-grad block-icon"><WindowsOutlined /></div>
                 <div class="block-title">
                   <b>Microsoft Teams</b>
                   <span>MessageCard 卡片推送到频道 Incoming Webhook</span>
                 </div>
-                <a-switch v-model:checked="channelForms.teams.enabled" class="head-switch" :disabled="!canWrite" @click.stop />
+                <a-switch v-model:checked="channelForms.teams.enabled" class="head-switch" :disabled="!canWrite" @click="(_checked: boolean, event: MouseEvent) => event.stopPropagation()" />
                 <a-button
                   v-if="canTest"
                   :loading="testingChannel === 'teams'"
@@ -472,14 +480,17 @@ onMounted(async () => {
                   show-icon
                 />
               </template>
-              <div v-else class="disabled-tip">已停用：Teams 事件将记为发送失败（渠道未启用）</div>
+              <div v-else class="disabled-tip">
+                <div class="empty-icon"><WindowsOutlined /></div>
+                <div><b>Teams 渠道已停用</b><span>Teams 事件将记为发送失败（渠道未启用）</span><small>{{ canWrite ? '打开上方开关，配置并保存后即可推送频道卡片' : '启用 Teams 渠道后，可推送频道卡片' }}</small></div>
+              </div>
               </div>
             </a-card>
 
             <!-- 预留渠道占位 -->
-            <a-card class="block collapsible-block">
+            <a-card class="block collapsible-block more-block">
               <div class="block-head" :class="{ 'is-collapsed': collapsedChannels.more }" @click="toggleChannel('more')">
-                <div class="op-icon-grad" style="background: var(--grad-orange)"><SendOutlined /></div>
+                <div class="op-icon-grad block-icon"><SendOutlined /></div>
                 <div class="block-title">
                   <b>更多渠道</b>
                   <span>接口已预留，后续版本开放配置</span>
@@ -487,9 +498,14 @@ onMounted(async () => {
                 <DownOutlined class="collapse-icon" />
               </div>
               <div v-show="!collapsedChannels.more" class="block-body">
-              <a-space :size="8" wrap>
-                <a-tag v-for="c in reservedChannels" :key="c">{{ channelText[c] || c }}（预留）</a-tag>
-              </a-space>
+              <div class="disabled-tip">
+                <div class="empty-icon"><SendOutlined /></div>
+                <div><b>更多通知渠道</b><span>后续版本开放配置</span>
+                  <a-space :size="6" wrap :style="{ marginBottom: 0 }" class="reserved-channels">
+                    <a-tag v-for="c in reservedChannels" :key="c">{{ channelText[c] || c }}（预留）</a-tag>
+                  </a-space>
+                </div>
+              </div>
               </div>
             </a-card>
           </div>
@@ -497,9 +513,9 @@ onMounted(async () => {
 
         <!-- ===== Tab 2 事件映射 ===== -->
         <a-tab-pane key="events" tab="事件映射">
-          <a-card class="block">
+          <a-card class="block mapping-block">
             <div class="block-head">
-              <div class="op-icon-grad" style="background: var(--grad-purple)"><BellOutlined /></div>
+              <div class="op-icon-grad block-icon"><BellOutlined /></div>
               <div class="block-title">
                 <b>事件-渠道映射</b>
                 <span>勾选每类事件经哪些渠道发送；保存为全量覆盖，未勾选即不发送</span>
@@ -529,7 +545,11 @@ onMounted(async () => {
 
         <!-- ===== Tab 3 发送记录 ===== -->
         <a-tab-pane key="records" tab="发送记录">
-          <a-card class="block">
+          <a-card class="block records-block">
+            <div class="block-head">
+              <div class="op-icon-grad block-icon"><HistoryOutlined /></div>
+              <div class="block-title"><b>发送记录</b><span>查看通知发送结果、失败原因与重试进度</span></div>
+            </div>
             <!-- 筛选条 -->
             <div class="filter-bar">
               <a-select
@@ -578,6 +598,7 @@ onMounted(async () => {
               :loading="recordLoading"
               row-key="id"
               size="middle"
+              :scroll="{ x: 1100 }"
               :pagination="{
                 current: recordQuery.page,
                 pageSize: recordQuery.page_size,
@@ -588,6 +609,13 @@ onMounted(async () => {
                 onChange: onRecordPageChange,
               }"
             >
+              <template #emptyText>
+                <div class="records-empty">
+                  <div class="empty-icon"><InboxOutlined /></div>
+                  <b>暂无发送记录</b>
+                  <span>{{ recordQuery.event || recordQuery.channel || recordQuery.status || recordQuery.range?.length ? '没有匹配的发送记录，请调整筛选条件' : '工单审批或执行触发通知后，可在这里查看发送结果' }}</span>
+                </div>
+              </template>
               <template #bodyCell="{ column, record }">
                 <template v-if="column.dataIndex === 'event'">
                   <a-tag>{{ eventText[record.event] || record.event }}</a-tag>
@@ -628,18 +656,42 @@ onMounted(async () => {
 .blocks {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 16px;
+  gap: 14px;
   width: 100%;
+  align-items: start;
 }
 .block {
+  --block-accent: #4b7bf2;
   border-radius: 14px;
   min-width: 0;
+  background: linear-gradient(145deg,color-mix(in srgb,var(--block-accent) 6%,var(--bg-card)),var(--bg-card) 65%);
+  border-color: color-mix(in srgb,var(--block-accent) 18%,var(--border));
+  box-shadow: 0 5px 18px color-mix(in srgb,var(--block-accent) 5%,transparent);
 }
+.webhook-block,.mapping-block { --block-accent: #9b80e7; }
+.teams-block { --block-accent: #43b99c; }
+.more-block,.records-block { --block-accent: #efb24e; }
+.block :deep(.ant-card-body) { padding: 20px; }
+.block-icon {
+  flex-shrink: 0;
+  color: var(--block-accent);
+  background: color-mix(in srgb,var(--block-accent) 13%,transparent);
+  border: 1px solid color-mix(in srgb,var(--block-accent) 16%,transparent);
+  box-shadow: none;
+}
+.notify-tabs :deep(.ant-tabs-nav) {
+  margin-bottom: 14px;
+  padding: 0 18px;
+  border: 1px solid color-mix(in srgb,#efb24e 14%,var(--border));
+  border-radius: 12px;
+  background: linear-gradient(100deg,color-mix(in srgb,#efb24e 5%,var(--bg-card)),var(--bg-card));
+}
+.notify-tabs :deep(.ant-tabs-nav::before) { border-bottom: 0; }
 .block-head {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 .collapsible-block .block-head {
   cursor: pointer;
@@ -667,6 +719,16 @@ onMounted(async () => {
   color: var(--text-1);
   display: block;
 }
+.block-title b::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 12px;
+  margin-right: 7px;
+  border-radius: 2px;
+  background: var(--block-accent);
+  vertical-align: -1px;
+}
 .block-title span {
   font-size: 12px;
   color: var(--text-3);
@@ -678,12 +740,14 @@ onMounted(async () => {
 }
 .grid2 {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2,minmax(0,1fr));
   column-gap: 16px;
 }
 .grid2 :deep(.ant-form-item) {
   margin-bottom: 14px;
+  min-width: 0;
 }
+.grid2 :deep(.ant-form-item-label>label) { white-space: normal; height: auto; }
 .inline-item {
   font-size: 13px;
   color: var(--text-2);
@@ -697,14 +761,42 @@ onMounted(async () => {
   margin-top: 12px;
 }
 .disabled-tip {
-  font-size: 13px;
-  color: var(--text-3);
-  padding: 6px 0;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 128px;
+  padding: 20px;
+  border-radius: 10px;
+  background: radial-gradient(ellipse at left,color-mix(in srgb,var(--block-accent) 7%,var(--bg-card)),var(--bg-card));
+}
+.disabled-tip b { display: block; font-size: 14px; color: var(--text-1); }
+.disabled-tip b+span,.disabled-tip small { display: block; margin-top: 5px; font-size: 12px; color: var(--text-2); }
+.disabled-tip small { color: var(--text-3); }
+.empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 54px;
+  height: 54px;
+  border: 1px solid color-mix(in srgb,var(--block-accent) 18%,transparent);
+  border-radius: 50%;
+  color: var(--block-accent);
+  background: color-mix(in srgb,var(--block-accent) 9%,var(--bg-card));
+  box-shadow: 0 0 0 7px color-mix(in srgb,var(--block-accent) 3%,transparent);
+  font-size: 24px;
+}
+.reserved-channels { margin-top: 8px; }
+.reserved-channels :deep(.ant-tag) {
+  margin: 0;
+  color: var(--text-2);
+  background: color-mix(in srgb,var(--block-accent) 5%,var(--bg-card));
+  border-color: color-mix(in srgb,var(--block-accent) 18%,var(--border));
 }
 
 /* 事件映射矩阵 */
 .map-table {
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb,var(--block-accent) 16%,var(--border));
   border-radius: 10px;
   overflow: hidden;
 }
@@ -712,13 +804,14 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   padding: 12px 16px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid color-mix(in srgb,var(--block-accent) 10%,var(--border));
 }
+.map-row:nth-child(odd):not(.map-row--head) { background: color-mix(in srgb,var(--block-accent) 3%,var(--bg-card)); }
 .map-row:first-child {
   border-top: none;
 }
 .map-row--head {
-  background: var(--bg-hover);
+  background: color-mix(in srgb,var(--block-accent) 8%,var(--bg-card));
   font-size: 12px;
   font-weight: 600;
   color: var(--text-3);
@@ -741,18 +834,49 @@ onMounted(async () => {
 }
 .map-channels {
   flex: 1;
+  min-width: 0;
 }
+.map-channels :deep(.ant-checkbox-group) { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.map-channels :deep(.ant-checkbox-wrapper) { margin: 0; }
 
 /* 发送记录 */
 .filter-bar {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb,var(--block-accent) 12%,var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb,var(--block-accent) 4%,var(--bg-card));
 }
 .retry-hint {
   font-size: 12px;
   color: var(--text-3);
   margin-left: 4px;
+}
+.records-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 30px 16px;
+  background: radial-gradient(ellipse at center,color-mix(in srgb,var(--block-accent) 5%,var(--bg-card)),var(--bg-card));
+}
+.records-empty .empty-icon { margin: 6px 0; }
+.records-empty b { color: var(--text-1); font-size: 14px; }
+.records-empty>span { color: var(--text-2); font-size: 12px; text-align: center; }
+@media (max-width: 900px) {
+  .notify-page .op-hero { flex-wrap: wrap; padding: 18px; }
+  .notify-page .op-hero-extra { flex-wrap: wrap; }
+  .block-head { flex-wrap: wrap; gap: 10px; }
+  .block-title { min-width: 160px; }
+  .grid2 { grid-template-columns: 1fr; }
+  .disabled-tip { padding: 20px 16px; }
+  .map-row { flex-wrap: wrap; gap: 10px; }
+  .map-event { width: 100%; }
+  .map-channels { flex-basis: 100%; }
+  .map-row--head .map-event { width: auto; }
+  .map-row--head .map-channels { flex-basis: auto; text-align: right; }
 }
 </style>

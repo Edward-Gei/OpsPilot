@@ -2,7 +2,7 @@
 // 工作台：接口聚合快照按读取权限展示，30 秒静默刷新保留已有数据。
 import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { ApartmentOutlined, AuditOutlined, CloudServerOutlined, FileTextOutlined, GlobalOutlined, ProfileOutlined } from '@ant-design/icons-vue'
+import { ApartmentOutlined, AuditOutlined, CloudServerOutlined, FileTextOutlined, GlobalOutlined, ProfileOutlined, RocketOutlined } from '@ant-design/icons-vue'
 import { fetchActivityTrend, fetchDashboardSummary, type ActivityTrendPoint, type DashboardAttention, type DashboardSummary, type TrendGranularity } from '@/api/dashboard'
 import { useUserStore } from '@/stores/user'
 import { fmtTime } from '@/views/ticket/meta'
@@ -31,6 +31,21 @@ const audit = computed(() => can('audit') ? summary.value?.audit : null)
 const canTrend = computed(() => can('ticket') || can('execution'))
 const initialLoading = computed(() => summaryLoading.value && !summary.value)
 const todayText = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
+const greeting = computed(() => {
+  const hour = new Date().getHours()
+  if (hour < 6) return '夜深了'
+  if (hour < 12) return '早上好'
+  if (hour < 18) return '下午好'
+  return '晚上好'
+})
+const roleNames = computed(() => (user.userInfo?.roles ?? []).map(role => role.name).join(' / ') || '—')
+/** 恢复欢迎条快览，继续使用当前摘要并按读取权限显示。 */
+const heroStats = computed(() => {
+  const stats: { label: string; value: number; path: string }[] = []
+  if (execution.value) stats.push({ label: '执行中', value: execution.value.active.running ?? 0, path: '/ticket/list?execution_status=running' })
+  if (ticket.value) stats.push({ label: '今日工单', value: ticket.value.today_total, path: '/ticket/list' })
+  return stats
+})
 const number = (value: number) => value.toLocaleString()
 const colors = ['#4b7bf2', '#43b99c', '#57b8d9', '#9b80e7', '#efb24e', '#e98287', '#c7d1e1']
 const configNames: Record<string, string> = { clean: '一致', drifted: '存在漂移', remote_missing: '远端缺失', sync_failed: '同步失败', unpublished: '待首次发布' }
@@ -165,9 +180,17 @@ onUnmounted(() => { stopped = true; ++trendRequest; if (pollTimer) window.clearI
 
 <template>
   <div class="dashboard dashboard-fonts">
-    <header class="dashboard-welcome">
-      <div><h1>工作台</h1><p>资源规模、业务执行与配置状态总览</p></div>
-      <div class="dashboard-date"><b>{{ todayText }}</b><span>资产与配置为当前快照，趋势按图表周期统计</span></div>
+    <header class="op-hero op-hero--blue dashboard-welcome">
+      <div class="op-hero-icon"><RocketOutlined /></div>
+      <div class="welcome-user">
+        <div class="op-hero-title">{{ greeting }}，{{ user.userInfo?.display_name || user.userInfo?.username || '—' }}</div>
+        <div class="op-hero-sub">{{ roleNames }} · {{ todayText }}</div>
+      </div>
+      <div class="op-hero-extra">
+        <button v-for="stat in heroStats" :key="stat.label" class="op-hero-stat hero-stat-click" @click="router.push(stat.path)">
+          <b>{{ number(stat.value) }}</b><span>{{ stat.label }}</span>
+        </button>
+      </div>
     </header>
     <div v-if="initialLoading" role="status" aria-label="正在加载工作台" class="loading-banner"><a-spin />正在加载工作台…</div>
     <div v-if="summaryFailed" class="error-banner" role="alert">
@@ -178,7 +201,7 @@ onUnmounted(() => { stopped = true; ++trendRequest; if (pollTimer) window.clearI
       <div v-for="index in loadingKpiCount" :key="index" class="data-stat skeleton-card"><span /><strong /><small /></div>
     </div>
     <div v-else-if="kpis.length" class="data-stats" :style="{ '--kpi-count': kpis.length, '--kpi-tablet': Math.min(kpis.length, 3), '--kpi-mobile': Math.min(kpis.length, 2) }">
-      <button v-for="kpi in kpis" :key="kpi.label" class="data-stat" data-testid="dashboard-kpi" @click="router.push(kpi.path)">
+      <button v-for="kpi in kpis" :key="kpi.label" class="data-stat" :style="{ '--stat-accent': kpi.color }" data-testid="dashboard-kpi" @click="router.push(kpi.path)">
         <div class="data-stat-label"><span>{{ kpi.label }}</span><component :is="kpi.icon" :style="{ color: kpi.color }" /></div>
         <strong>{{ number(kpi.value) }}</strong><small>{{ kpi.hint }}</small>
       </button>
@@ -196,7 +219,7 @@ onUnmounted(() => { stopped = true; ++trendRequest; if (pollTimer) window.clearI
           <DashboardChart kind="line" label="工单提交与完成执行数量趋势" :categories="trendItems.map(item => item.period)" :series="trendSeries" :loading="trendLoading" :failed="trendFailed" />
           <div class="data-foot trend-caption"><span>单位：笔 / 次</span><span v-if="can('execution')">完成执行按结束时间统计</span><button v-if="trendFailed" @click="loadTrend">重新加载趋势</button></div>
         </section>
-        <section v-if="config" class="data-panel">
+        <section v-if="config" class="data-panel config-panel">
           <div class="data-head"><div><h2>应用配置状态</h2><p>有效配置文件 · 按当前状态归组</p></div><span class="data-scope">当前快照</span></div>
           <div class="config-strip"><div><strong>{{ number(config.file_total) }}</strong><small>有效配置文件</small></div><span><b>{{ configRatio }}</b> 一致</span></div>
           <DashboardChart kind="bar" label="应用配置五类状态数量" :items="configItems" />
@@ -204,13 +227,13 @@ onUnmounted(() => { stopped = true; ++trendRequest; if (pollTimer) window.clearI
         </section>
       </div>
       <div v-if="cmdb || domain" class="data-grid-three">
-        <section v-if="cmdb" class="data-panel">
+        <section v-if="cmdb" class="data-panel host-panel">
           <div class="data-head"><div><h2>主机环境与状态</h2><p>按环境统计主机规模及登记状态</p></div><span class="data-scope">当前快照</span></div>
           <div class="mini-key"><span v-for="series in hostSeries" :key="series.name" class="chart-legend"><i :style="{ background: series.color }" />{{ series.name }}</span></div>
           <DashboardChart kind="stack" label="各环境主机登记状态数量" :categories="environments.map(environment => environmentNames[environment] || environment || '未设置')" :series="hostSeries" />
           <div class="data-foot">CMDB 登记状态 · 非实时监控指标</div>
         </section>
-        <section v-if="cmdb" class="data-panel">
+        <section v-if="cmdb" class="data-panel app-panel">
           <div class="data-head"><div><h2>应用部署方式</h2><p>按部署方式统计应用数量</p></div><span class="data-scope">当前快照</span></div>
           <DashboardChart kind="donut" label="应用部署方式数量分布" :items="appItems" total-label="应用总数" />
         </section>
@@ -222,11 +245,11 @@ onUnmounted(() => { stopped = true; ++trendRequest; if (pollTimer) window.clearI
         </section>
       </div>
       <div v-if="ticket || domain || audit" class="data-grid-three">
-        <section v-if="ticket" class="data-panel">
+        <section v-if="ticket" class="data-panel ticket-panel">
           <div class="data-head"><div><h2>工单状态分布</h2><p>全量工单 · 按业务状态归组</p></div><span class="data-scope">全部工单</span></div>
           <DashboardChart kind="donut" label="工单业务状态数量分布" :items="ticketItems" total-label="全部工单" />
         </section>
-        <section v-if="domain" class="data-panel">
+        <section v-if="domain" class="data-panel records-panel">
           <div class="data-head"><div><h2>DNS 记录类型</h2><p>归一化记录集数量，不按记录值计数</p></div><span class="data-scope">当前快照</span></div>
           <DashboardChart kind="donut" label="本地 DNS 记录集类型分布" :items="recordItems" total-label="本地记录集" />
         </section>

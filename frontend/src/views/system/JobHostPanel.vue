@@ -3,7 +3,7 @@
 // + 连通性测试 / 启用禁用 / 删除（job_host:read / job_host:write）
 import { onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
-import { ApiOutlined, DeleteOutlined, EditOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons-vue'
+import { ApiOutlined, CloudServerOutlined, DeleteOutlined, EditOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons-vue'
 import * as jobHostApi from '@/api/jobHost'
 import * as jobApi from '@/api/job'
 import { makeResizable, onResizeColumn } from '@/utils/table'
@@ -259,6 +259,13 @@ onMounted(loadList)
         onChange: onPageChange,
       }"
     >
+      <template #emptyText>
+        <div class="host-empty">
+          <div class="empty-icon"><CloudServerOutlined /></div>
+          <b>暂无作业主机</b>
+          <span>{{ query.keyword || query.enabled !== undefined ? '没有匹配的主机，请调整搜索条件' : canWrite ? '新建作业主机并关联 SSH 凭据后，即可用于模板执行' : '当前没有可展示的作业主机' }}</span>
+        </div>
+      </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'credential'">
           <span v-if="record.credential_name">{{ record.credential_name }}</span>
@@ -353,7 +360,8 @@ onMounted(loadList)
 .toolbar {
   display: flex;
   gap: 10px;
-  margin-bottom: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
 }
 .kw {
   width: 220px;
@@ -391,4 +399,28 @@ onMounted(loadList)
   justify-content: flex-end;
   width: 100%;
 }
+.host-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  padding: 24px 16px;
+  background: radial-gradient(ellipse at center,color-mix(in srgb,#43b99c 5%,var(--bg-card)),var(--bg-card));
+}
+.empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 5px;
+  border: 1px solid color-mix(in srgb,#43b99c 18%,transparent);
+  border-radius: 50%;
+  color: #43b99c;
+  background: color-mix(in srgb,#43b99c 9%,var(--bg-card));
+  box-shadow: 0 0 0 7px color-mix(in srgb,#43b99c 3%,transparent);
+  font-size: 24px;
+}
+.host-empty b { color: var(--text-1); font-size: 13px; }
+.host-empty>span { color: var(--text-2); font-size: 12px; text-align: center; }
 </style>

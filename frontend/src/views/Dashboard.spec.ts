@@ -131,6 +131,16 @@ it('空数据展示图表空态，零分母不生成无效百分比', async () =
   expect(w.text()).not.toMatch(/NaN|Infinity/)
 })
 
+it('全零趋势提示本周期无活动，有业务记录后提示消失', async () => {
+  api.trend.mockResolvedValueOnce({ items: [{ period: '10-09', tickets: 0, executions: 0 }] })
+  const w = render(); await flushPromises()
+  expect(w.find('[data-testid="chart-zero-trend"]').text()).toContain('本周期暂无工单或完成执行')
+  expect(w.find('[data-testid="chart-zero-trend"]').attributes('data-testid')).not.toBe('chart-empty')
+  await w.find('button[data-granularity="week"]').trigger('click'); await flushPromises()
+  expect(w.find('[data-testid="chart-zero-trend"]').exists()).toBe(false)
+  expect(w.find('[data-testid="trend-total"]').text()).toContain('提交工单 2')
+})
+
 it('快速切换趋势时旧响应不能覆盖新粒度', async () => {
   const older = deferred<{ items: { period: string; tickets: number; executions: number }[] }>()
   api.trend.mockReturnValueOnce(older.promise)
