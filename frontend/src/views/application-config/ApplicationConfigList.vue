@@ -263,7 +263,7 @@ onBeforeUnmount(() => {
           </a-tag>
         </template>
         <template v-else-if="column.key === 'synced'">
-          {{ record.last_synced_at ? new Date(record.last_synced_at).toLocaleString() : '—' }}
+          {{ record.last_synced_at ? new Date(record.last_synced_at).toLocaleString('zh-CN', { hour12: false }) : '—' }}
         </template>
         <template v-else-if="column.key === 'action'">
           <a-space :size="6">

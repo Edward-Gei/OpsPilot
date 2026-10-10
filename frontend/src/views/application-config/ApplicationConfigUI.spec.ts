@@ -134,9 +134,11 @@ describe('编辑页草稿恢复', () => {
   })
 
   it('版本记录展示名称、三项时间、审批人和失败原因', async () => {
+    api.getConfigFile.mockResolvedValue({ ...file(2), last_synced_at: '2026-10-10T16:03:00' })
+    api.listConfigFiles.mockResolvedValue({ items: [{ ...file(2), last_synced_at: '2026-10-10T16:03:00' }], total: 1 })
     api.listVersions.mockResolvedValue({ items: [{ id: 6, version_no: 6, status: 'approved', source: 'opspilot_publish',
       approval_role_id: 1, submitted_by: 1, approval_role_name: '生产审批', submitter_name: '张三', approver_name: '李四',
-      submitted_at: '2026-10-10T10:00:00', approved_at: '2026-10-10T11:00:00', completed_at: '2026-10-10T11:02:00',
+      submitted_at: '2026-10-10T13:00:00', approved_at: '2026-10-10T14:00:00', completed_at: '2026-10-10T15:02:00',
       failure_reason: '远端拒绝' }] })
     const wrapper = mountDetail()
     await flushPromises()
@@ -145,8 +147,15 @@ describe('编辑页草稿恢复', () => {
     for (const title of ['审批角色', '提交人', '提交时间', '审批时间', '完成时间', '审批人', '失败原因']) expect(table.text()).toContain(title)
     for (const text of ['生产审批', '张三', '李四', '远端拒绝']) expect(table.text()).toContain(text)
     expect(table.text()).not.toContain('角色 ID')
-    expect(table.text()).toContain(new Date('2026-10-10T11:02:00').toLocaleString())
+    for (const time of ['13:00:00', '14:00:00', '15:02:00']) expect(table.text()).toContain(time)
+    expect(wrapper.text()).toContain('16:03:00')
+    expect(wrapper.text()).not.toMatch(/\b(?:AM|PM)\b/)
     wrapper.unmount()
+    const list = mount(ApplicationConfigList)
+    await flushPromises()
+    expect(list.find('.ant-table').text()).toContain('16:03:00')
+    expect(list.find('.ant-table').text()).not.toMatch(/\b(?:AM|PM)\b/)
+    list.unmount()
   })
 
   it('版本记录查看显示旧正式版本和所选版本的只读差异', async () => {

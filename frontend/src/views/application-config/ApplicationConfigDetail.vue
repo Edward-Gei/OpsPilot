@@ -222,7 +222,7 @@ watch(canEdit, (editing) => {
         ? `public / ${file.locator.group} / ${file.locator.data_id}` : Object.values(file.locator).join(' / ') }}</a-descriptions-item>
       <a-descriptions-item label="审批角色">{{ file.approval_role_name || '—' }}</a-descriptions-item>
       <a-descriptions-item label="状态">{{ file.status === 'active' ? '使用中' : '已归档' }}</a-descriptions-item>
-      <a-descriptions-item label="最近同步">{{ file.last_synced_at ? new Date(file.last_synced_at).toLocaleString() : '—' }}</a-descriptions-item>
+      <a-descriptions-item label="最近同步">{{ file.last_synced_at ? new Date(file.last_synced_at).toLocaleString('zh-CN', { hour12: false }) : '—' }}</a-descriptions-item>
       <a-descriptions-item label="关联应用">
         <a-space v-if="file.application_ids.length" wrap>
           <a-tag v-for="id in file.application_ids" :key="id" class="related-app-tag">
@@ -266,7 +266,7 @@ watch(canEdit, (editing) => {
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'status'"><a-tooltip :title="publishTaskFor(record.id)?.last_error || undefined"><a-tag>{{ versionStatus(record as api.ConfigVersion) }}</a-tag></a-tooltip></template>
             <template v-else-if="column.key === 'source'">{{ record.source === 'external_import' ? '外部导入' : 'OpsPilot 发布' }}</template>
-            <template v-else-if="['submitted_at', 'approved_at', 'completed_at'].includes(column.key)">{{ record[column.key] ? new Date(record[column.key]).toLocaleString() : '—' }}</template>
+            <template v-else-if="['submitted_at', 'approved_at', 'completed_at'].includes(column.key)">{{ record[column.key] ? new Date(record[column.key]).toLocaleString('zh-CN', { hour12: false }) : '—' }}</template>
             <template v-else-if="['role', 'submitter', 'approver', 'failure_reason'].includes(column.key)">{{ record[column.dataIndex] || '—' }}</template>
             <template v-else-if="column.key === 'actions'"><a-space size="small">
               <a-button size="small" class="op-btn-cyan" :loading="viewingVersionId === record.id" @click="viewVersion(record as api.ConfigVersion)"><EyeOutlined />查看</a-button>
