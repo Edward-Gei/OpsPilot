@@ -1,11 +1,10 @@
-# OpsPilot V1 API 设计
+# OpsPilot API 设计
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | v1.0 |
-| 状态 | 竣工，与 `backend/app/api/v1/` 路由同步 |
+| 文档定位 | 当前路由与 Schema 参考 |
 | Base URL | `/api/v1` |
-| 最终契约 | 运行中的 FastAPI OpenAPI：`/api/v1/docs` |
+| 最终契约 | 运行中的 OpenAPI：`/api/v1/openapi.json`；交互文档：`/api/v1/docs` |
 
 ## 1. 通用约定
 
@@ -19,7 +18,9 @@
 
 失败响应沿用相同包裹结构，业务 code 与 HTTP 状态码同时表达错误。常见 code：`40001` 参数错误、`40101` 未认证、`40102` Token 过期、`40103` 需要 MFA、`40104` 需要绑定 MFA、`40105` 需要改密、`40301` 无权限、`40302` 对象越权、`40401` 不存在、`40901` 状态冲突、`42201` 业务拒绝、`42901` 限流/锁定、`50001` 内部错误。
 
-分页请求为 `page` 和 `page_size`，最大 100；分页数据为 `{items,total,page,page_size}`。时间使用带时区 ISO8601。
+除明确注明的根路径外，本文接口均相对于 `/api/v1`；应用配置章节还须加上该章节注明的模块前缀。
+
+分页请求通常为 `page` 和 `page_size`，常用上限为 100，具体限制以接口 Schema 为准；分页数据为 `{items,total,page,page_size}`。时间使用带时区 ISO8601。
 
 ## 2. 认证和个人账号
 
@@ -65,7 +66,7 @@
 | PUT | `/users/{id}/password` | `user:write` | 管理员重置用户密码 |
 | PUT | `/users/{id}/mfa` | `user:mfa` | 管理员启用、禁用或重置 MFA |
 | GET | `/roles` | `role:read` | 角色、权限和成员数 |
-| GET | `/roles/permissions` | `role:read` | 30 个权限点 |
+| GET | `/roles/permissions` | `role:read` | 40 个权限点，见 §12 |
 | GET | `/roles/options` | `template:read` | 角色 ID/名称轻量选项 |
 | POST | `/roles` | `role:write` | 创建自定义角色 |
 | PUT | `/roles/{id}` | `role:write` | 更新角色；admin 权限矩阵不可改 |
@@ -93,7 +94,7 @@
 | --- | --- | --- | --- |
 | GET | `/cmdb/apps` | `cmdb:read` | 应用分页；关键词匹配应用名、所属系统、运维负责人、开发负责人和服务端口，并支持部署方式、项目类型、所属业务线和服务级别筛选及列排序 |
 | POST | `/cmdb/apps` | `cmdb:write` | 创建应用和主机关联 |
-| GET | `/cmdb/apps/{id}` | `cmdb:read` | 应用详情，含关联主机与配置文件元信息（名称、平台、定位和状态），不含配置正文；无需 `config:read` |
+| GET | `/cmdb/apps/{id}` | `cmdb:read` | 应用详情，含关联主机、配置文件元信息及关联工单模板（名称、流程模板、状态）；不含配置正文，无需 `config:read`；模板名称跳转受 `template:read` 控制 |
 | PUT | `/cmdb/apps/{id}` | `cmdb:write` | 编辑应用和主机关联 |
 | DELETE | `/cmdb/apps/{id}` | `cmdb:delete` | 删除应用 |
 | GET | `/cmdb/apps/export` | `cmdb:read` | 按当前筛选导出完整用户可见应用台账 |
@@ -265,7 +266,8 @@
 | --- | --- | --- | --- |
 | GET | `/system/configs` | `system:config` | 读取预置配置，敏感字段掩码 |
 | PUT | `/system/configs` | `system:config` | 批量更新预置配置，掩码值保留原 secret |
-| GET | `/healthz` | 公开 | DB/Redis 健康检查 |
+| GET | `/healthz` | 公开 | 根路径，不加 `/api/v1`；DB/Redis 健康检查 |
+| GET | `/ping` | 公开 | API 存活检查 |
 | GET | `/dashboard/summary` | 登录 | 按权限返回概览各段 |
 | GET | `/dashboard/ticket-trend` | `ticket:read` | 日/周/月/年提单趋势 |
 | GET | `/dashboard/activity-trend` | `ticket:read` 或 `execution:read` | 工单提交与完成执行双系列趋势；无对应权限的系列为 `null` |
@@ -289,6 +291,8 @@
 
 ## 12. 权限点全集
 
+当前共 40 个权限点，事实来源为 `backend/app/core/constants.py` 的 `PERMISSIONS`。
+
 ```text
 user:read user:write user:mfa role:read role:write
 cmdb:read cmdb:write cmdb:delete cmdb:import
@@ -305,6 +309,8 @@ notify:read notify:write notify:test system:config
 ```
 
 ## 13. 应用配置 `/application-configs`
+
+本节表内路径相对于 `/api/v1/application-configs`，例如实例列表完整路径为 `/api/v1/application-configs/platform-instances`。
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
