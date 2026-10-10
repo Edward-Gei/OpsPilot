@@ -6,6 +6,22 @@ OpsPilot 是面向企业内网的自动化运维平台：CMDB 资产台账、作
 
 文档入口见 [`docs/README.md`](docs/README.md)，生产和内网部署见 [`deploy/DEPLOYMENT.md`](deploy/DEPLOYMENT.md)。
 
+## 界面预览
+
+以下截图展示当前系统界面，账号、资产和日志均使用演示数据；实际内容按用户权限和业务数据展示。
+
+### 工作台 · 亮色主题
+
+查看资产规模、工单与执行趋势、配置状态等数据概览。
+
+![工作台亮色主题：资产统计、工单与执行趋势及配置状态](docs/images/dashboard-light.webp)
+
+### 工单执行详情
+
+查看串行步骤的执行状态、耗时及按步骤合并的执行日志。
+
+![工单执行详情：步骤状态、耗时及合并日志](docs/images/execution-logs.webp)
+
 ## 快速部署
 
 前置条件：部署机安装 Docker Engine 24+ 和 Compose v2。在线部署不需要单独安装 Python、Node、MySQL 或 Redis。
