@@ -61,11 +61,15 @@ cp .env.example .env
 | `ADMIN_INITIAL_PASSWORD` | 初始 admin 密码；留空则随机生成并写入 API 日志 |
 | `AUDIT_RETENTION_DAYS` | 审计数据保留天数，默认 `365` |
 | `EXEC_LOG_DIR` | API/Worker 共享的执行日志目录，默认 `/data/logs` |
-| `EXEC_GLOBAL_CONCURRENCY_DEFAULT` | 首次初始化的全局执行并发默认值，默认 `50` |
+| `EXEC_GLOBAL_CONCURRENCY_DEFAULT` | 配置项默认 `50`，当前 Worker 未用它限流；不能视为生效的并发上限 |
 | `CORS_ORIGINS` | 本地 Vite 直连 API 时的允许来源，生产同源部署通常无需修改 |
 | `DEBUG` | 调试开关，生产必须为 `false` |
 
+`exec.global_concurrency` 的种子值来自 [SYSTEM_CONFIG_DEFAULTS](../backend/app/core/constants.py)，[种子服务](../backend/app/services/seed.py)只补缺失键；当前执行链未消费该值。已实现的同模板互斥由工单模板的并发控制开关决定，不等同于全局限流。
+
 ## 4. 在线部署
+
+执行前先核对[迁移限制](../docs/05-开发与验收指南.md#33-迁移与清理)：当前空库迁移存在重复加列的静态风险，以下启动命令不代表已通过安装验收。先在隔离 MySQL 验证，不要用生产库试跑或手工标记版本绕过。
 
 ```bash
 cd /opt/opspilot/deploy
@@ -139,9 +143,11 @@ cd /opt/opspilot/deploy
 bash scripts/backup.sh
 ```
 
-产物为 `backup/<时间戳>/mysql_opspilot.sql` 和 `exec_logs.tar.gz`。脚本备份 MySQL 全库及 `exec-logs` 卷；Redis 是可重建队列/缓存，不纳入业务备份。
+产物为 `backup/<时间戳>/mysql_opspilot.sql` 和 `exec_logs.tar.gz`。脚本仅备份 MySQL 全库及 `exec-logs` 卷，不包含 Redis AOF 或字段加密主密钥；主密钥应另行安全保存。
 
-恢复前停止 API/Worker，确认目标环境后执行：
+Redis 除缓存外还保存执行队列、控制信号、事件游标和令牌吊销等临时认证状态，不能全部由 MySQL 重建。丢失 `redis-data` 后，数据库仍为 `queued` 的执行不保证自动补发，认证及控制状态也可能丢失。恢复方案须单独覆盖 Redis 持久化数据，并核对工单状态与认证状态；不要把本脚本称为无损整站备份，或为补队列而盲目重跑可能产生外部副作用的脚本。
+
+恢复前停止 API/Worker，确认目标环境后执行以下数据库与日志恢复步骤：
 
 ```bash
 docker exec -i opspilot-mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' < backup/<时间戳>/mysql_opspilot.sql
@@ -153,7 +159,9 @@ docker compose restart api worker
 
 ## 9. 升级与回滚
 
-升级前先执行备份并确认没有关键执行任务：
+升级前先核对当前 Alembic 版本与待执行迁移。`0010` 是删除并重建模板、工单、审批等表的历史迁移，不是无损增量升级；需要跨过该版本的已有库必须先制定数据迁移与恢复方案。空库的重复加列问题也仍需隔离验证，详见[迁移限制](../docs/05-开发与验收指南.md#33-迁移与清理)。
+
+在隔离副本确认升级可行后，备份并确认没有关键执行任务，再执行：
 
 ```bash
 cd /opt/opspilot/deploy
@@ -179,10 +187,10 @@ API 重启时会自动执行增量迁移。升级后重新检查 `/healthz`、`/
 | MySQL 不健康 | 检查初始化日志、磁盘和首次建卷密码；修改 `.env` 不会改变已初始化数据卷密码 |
 | Worker 未启动 | 确认 API healthy，再查看 `docker logs opspilot-worker` |
 | 页面 502 | `curl http://localhost:8080/healthz`；API 未健康时 Nginx 无法反代 |
-| 工单不执行 | 检查 Worker、Redis `redis-cli ping`、全局并发和作业主机连通性 |
+| 工单不执行 | 检查审批状态、Worker、Redis 队列与数据库执行状态、模板互斥和作业主机连通性；不要假定所有 `queued` 都有自动补发 |
 | 日志不刷新 | 检查 `/events` 长轮询和 `/logs` 请求、Nginx/前置代理读取超时 |
-| 通知失败 | 检查通知渠道启用状态、事件映射、Worker 日志和出站网络；记录会按退避重试 |
-| SSH 全部失败 | 检查作业主机 IP/端口、绑定凭据、工作目录和防火墙 |
+| 通知失败 | 检查通知渠道启用状态、事件映射、Worker 日志和出站网络；网络类失败按退避重试 |
+| SSH 全部失败 | 检查作业主机 IP/端口、绑定凭据、防火墙；Playbook 另检查工作目录与 ansible-playbook |
 | 磁盘增长 | 检查 `mysql-data`、`exec-logs` 和 Docker 镜像；按备份策略归档日志 |
 
 提交问题时附带 `docker compose ps` 以及相关容器最近 200 行日志。

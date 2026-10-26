@@ -40,7 +40,7 @@
 | POST | `/auth/mfa/setup` | 登录或 `mfa_token` | 生成 TOTP secret 和绑定 URI |
 | POST | `/auth/mfa/bind` | 登录或 `mfa_token` | `{code}` 完成绑定 |
 | POST | `/auth/mfa/verify` | `mfa_token` | `{code}` 换正式令牌 |
-| PUT | `/auth/password` | 登录或 `change_token` | 修改本人密码；强制改密成功后直接返回正式令牌 |
+| PUT | `/auth/password` | 登录或 `change_token` | 修改本人密码；强制改密成功后直接返回正式令牌。不吊销 Refresh Token，既有访问令牌也在有效期内继续可用 |
 | GET | `/auth/sso/oidc/login` | 公开 | 跳转 OIDC Provider |
 | GET | `/auth/sso/oidc/callback` | 公开 | OIDC 回调并重定向到前端换票 |
 | POST | `/auth/sso/exchange` | 公开 | `{ticket}` 换正式令牌 |
@@ -63,8 +63,8 @@
 | GET | `/users` | `user:read` | 分页、关键字、状态、来源筛选 |
 | POST | `/users` | `user:write` | 创建本地用户并分配角色 |
 | PUT | `/users/{id}` | `user:write` | 更新资料、状态和角色，不能禁用自己 |
-| PUT | `/users/{id}/password` | `user:write` | 管理员重置用户密码 |
-| PUT | `/users/{id}/mfa` | `user:mfa` | 管理员启用、禁用或重置 MFA |
+| PUT | `/users/{id}/password` | `user:write` | 管理员重置本地用户密码：写入新哈希、置首登强制改密并解除锁定；SSO 用户返回业务拒绝。不吊销该用户的 Refresh Token |
+| PUT | `/users/{id}/mfa` | `user:mfa` | 管理员启用、禁用或重置 MFA；用户列表同时返回 `mfa_enabled`（是否要求动态码）和 `mfa_bound`（是否已有密钥），禁用只暂停校验并保留密钥 |
 | GET | `/roles` | `role:read` | 角色、权限和成员数 |
 | GET | `/roles/permissions` | `role:read` | 40 个权限点，见 §12 |
 | GET | `/roles/options` | `template:read` | 角色 ID/名称轻量选项 |
@@ -95,7 +95,7 @@
 | GET | `/cmdb/apps` | `cmdb:read` | 应用分页；关键词匹配应用名、所属系统、运维负责人、开发负责人和服务端口，并支持部署方式、项目类型、所属业务线和服务级别筛选及列排序 |
 | POST | `/cmdb/apps` | `cmdb:write` | 创建应用和主机关联 |
 | GET | `/cmdb/apps/{id}` | `cmdb:read` | 应用详情，含关联主机、配置文件元信息及关联工单模板（名称、流程模板、状态）；不含配置正文，无需 `config:read`；模板名称跳转受 `template:read` 控制 |
-| PUT | `/cmdb/apps/{id}` | `cmdb:write` | 编辑应用和主机关联 |
+| PUT | `/cmdb/apps/{id}` | `cmdb:write` | 编辑应用并全量替换主机关联；请求体省略 `host_ids` 时按默认空列表处理，等同解除全部关联，客户端须回读详情后提交完整列表。该语义与工单模板 `app_ids`（省略则保留原关联）相反 |
 | DELETE | `/cmdb/apps/{id}` | `cmdb:delete` | 删除应用 |
 | GET | `/cmdb/apps/export` | `cmdb:read` | 按当前筛选导出完整用户可见应用台账 |
 
@@ -204,7 +204,7 @@
 | POST | `/tickets/prepare` | `ticket:write` | 执行动态参数脚本并生成短期 `prepare_id` |
 | POST | `/tickets` | `ticket:write` | `{template_id,params,prepare_id?}` 提交工单；同模板并发控制开启且已有活跃执行时返回 `40901`、占用工单号和执行状态 |
 | GET | `/tickets` | `ticket:read` | 分页、工单状态、创建人、关键字（工单号/标题/提交人）、创建时间，以及最新执行实例的 `execution_status`、`has_execution`、`execution_active` 筛选；列表项包含可空 `execution` 摘要 |
-| GET | `/tickets/todo` | `ticket:approve` | 当前角色待审批列表 |
+| GET | `/tickets/todo` | `ticket:approve` | 当前角色待审批列表：服务端取出全部 `approving` 工单后逐单读取当前步骤快照角色过滤，再在内存分页；`total` 兼作菜单角标计数 |
 | GET | `/tickets/todo/events` | `ticket:approve` | `since_seq`（整数，`>=0`，默认 `0`）回放当前用户的待办变更事件；无新事件最长等待 30 秒，返回 `{events:[{seq,kind:"todo.changed"}],last_seq}`，超时返回空 `events` 和原 `since_seq`。客户端必须直接赋值返回的 `last_seq`；若游标大于当前序号，返回一条合成 `todo.changed` 重同步事件和较小的 `last_seq` |
 | GET | `/tickets/{id}` | `ticket:read` | 工单、快照、审批时间线和执行概要 |
 | POST | `/tickets/{id}/approve` | `ticket:approve` | `{action:approve/reject,comment?}` |
@@ -214,7 +214,9 @@
 | POST | `/tickets/{id}/resume` | `execution:control` | 恢复执行 |
 | POST | `/tickets/{id}/force-abort` | `execution:force_control` | 强制中止并记录高风险审计 |
 
-工单服务校验模板启用、可见角色、流程启用、参数定义、预生成结果和模板并发控制；提交后只读快照。开启同模板并发控制时，首个执行从 `queued` 起持有模板直到成功、失败、中止、撤回、驳回或崩溃恢复归档；关闭开关不影响已持有者，但后续提交不再受该模板互斥限制。`GET /tickets` 中的 `execution` 是每张工单最新执行实例的 `{id,status,total_steps,started_at,finished_at}` 摘要；`has_execution=true` 仅返回已创建执行实例的工单，`execution_active=true` 匹配最新执行状态为 `queued`、`running` 或 `paused` 的工单。
+正式提交校验模板启用、可见角色、流程启用、参数定义和模板并发控制；提供 `prepare_id` 时才消费预生成结果。预生成入口的可见性、输入一致性及并发消费限制见[动态参数说明](./06-模板管理与流程模板设计.md#42-动态参数预生成)。步骤与策略读取工单快照，但作业主机连接信息、凭据和通知规则仍有运行时读取，见[快照范围](./06-模板管理与流程模板设计.md#5-工单快照)。
+
+开启同模板并发控制时，首个执行从 `queued` 起持有模板直到成功、失败、中止、撤回、驳回或崩溃恢复归档；关闭开关不影响已持有者，但后续提交不再受该模板互斥限制。`GET /tickets` 中的 `execution` 是每张工单最新执行实例的 `{id,status,total_steps,started_at,finished_at}` 摘要；`has_execution=true` 仅返回已创建执行实例的工单，`execution_active=true` 匹配最新执行状态为 `queued`、`running` 或 `paused` 的工单。
 
 ## 8. 执行和实时日志
 
@@ -238,7 +240,7 @@
 | POST | `/notify/channels/{type}/test` | `notify:test` | 按事件和当前未保存配置发送测试 |
 | GET | `/notify/events` | `notify:read` | 六事件映射矩阵 |
 | PUT | `/notify/events` | `notify:write` | `{mappings:{event:[channel_type]}}` 全量更新 |
-| GET | `/notify/records` | `notify:read` | 按事件、渠道、状态和时间分页查询 |
+| GET | `/notify/records` | `notify:read` | 按事件、渠道、状态和时间分页查询；返回项包含完整 `content` 正文。密码重置记录的正文保存含明文令牌的重置链接，令牌在有效期内核发即失效前对该权限可见，不能把此接口视为仅元数据列表 |
 
 渠道模板存于 `config.templates[event]`：Email 为 `{title,content}`，Webhook 为 `{body}`，Teams 为 `{card}`。JSON 模板会在保存和渲染后解析；`{ref_id}` 和 `{receivers}` 可作为原生 number/array，也可作为字符串值使用。
 
@@ -264,7 +266,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/system/configs` | `system:config` | 读取预置配置，敏感字段掩码 |
+| GET | `/system/configs` | `system:config` | 读取配置，敏感字段掩码；返回键为预置键叠加 `system_config` 表中实际存在的行，含种子写入的内部标记 `notify.mapping_initialized`，不能假定响应只含设置页可编辑的键 |
 | PUT | `/system/configs` | `system:config` | 批量更新预置配置，掩码值保留原 secret |
 | GET | `/healthz` | 公开 | 根路径，不加 `/api/v1`；DB/Redis 健康检查 |
 | GET | `/ping` | 公开 | API 存活检查 |
