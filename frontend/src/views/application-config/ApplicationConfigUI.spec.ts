@@ -26,8 +26,9 @@ const api = vi.hoisted(() => ({
 }))
 vi.mock('@/api/applicationConfig', () => api)
 vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: (perm: string) => perm === 'config:write' || (perm === 'secret:read' && api.readSecret) }) }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }), useRoute: () => detailRoute }))
-const detailRoute = reactive({ name: 'application-config-edit', params: { id: '2' } })
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }), useRoute: () => detailRoute }))
+const detailRoute = reactive({ name: 'application-config-edit', params: { id: '2' },
+  path: '/application-configs', query: {} as Record<string, string> })
 
 const file = (id: number) => ({
   id, name: `test-${id}.yaml`, description: null, platform_instance_id: 1,
@@ -59,6 +60,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   detailRoute.name = 'application-config-edit'
   detailRoute.params.id = '2'
+  detailRoute.query = {}
   api.readSecret = false
   api.getConfigFile.mockResolvedValue(file(2))
   api.getDriftView.mockResolvedValue(drift)
@@ -517,6 +519,61 @@ describe('漂移确认', () => {
 })
 
 describe('列表同步', () => {
+  it('关联文件读取期间用户已输入搜索词时保留用户搜索', async () => {
+    detailRoute.query = { file_id: '2', related: 'app' }
+    let resolveFile!: (value: ReturnType<typeof file>) => void
+    api.getConfigFile.mockImplementation(() => new Promise((resolve) => { resolveFile = resolve }))
+    const wrapper = mount(ApplicationConfigList, { attachTo: document.body,
+      global: { stubs: { NewConfigDrawer: true, PlatformInstanceDrawer: true, DriftCompareDrawer: true } },
+    })
+    await wrapper.find('.config-search input').setValue('custom')
+    resolveFile(file(2))
+    await flushPromises()
+    expect(wrapper.find('.config-search input').element).toHaveProperty('value', 'custom')
+    expect(api.listConfigFiles).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: 'custom', file_id: undefined }))
+    wrapper.unmount()
+  })
+
+  it('较早的配置列表响应不能覆盖新搜索结果', async () => {
+    const pending: Array<(value: { items: ReturnType<typeof file>[]; total: number }) => void> = []
+    api.listConfigFiles.mockImplementation(() => new Promise((resolve) => { pending.push(resolve) }))
+    const wrapper = mount(ApplicationConfigList, { attachTo: document.body,
+      global: { stubs: { NewConfigDrawer: true, PlatformInstanceDrawer: true, DriftCompareDrawer: true } },
+    })
+    await flushPromises()
+    await wrapper.find('.config-search input').setValue('new')
+    wrapper.findComponent({ name: 'AInput' }).vm.$emit('pressEnter')
+    await flushPromises()
+    expect(pending).toHaveLength(2)
+    pending[1]!({ items: [file(2)], total: 1 })
+    await flushPromises()
+    pending[0]!({ items: [file(1)], total: 1 })
+    await flushPromises()
+    expect(wrapper.find('.ant-table-tbody').text()).toContain('test-2.yaml')
+    expect(wrapper.find('.ant-table-tbody').text()).not.toContain('test-1.yaml')
+    wrapper.unmount()
+  })
+
+  it('关联配置文件在列表仅显示目标，改搜索词后解除精确筛选', async () => {
+    detailRoute.query = { file_id: '2', related: 'app' }
+    api.listConfigFiles.mockImplementation(async (params: { file_id?: number }) =>
+      params.file_id === 2 ? { items: [file(2)], total: 1 } : { items: [file(1), file(2)], total: 2 })
+    const wrapper = mount(ApplicationConfigList, { attachTo: document.body,
+      global: { stubs: { NewConfigDrawer: true, PlatformInstanceDrawer: true, DriftCompareDrawer: true } },
+    })
+    await flushPromises()
+    expect(wrapper.find('.config-search input').element).toHaveProperty('value', 'test-2.yaml')
+    expect(wrapper.find('.ant-table-tbody').text()).toContain('test-2.yaml')
+    expect(wrapper.find('.ant-table-tbody').text()).not.toContain('test-1.yaml')
+    expect(api.listConfigFiles).toHaveBeenLastCalledWith(expect.objectContaining({ file_id: 2, keyword: 'test-2.yaml' }))
+
+    await wrapper.find('.config-search input').setValue('test')
+    await flushPromises()
+    expect(wrapper.find('.ant-table-tbody').text()).toContain('test-1.yaml')
+    expect(api.listConfigFiles).toHaveBeenLastCalledWith(expect.objectContaining({ file_id: undefined, keyword: 'test' }))
+    wrapper.unmount()
+  })
+
   it('同步时间排序与筛选组合传给后端，改变条件回到第一页', async () => {
     const wrapper = mount(ApplicationConfigList, { attachTo: document.body,
       global: { stubs: { NewConfigDrawer: true, PlatformInstanceDrawer: true, DriftCompareDrawer: true } },

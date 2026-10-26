@@ -30,6 +30,7 @@ async def list_hosts(
     page: int,
     page_size: int,
     keyword: str | None = None,
+    host_id: int | None = None,
     platform: str | None = None,
     region: str | None = None,
     environment: str | None = None,
@@ -40,7 +41,7 @@ async def list_hosts(
 ) -> tuple[list[Host], int]:
     """分页查主机；默认搜索可见业务列，name_only 保留原主机名/IP 范围。"""
     query = _host_filter_query(
-        keyword=keyword, platform=platform, region=region, environment=environment,
+        keyword=keyword, host_id=host_id, platform=platform, region=region, environment=environment,
         status=status, name_only=name_only,
     )
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
@@ -52,6 +53,7 @@ async def list_hosts(
 def _host_filter_query(
     *,
     keyword: str | None = None,
+    host_id: int | None = None,
     platform: str | None = None,
     region: str | None = None,
     environment: str | None = None,
@@ -60,6 +62,8 @@ def _host_filter_query(
 ):
     """主机筛选查询构造：列表与导出共用同一套过滤语义。"""
     query = select(Host)
+    if host_id is not None:
+        query = query.where(Host.id == host_id)
     if keyword:
         like = f"%{keyword}%"
         if name_only:

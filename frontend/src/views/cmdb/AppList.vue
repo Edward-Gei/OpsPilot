@@ -440,7 +440,7 @@ onMounted(() => {
   // 详情链接按 ID 查询，不依赖分页列表中是否包含目标应用。
   const qid = typeof route.query.id === 'string' ? Number(route.query.id) : NaN
   if (Number.isSafeInteger(qid) && qid > 0) {
-    if (route.query.related === 'host') focusedAppId.value = qid
+    if (['host', 'ticket', 'config'].includes(String(route.query.related))) focusedAppId.value = qid
     void openDetail({ id: qid }).then((app) => {
       if (focusedAppId.value === qid) query.keyword = app.name
     }).catch(() => {
@@ -776,7 +776,7 @@ onMounted(() => {
             :pagination="false"
           >
             <template #bodyCell="{ column, record }">
-              <a v-if="column.key === 'hostname'" :href="`/cmdb/hosts?id=${record.id}`">{{ record.hostname }}</a>
+              <a v-if="column.key === 'hostname'" :href="`/cmdb/hosts?id=${record.id}&related=app`">{{ record.hostname }}</a>
             </template>
           </a-table>
 
@@ -797,11 +797,11 @@ onMounted(() => {
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'name'">
-                <a v-if="canReadTemplates" :href="`/job/templates/tickets?id=${record.id}`">{{ record.name }}</a>
+                <a v-if="canReadTemplates" :href="`/job/templates/tickets?id=${record.id}&related=app`">{{ record.name }}</a>
                 <span v-else>{{ record.name }}</span>
               </template>
               <template v-else-if="column.key === 'process'">
-                <a v-if="canReadTemplates && record.process_template_name" :href="`/job/templates/processes?id=${record.process_template_id}`">{{ record.process_template_name }}</a>
+                <a v-if="canReadTemplates && record.process_template_name" :href="`/job/templates/processes?id=${record.process_template_id}&related=app`">{{ record.process_template_name }}</a>
                 <span v-else>{{ record.process_template_name || '—' }}</span>
               </template>
               <a-tag v-else-if="column.key === 'status'" :color="record.status === 'enabled' ? 'success' : 'default'">
@@ -829,7 +829,7 @@ onMounted(() => {
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'name'">
-                <a v-if="canReadConfigs" :href="`/application-configs/${record.id}`">{{ record.name }}</a>
+                <a v-if="canReadConfigs" :href="`/application-configs?file_id=${record.id}&related=app`">{{ record.name }}</a>
                 <span v-else>{{ record.name }}</span>
               </template>
               <span v-else-if="column.key === 'locator'" class="config-locator">{{ configLocatorText(record as cmdbApi.AppConfigFile) }}</span>

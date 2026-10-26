@@ -226,7 +226,7 @@ watch(canEdit, (editing) => {
       <a-descriptions-item label="关联应用">
         <a-space v-if="file.application_ids.length" wrap>
           <a-tag v-for="id in file.application_ids" :key="id" class="related-app-tag">
-            <a v-if="canReadCmdb" :href="`/cmdb/apps?id=${id}`">{{ applications.find((item) => item.id === id)?.name || `应用 #${id}` }}</a>
+            <a v-if="canReadCmdb" :href="`/cmdb/apps?id=${id}&related=config`">{{ applications.find((item) => item.id === id)?.name || `应用 #${id}` }}</a>
             <span v-else>{{ applications.find((item) => item.id === id)?.name || `应用 #${id}` }}</span>
           </a-tag>
         </a-space>

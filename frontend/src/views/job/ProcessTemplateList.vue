@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 流程模板列表：集中维护步骤、执行策略和步骤前审批，供多个工单模板复用。
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
 import { CodeOutlined, CopyOutlined, DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons-vue'
 import * as api from '@/api/job'
@@ -12,6 +12,7 @@ import { listRoleOptions } from '@/api/system'
 
 const userStore = useUserStore()
 const route = useRoute()
+const router = useRouter()
 const canWrite = userStore.hasPerm('template:write')
 const canDelete = userStore.hasPerm('template:delete')
 
@@ -25,6 +26,8 @@ const roles = ref<{ id: number; name: string }[]>([])
 const detail = ref<(api.ProcessTemplateItem & { steps: api.ProcessStep[] }) | null>(null)
 const detailOpen = ref(false)
 const query = reactive({ page: 1, page_size: 20, keyword: '', status: undefined as string | undefined })
+const focusedProcessId = ref<number | undefined>()
+let listRequestId = 0
 const selectedKeys = ref<number[]>([])
 const statusLoading = ref<number | null>(null)
 const stats = reactive({ all: 0, enabled: 0, disabled: 0 })
@@ -47,9 +50,11 @@ const columns = computed(() => makeResizable([
   { title: '操作', key: 'action', width: canWrite && canDelete ? 244 : canWrite || canDelete ? 171 : 98, fixed: 'right' as const },
 ]))
 async function load() {
+  const requestId = ++listRequestId
   loading.value = true
   try {
-    const [data, roleData] = await Promise.all([api.listProcessTemplates(query), listRoleOptions()])
+    const [data, roleData] = await Promise.all([api.listProcessTemplates({ ...query, process_id: focusedProcessId.value }), listRoleOptions()])
+    if (requestId !== listRequestId) return
     rows.value = data.items; total.value = data.total; selectedKeys.value = []; roles.value = roleData.items
     const [all, enabled, disabled] = await Promise.all([
       api.listProcessTemplates({ page: 1, page_size: 1 }),
@@ -57,9 +62,19 @@ async function load() {
       api.listProcessTemplates({ page: 1, page_size: 1, status: 'disabled' }),
     ])
     stats.all = all.total; stats.enabled = enabled.total; stats.disabled = disabled.total
-  } finally { loading.value = false }
+  } finally { if (requestId === listRequestId) loading.value = false }
 }
-function search() { query.page = 1; load() }
+function search() {
+  if (focusedProcessId.value !== undefined && query.keyword !== detail.value?.name) {
+    focusedProcessId.value = undefined
+    void router.replace({ path: route.path })
+  }
+  query.page = 1
+  void load()
+}
+function onKeywordChange() {
+  if (focusedProcessId.value !== undefined && query.keyword !== detail.value?.name) search()
+}
 function pageChange(page: number, pageSize: number) { query.page = page; query.page_size = pageSize; load() }
 function edit(id: number | null) { editingId.value = id; copyFromId.value = null; open.value = true }
 // 复制模板先通过搜索弹窗选择源模板，再进入编辑器确认后创建新模板。
@@ -98,7 +113,13 @@ function confirmCopy(): void {
 }
 async function toggle(row: api.ProcessTemplateItem) { statusLoading.value = row.id; try { await api.setProcessTemplateStatus(row.id, row.status === 'enabled' ? 'disabled' : 'enabled'); await load() } finally { statusLoading.value = null } }
 async function remove(row: api.ProcessTemplateItem) { await api.deleteProcessTemplate(row.id); message.success('流程模板已删除'); await load() }
-async function openDetail(row: Pick<api.ProcessTemplateItem, 'id'>) { detail.value = null; detailOpen.value = true; detail.value = await api.getProcessTemplate(row.id) }
+async function openDetail(row: Pick<api.ProcessTemplateItem, 'id'>) {
+  detail.value = null
+  detailOpen.value = true
+  const process = await api.getProcessTemplate(row.id)
+  detail.value = process
+  return process
+}
 /** 批量删除逐条调用现有接口，保留流程模板引用保护和明确的失败汇总。 */
 async function batchRemove(): Promise<void> {
   const ids = [...selectedKeys.value]
@@ -115,9 +136,24 @@ function confirmBatchRemove(): void {
 }
 const rowSelection = computed(() => ({ selectedRowKeys: selectedKeys.value, onChange: (keys: (string | number)[]) => (selectedKeys.value = keys as number[]) }))
 onMounted(() => {
-  // 工单模板中的流程链接按 ID 直达只读详情，不依赖当前分页。
+  // 关联入口按 ID 限定列表，详情返回后回填搜索框。
   const qid = typeof route.query.id === 'string' ? Number(route.query.id) : NaN
-  if (Number.isSafeInteger(qid) && qid > 0) void openDetail({ id: qid }).catch(() => { detailOpen.value = false })
+  if (Number.isSafeInteger(qid) && qid > 0) {
+    if (route.query.related === 'app' || route.query.related === 'ticket') focusedProcessId.value = qid
+    void openDetail({ id: qid }).then((process) => {
+      if (focusedProcessId.value === qid && !query.keyword) {
+        query.keyword = process.name
+        void load()
+      }
+    }).catch(() => {
+      detailOpen.value = false
+      if (focusedProcessId.value === qid) {
+        focusedProcessId.value = undefined
+        void router.replace({ path: route.path })
+        void load()
+      }
+    })
+  }
   void load()
 })
 </script>
@@ -125,7 +161,7 @@ onMounted(() => {
 <template>
   <div>
     <div class="op-hero op-hero--indigo"><div class="op-hero-icon"><CodeOutlined /></div><div><div class="op-hero-title">流程模板</div><div class="op-hero-sub">集中维护步骤编排、执行策略和步骤前审批，供多个工单模板复用</div></div><div class="op-hero-extra"><div class="op-hero-stat"><b>{{ stats.all }}</b><span>全部</span></div><div class="op-hero-stat"><b>{{ stats.enabled }}</b><span>启用</span></div><div class="op-hero-stat"><b>{{ stats.disabled }}</b><span>停用</span></div></div></div>
-    <div class="toolbar"><a-input v-model:value="query.keyword" class="kw" allow-clear placeholder="搜索流程模板" @press-enter="search"><template #prefix><SearchOutlined /></template></a-input><a-select v-model:value="query.status" class="status-sel" allow-clear placeholder="状态" :options="[{ label: '启用', value: 'enabled' }, { label: '停用', value: 'disabled' }]" @change="search" /><div class="toolbar-actions"><a-button v-if="canDelete" danger :disabled="!selectedKeys.length" @click="confirmBatchRemove"><DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}</a-button><a-button v-if="canWrite" @click="openCopy"><CopyOutlined />复制模板</a-button><a-button v-if="canWrite" type="primary" @click="edit(null)"><PlusOutlined />新建模板</a-button></div></div>
+    <div class="toolbar"><a-input v-model:value="query.keyword" class="kw" allow-clear placeholder="搜索流程模板" @press-enter="search" @change="onKeywordChange"><template #prefix><SearchOutlined /></template></a-input><a-select v-model:value="query.status" class="status-sel" allow-clear placeholder="状态" :options="[{ label: '启用', value: 'enabled' }, { label: '停用', value: 'disabled' }]" @change="search" /><div class="toolbar-actions"><a-button v-if="canDelete" danger :disabled="!selectedKeys.length" @click="confirmBatchRemove"><DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}</a-button><a-button v-if="canWrite" @click="openCopy"><CopyOutlined />复制模板</a-button><a-button v-if="canWrite" type="primary" @click="edit(null)"><PlusOutlined />新建模板</a-button></div></div>
     <a-table :columns="columns" :data-source="rows" :loading="loading" bordered row-key="id" :scroll="{ x: 1000 }" :row-selection="rowSelection" @resize-column="onResizeColumn" :pagination="{ current: query.page, pageSize: query.page_size, total, showSizeChanger: true, showQuickJumper: true, showTotal: (t: number) => `共 ${t} 个模板`, onChange: pageChange }">
       <template #bodyCell="{ column, record }"><template v-if="column.key === 'steps'">{{ record.steps_count ?? 0 }}</template><template v-else-if="column.key === 'refs'"><a-tag :color="record.ticket_template_refs ? 'blue' : 'default'">{{ record.ticket_template_refs || 0 }}</a-tag></template><template v-else-if="column.key === 'strategy'">{{ strategySummary(record.exec_strategy) }}</template><template v-else-if="column.key === 'status'"><a-switch :checked="record.status === 'enabled'" checked-children="启用" un-checked-children="停用" :loading="statusLoading === record.id" @change="toggle(record as api.ProcessTemplateItem)" /></template><template v-else-if="column.key === 'updated'">{{ record.updated_at ? new Date(record.updated_at).toLocaleString() : '-' }}</template><template v-else-if="column.key === 'action'"><a-space><a-button size="small" class="op-btn-cyan" @click="openDetail(record as api.ProcessTemplateItem)"><EyeOutlined />详情</a-button><a-button v-if="canWrite" size="small" class="op-btn-blue" @click="edit(record.id)"><EditOutlined />编辑</a-button><a-popconfirm v-if="canDelete" title="流程模板被工单模板引用时不能删除，确认继续？" @confirm="remove(record as api.ProcessTemplateItem)"><a-button size="small" danger><DeleteOutlined />删除</a-button></a-popconfirm></a-space></template></template>
     </a-table>

@@ -148,6 +148,33 @@ async def test_ticket_template_list_filters_by_process_template(client):
     ]
 
 
+async def test_related_template_lists_filter_exact_id_with_keyword(client):
+    admin, _, host_id = await _env(client)
+    process_ids = []
+    template_ids = []
+    for suffix in ("目标", "目标扩展"):
+        process = await client.post("/api/v1/process-templates", headers=admin,
+                                    json={**_process_payload(), "name": f"关联流程{suffix}"})
+        assert process.json()["code"] == 0
+        process_id = process.json()["data"]["id"]
+        process_ids.append(process_id)
+        template = await client.post("/api/v1/templates", headers=admin, json={
+            "name": f"关联入口{suffix}", "type": "release", "job_host_id": host_id,
+            "process_template_id": process_id, "params_schema": [], "notify_rules": [], "visible_role_ids": [],
+        })
+        assert template.json()["code"] == 0
+        template_ids.append(template.json()["data"]["id"])
+
+    processes = await client.get("/api/v1/process-templates", headers=admin,
+                                 params={"process_id": process_ids[0], "keyword": "关联流程", "page_size": 1})
+    templates = await client.get("/api/v1/templates", headers=admin,
+                                 params={"template_id": template_ids[0], "keyword": "关联入口", "page_size": 1})
+    assert processes.json()["data"]["total"] == 1
+    assert [item["id"] for item in processes.json()["data"]["items"]] == process_ids[:1]
+    assert templates.json()["data"]["total"] == 1
+    assert [item["id"] for item in templates.json()["data"]["items"]] == template_ids[:1]
+
+
 def test_generated_parameter_output_supports_value_and_options():
     values, options = _parse_output('{"release": ["blue", "green"], "version": "2026.08"}', ["release", "version"])
     assert values == {"version": "2026.08"}

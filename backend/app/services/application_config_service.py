@@ -237,12 +237,15 @@ async def list_config_files(
     page: int,
     page_size: int,
     keyword: str | None = None,
+    file_id: int | None = None,
     platform_instance_id: int | None = None,
     status: str | None = None,
     sort_by: str | None = None,
     sort_order: str = "desc",
 ) -> tuple[list[ConfigFile], int]:
     query = select(ConfigFile)
+    if file_id is not None:
+        query = query.where(ConfigFile.id == file_id)
     if keyword:
         like = f"%{keyword}%"
         instance_match = select(ConfigPlatformInstance.id).where(

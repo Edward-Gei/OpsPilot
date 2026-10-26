@@ -28,10 +28,10 @@ def _brief(p, steps_count: int | None = None, refs: int | None = None) -> dict:
 async def list_process_templates(session: DbSession, _: User = Depends(require_perm("template:read")),
                                  page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
                                  keyword: str | None = None, status: str | None = None,
-                                 name_only: bool = False):
+                                 name_only: bool = False, process_id: int | None = Query(None, ge=1)):
     rows, total = await template_service.list_process_templates(
         session, page=page, page_size=page_size, keyword=keyword, status=status,
-        name_only=name_only,
+        name_only=name_only, process_id=process_id,
     )
     items = []
     for p in rows:

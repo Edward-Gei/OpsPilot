@@ -41,10 +41,10 @@ async def list_templates(session: DbSession, actor: User = Depends(require_perm(
                          page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
                          keyword: str | None = None, type: str | None = None, status: str | None = None,
                          process_template_id: int | None = Query(None, ge=1),
-                         name_only: bool = False):
+                         name_only: bool = False, template_id: int | None = Query(None, ge=1)):
     rows, total = await template_service.list_templates(
         session, page=page, page_size=page_size, keyword=keyword, type_=type, status=status,
-        process_template_id=process_template_id, name_only=name_only,
+        process_template_id=process_template_id, name_only=name_only, template_id=template_id,
     )
     can_view_refs = await _can_view_secret_refs(session, actor)
     host_names = dict((await session.execute(

@@ -9,7 +9,10 @@ const api = vi.hoisted(() => ({ listProcessTemplates: vi.fn(), getProcessTemplat
 vi.mock('@/api/job', () => api)
 vi.mock('@/api/system', () => ({ listRoleOptions: async () => ({ items: [] }) }))
 vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: () => false }) }))
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: api.routeQuery }) }))
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ query: api.routeQuery, path: '/job/templates/processes' }),
+  useRouter: () => ({ replace: vi.fn() }),
+}))
 
 config.global.plugins = [Antd]
 class TestResizeObserver { observe() {} unobserve() {} disconnect() {} }
@@ -46,5 +49,33 @@ it.each(['0', '-1', '1.5', 'invalid'])('无效详情 ID %s 不发起查询', asy
   const wrapper = mount(ProcessTemplateList, { global: { stubs: { ProcessTemplateEditor: true } } })
   await flushPromises()
   expect(api.getProcessTemplate).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
+
+it('关联流程模板打开详情并在搜索框中只列出该流程', async () => {
+  api.routeQuery = { id: '13', related: 'ticket' }
+  api.listProcessTemplates.mockImplementation(async (params: { process_id?: number }) =>
+    params.process_id === 13
+      ? { items: [{ id: 13, name: '部署流程', status: 'enabled' }], total: 1 }
+      : { items: [{ id: 13, name: '部署流程', status: 'enabled' },
+          { id: 14, name: '部署流程扩展', status: 'enabled' }], total: 2 })
+  const wrapper = mount(ProcessTemplateList, { attachTo: document.body,
+    global: { stubs: { ProcessTemplateEditor: true } } })
+  await flushPromises()
+  expect(wrapper.find<HTMLInputElement>('input[placeholder="搜索流程模板"]').element.value).toBe('部署流程')
+  expect(api.listProcessTemplates).toHaveBeenCalledWith(expect.objectContaining({ process_id: 13 }))
+  expect(wrapper.findAll('.ant-table-tbody tr[data-row-key]')).toHaveLength(1)
+  wrapper.unmount()
+})
+
+it('修改关联流程模板搜索词后恢复普通列表搜索', async () => {
+  api.routeQuery = { id: '13', related: 'ticket' }
+  const wrapper = mount(ProcessTemplateList, { attachTo: document.body,
+    global: { stubs: { ProcessTemplateEditor: true } } })
+  await flushPromises()
+  await wrapper.find('input[placeholder="搜索流程模板"]').setValue('其他流程')
+  await flushPromises()
+  const searchCall = api.listProcessTemplates.mock.calls.find(([params]) => params.keyword === '其他流程')
+  expect(searchCall?.[0].process_id).toBeUndefined()
   wrapper.unmount()
 })

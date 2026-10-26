@@ -82,6 +82,7 @@ export interface HostQuery {
   page?: number
   page_size?: number
   keyword?: string
+  host_id?: number
   name_only?: boolean
   platform?: string
   region?: string

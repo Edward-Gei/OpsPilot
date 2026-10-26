@@ -56,6 +56,21 @@ def _make_xlsx(rows: list[list]) -> bytes:
 
 
 class TestHostCrud:
+    async def test_host_id_filter_keeps_only_related_host_in_list_and_export(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        first_id = await _create_host(client, headers, hostname="shared-host", ip="10.9.8.1")
+        await _create_host(client, headers, hostname="shared-host", ip="10.9.8.2")
+
+        params = {"host_id": first_id, "keyword": "shared-host"}
+        listed = await client.get("/api/v1/cmdb/hosts", params=params, headers=headers)
+        assert listed.json()["data"]["total"] == 1
+        assert [item["id"] for item in listed.json()["data"]["items"]] == [first_id]
+
+        exported = await client.get("/api/v1/cmdb/hosts/export", params=params, headers=headers)
+        rows = list(load_workbook(BytesIO(exported.content)).active.values)
+        assert len(rows) == 2
+        assert rows[1][1] == "10.9.8.1"
+
     async def test_host_visible_columns_sort_before_pagination(self, client):
         headers = auth_header(await login_for_tokens(client, "ops1"))
         high_id = await _create_host(

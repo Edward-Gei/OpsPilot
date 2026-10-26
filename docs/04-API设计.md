@@ -80,7 +80,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/cmdb/hosts` | `cmdb:read` | 分页、可见业务列关键字、平台/区域/环境/状态筛选及列排序 |
+| GET | `/cmdb/hosts` | `cmdb:read` | 分页、可见业务列关键字、`host_id` 精确筛选、平台/区域/环境/状态筛选及列排序 |
 | POST | `/cmdb/hosts` | `cmdb:write` | 新建主机，内网 IP 唯一 |
 | GET | `/cmdb/hosts/{id}` | `cmdb:read` | 主机详情和关联应用 |
 | PUT | `/cmdb/hosts/{id}` | `cmdb:write` | 编辑主机 |
@@ -88,7 +88,7 @@
 | GET | `/cmdb/hosts/suggest` | `cmdb:read` | 平台/区域/主机系列补全 |
 | GET | `/cmdb/hosts/import-template` | `cmdb:import` | 下载 Excel 模板 |
 | POST | `/cmdb/hosts/import` | `cmdb:import` | 逐行校验、可选存在即更新 |
-| GET | `/cmdb/hosts/export` | `cmdb:read` | 导出当前筛选，并沿用指定列排序 |
+| GET | `/cmdb/hosts/export` | `cmdb:read` | 导出当前筛选（含 `host_id`），并沿用指定列排序 |
 
 主机列表的 `sort_by` 可取 `hostname`、`ip`、`public_ip`、`project`、`ri`、`host_series`、`platform`、`region`、`os`、`spec`、`environment`、`status`、`ssh_port`、`created_at`；`sort_order` 为 `asc` 或 `desc`。排序先于分页，文本列（包括 IP）按数据库文本顺序，SSH 端口按数值；资源配置 `spec` 按 CPU、内存、磁盘数值依次比较，空值始终置后，同值按 ID 倒序。默认列表按 ID 倒序，默认导出按 ID 升序。关键词匹配除时间、操作外的显示业务列，包括资源配置的单位和缺失值占位文本及状态中文文案；列表和导出使用相同规则。`name_only=true` 保留原主机名/内网 IP 关键词范围，供全局搜索使用。
 
@@ -178,7 +178,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/process-templates` | `template:read` | 分页；`keyword` 匹配流程名、步骤数、引用数、执行策略与状态显示文案；`name_only=true` 时仅匹配名称 |
+| GET | `/process-templates` | `template:read` | 分页；`keyword` 匹配流程名、步骤数、引用数、执行策略与状态显示文案；`process_id` 按 ID 精确筛选；`name_only=true` 时仅匹配名称 |
 | POST | `/process-templates` | `template:write` | 创建步骤、审批角色和执行策略 |
 | GET | `/process-templates/{id}` | `template:read` | 流程及步骤详情 |
 | PUT | `/process-templates/{id}` | `template:write` | 全量更新 |
@@ -189,14 +189,14 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/templates` | `template:read` | 分页；`keyword` 匹配模板名、类型、作业主机、流程模板、可见角色与状态显示文案；`name_only=true` 时仅匹配名称 |
+| GET | `/templates` | `template:read` | 分页；`keyword` 匹配模板名、类型、作业主机、流程模板、可见角色与状态显示文案；`template_id` 按 ID 精确筛选；`name_only=true` 时仅匹配名称 |
 | POST | `/templates` | `template:write` | 创建工单入口、参数定义和可选同模板并发控制 |
 | GET | `/templates/{id}` | `template:read` | 入口详情和流程引用 |
 | PUT | `/templates/{id}` | `template:write` | 全量更新；并发控制开关对后续提交立即生效 |
 | PUT | `/templates/{id}/status` | `template:write` | 启停 |
 | DELETE | `/templates/{id}` | `template:delete` | 有进行中工单时拒绝 |
 
-`GET /templates` 的列表项返回 `job_host_name`、`process_template_name`，供列表直接展示关联名称，不受作业主机和流程模板候选的分页范围影响。
+`GET /templates` 的列表项返回 `job_host_name`、`process_template_name`，供列表直接展示关联名称，不受作业主机和流程模板候选的分页范围影响。应用、工单模板等页面的关联链接打开目标详情时，同时在目标列表搜索框回填名称并按 ID 精确展示该记录；用户修改搜索词后解除 ID 限制。
 
 模板创建/更新可提交 `app_ids: [应用ID, ...]`，仅允许存在且不重复的正整数 ID；`[]` 解除全部绑定。创建时省略表示不绑定，更新时省略则保留原关联，以兼容旧客户端；显式 `null` 无效。创建非空绑定及更新显式提交 `app_ids` 时额外要求 `cmdb:read`，候选应用复用分页 `GET /cmdb/apps`。
 
@@ -335,7 +335,7 @@ notify:read notify:write notify:test system:config
 | GET | `/approval-todo/{version_id}/content` | 当前审批角色成员或 admin | 返回候选及冻结旧正式版本的差异对照；双方按 `secret:read` 脱敏，无权或候选已处理时返回 404 |
 | POST | `/discover`、`/import-tasks` | `config:write` | 发现远端资源、创建多选接入任务；任务返回 `202` |
 | GET | `/import-tasks` | `config:read` | 最近 20 项接入任务及逐项结果 |
-| GET/POST | `/files` | `config:read` / `config:write` | 分页列表、手工新建本地配置与草稿 |
+| GET/POST | `/files` | `config:read` / `config:write` | 分页列表（可用 `file_id` 精确筛选）、手工新建本地配置与草稿 |
 | GET/PUT | `/files/{id}` | `config:read` / `config:write` | 详情、名称、审批角色与 CMDB 多对多关联 |
 | POST/DELETE | `/files/{id}/archive`、`/files/{id}` | `config:delete` | 先归档，再删除本地记录；永不删除远端 |
 | GET/PUT/DELETE | `/files/{id}/draft` | `config:read` / `config:write` | 读取、保存、丢弃草稿 |
@@ -347,7 +347,7 @@ notify:read notify:write notify:test system:config
 | GET/POST | `/files/{id}/drift`、`/files/{id}/drift/import` | `config:read` / `config:write` | 双栏脱敏快照包含 `latest_snapshot_id`；导入仅创建内部正式版本，不写外部 |
 | GET | `/tasks/{id}`、`/files/{id}/tasks` | `config:read` | 查询任务逐项进度、单文件最近 50 项任务摘要 |
 
-`GET /files` 支持 `keyword` 匹配配置文件名、平台实例、远端定位值、格式、关联应用数、审批角色、当前版本和状态显示文案，不检索配置正文；另可用 `platform_instance_id` 筛选实例、用 `status` 筛选标签（`clean` 一致、`drifted` 存在漂移、`remote_missing` 远端缺失、`sync_failed` 同步失败、`unpublished` 待首次发布、`archived` 已归档）。筛选可组合，计数和分页均基于筛选结果；归档优先于漂移状态，一致仅包含已有正式版本的活跃文件。`sort_by=last_synced_at` 配合 `sort_order=asc|desc` 按最近同步时间排序，未同步记录始终置后，同时间按 ID 降序；未指定排序字段时保持 ID 降序。
+`GET /files` 支持 `keyword` 匹配配置文件名、平台实例、远端定位值、格式、关联应用数、审批角色、当前版本和状态显示文案，不检索配置正文；另可用 `file_id` 按 ID 精确筛选、`platform_instance_id` 筛选实例、`status` 筛选标签（`clean` 一致、`drifted` 存在漂移、`remote_missing` 远端缺失、`sync_failed` 同步失败、`unpublished` 待首次发布、`archived` 已归档）。筛选可组合，计数和分页均基于筛选结果；归档优先于漂移状态，一致仅包含已有正式版本的活跃文件。`sort_by=last_synced_at` 配合 `sort_order=asc|desc` 按最近同步时间排序，未同步记录始终置后，同时间按 ID 降序；未指定排序字段时保持 ID 降序。应用详情中的关联配置文件进入配置文件列表，搜索框显示文件名且仅列出该文件，不自动进入查看详情。
 
 文件格式限定 `properties`、YAML、JSON、TEXT 和 Consul KV；仅生产环境。正文响应基于 `secret:read` 脱敏，敏感键、服务账号 JSON 字符串和带签名/令牌参数的 URL 用占位符隐藏；无密钥权限的编辑只能保留这些既有值。任务错误和审计不包含正文与凭据。
 版本比较响应包含 `version_id`、`version_no`、`content_format`、`content`、`base_version_id`、`base_version_no`、`base_content` 和 `has_changes`。审批正文接口额外保留 `file_id`、`file_name`。生成候选或导入漂移时冻结当前正式版本作为基准，跳过未生效候选；无旧正式版本时基准 ID/版本号为空、正文为空字符串。双方保留注释，`has_changes` 根据原始正文判断，敏感值脱敏后内容相同仍提示存在隐藏变更。历史版本不会随后续发布切换基准。旧数据由迁移 `0024` 按现存发布时间和版本号回填；此前重新发布已覆盖的发布时间无法完整还原，因此旧记录的回填仅使用仍留存的时间信息。

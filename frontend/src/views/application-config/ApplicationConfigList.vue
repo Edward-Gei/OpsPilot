@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { CloudSyncOutlined, DeleteOutlined, EditOutlined, EyeOutlined, FileTextOutlined, PlusOutlined, SearchOutlined, SettingOutlined } from '@ant-design/icons-vue'
 import * as configApi from '@/api/applicationConfig'
@@ -11,6 +11,7 @@ import PlatformInstanceDrawer from './PlatformInstanceDrawer.vue'
 import DriftCompareDrawer from './DriftCompareDrawer.vue'
 
 const router = useRouter()
+const route = useRoute()
 const userStore = useUserStore()
 const canWrite = computed(() => userStore.hasPerm('config:write'))
 const canDelete = computed(() => userStore.hasPerm('config:delete'))
@@ -19,6 +20,10 @@ const loading = ref(false)
 const deletingId = ref<number | null>(null)
 const items = ref<configApi.ConfigFileBrief[]>([])
 const total = ref(0)
+const focusedFileId = ref<number | undefined>()
+const focusedFileName = ref('')
+let listRequestId = 0
+let keywordEdited = false
 const query = reactive({
   page: 1, page_size: 20, keyword: '',
   platform_instance_id: undefined as number | undefined,
@@ -72,21 +77,36 @@ function statusText(file: configApi.ConfigFileBrief) {
 }
 
 async function load() {
+  const requestId = ++listRequestId
   loading.value = true
   try {
     const data = await configApi.listConfigFiles({
       page: query.page, page_size: query.page_size, keyword: query.keyword || undefined,
+      file_id: focusedFileId.value,
       platform_instance_id: query.platform_instance_id, status: query.status,
       sort_by: query.sort_by, sort_order: query.sort_order,
     })
-    items.value = data.items
-    total.value = data.total
+    if (requestId === listRequestId) {
+      items.value = data.items
+      total.value = data.total
+    }
   } finally {
-    loading.value = false
+    if (requestId === listRequestId) loading.value = false
   }
 }
 
-function onSearch() { query.page = 1; void load() }
+function onSearch() {
+  if (focusedFileId.value !== undefined && query.keyword !== focusedFileName.value) {
+    focusedFileId.value = undefined
+    void router.replace({ path: route.path })
+  }
+  query.page = 1
+  void load()
+}
+function onKeywordChange() {
+  keywordEdited = true
+  if (focusedFileId.value !== undefined && query.keyword !== focusedFileName.value) onSearch()
+}
 async function loadInstances() {
   instanceLoading.value = true
   try {
@@ -209,7 +229,24 @@ function onCreated(result: { fileId?: number; task?: configApi.ConfigTask }) {
   if (result.fileId) void router.push(`/application-configs/${result.fileId}/edit`)
 }
 
-onMounted(() => { void load(); void loadImportTasks(); void loadInstances() })
+onMounted(() => {
+  const fileId = typeof route.query.file_id === 'string' ? Number(route.query.file_id) : NaN
+  if (route.query.related === 'app' && Number.isSafeInteger(fileId) && fileId > 0) {
+    void configApi.getConfigFile(fileId).then((file) => {
+      if (keywordEdited) {
+        void router.replace({ path: route.path })
+        void load()
+        return
+      }
+      focusedFileId.value = fileId
+      focusedFileName.value = file.name
+      query.keyword = file.name
+      void load()
+    }).catch(() => { void router.replace({ path: route.path }); void load() })
+  } else void load()
+  void loadImportTasks()
+  void loadInstances()
+})
 onBeforeUnmount(() => {
   for (const fileId of syncPollTimers.keys()) stopSyncPolling(fileId)
   syncTaskIds.clear()
@@ -226,7 +263,7 @@ onBeforeUnmount(() => {
       <div class="op-hero-extra"><div class="op-hero-stat"><b>{{ total }}</b><span>配置文件</span></div></div>
     </div>
     <div class="config-toolbar">
-      <a-input v-model:value="query.keyword" class="config-search" allow-clear placeholder="搜索配置文件" @press-enter="onSearch">
+      <a-input v-model:value="query.keyword" class="config-search" allow-clear placeholder="搜索配置文件" @press-enter="onSearch" @change="onKeywordChange">
         <template #prefix><SearchOutlined /></template>
       </a-input>
       <a-select v-model:value="query.platform_instance_id" class="config-filter" allow-clear show-search

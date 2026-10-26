@@ -140,6 +140,7 @@ async def export_hosts(
     session: DbSession,
     actor: User = Depends(require_perm("cmdb:read")),
     keyword: str | None = None,
+    host_id: int | None = Query(None, ge=1),
     name_only: bool = False,
     platform: str | None = None,
     region: str | None = None,
@@ -150,7 +151,7 @@ async def export_hosts(
 ) -> Response:
     """导出与列表相同筛选语义的全量结果（HOST-07）。"""
     hosts = await cmdb_service.iter_hosts_filtered(
-        session, keyword=keyword, platform=platform, region=region,
+        session, keyword=keyword, host_id=host_id, platform=platform, region=region,
         environment=environment, status=status, name_only=name_only,
         sort_by=sort_by, sort_order=sort_order,
     )
@@ -167,6 +168,7 @@ async def list_hosts(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     keyword: str | None = None,
+    host_id: int | None = Query(None, ge=1),
     name_only: bool = False,
     platform: str | None = None,
     region: str | None = None,
@@ -177,7 +179,7 @@ async def list_hosts(
 ) -> dict:
     """分页查主机；关键词匹配可见业务列。"""
     hosts, total = await cmdb_service.list_hosts(
-        session, page=page, page_size=page_size, keyword=keyword,
+        session, page=page, page_size=page_size, keyword=keyword, host_id=host_id,
         platform=platform, region=region, environment=environment, status=status,
         name_only=name_only,
         sort_by=sort_by, sort_order=sort_order,

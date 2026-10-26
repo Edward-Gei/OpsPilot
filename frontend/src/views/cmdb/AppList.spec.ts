@@ -56,12 +56,12 @@ it('应用详情以三列表格展示关联模板、流程模板和启停状态�
   const wrapper = mount(AppList, { attachTo: document.body })
   await flushPromises()
   expect(document.body.textContent).toContain('关联工单模板（2）')
-  const table = document.querySelector('a[href="/job/templates/tickets?id=13"]')?.closest('table')
+  const table = document.querySelector('a[href="/job/templates/tickets?id=13&related=app"]')?.closest('table')
   expect(table).not.toBeNull()
   expect([...table!.querySelectorAll('thead th')].map(item => item.textContent)).toEqual(['模板名称', '流程模板', '状态'])
-  expect(document.querySelector('a[href="/job/templates/processes?id=23"]')?.textContent).toBe('订单发布流程')
+  expect(document.querySelector('a[href="/job/templates/processes?id=23&related=app"]')?.textContent).toBe('订单发布流程')
   expect([...table!.querySelectorAll('tbody tr')].map(item => item.lastElementChild?.textContent)).toEqual(['启用', '停用'])
-  expect(document.querySelector('a[href="/job/templates/tickets?id=13"]')?.textContent).toBe('订单发布入口')
+  expect(document.querySelector('a[href="/job/templates/tickets?id=13&related=app"]')?.textContent).toBe('订单发布入口')
   wrapper.unmount()
 })
 
@@ -76,8 +76,8 @@ it('点击应用名打开该应用详情，关联主机和配置提供对应详�
   await nameLink.trigger('click')
   await flushPromises()
   expect(document.querySelector('.ant-drawer-title')?.textContent).toBe('订单应用')
-  expect(document.querySelector('a[href="/cmdb/hosts?id=21"]')?.textContent).toBe('demo-host')
-  expect(document.querySelector('a[href="/application-configs/11"]')?.textContent).toBe('common.yaml')
+  expect(document.querySelector('a[href="/cmdb/hosts?id=21&related=app"]')?.textContent).toBe('demo-host')
+  expect(document.querySelector('a[href="/application-configs?file_id=11&related=app"]')?.textContent).toBe('common.yaml')
   wrapper.unmount()
 })
 
@@ -90,7 +90,7 @@ it('没有配置读取权限时仍展示关联配置名称，但不提供详情�
   detailButton.click()
   await flushPromises()
   expect(document.body.textContent).toContain('common.yaml')
-  expect(document.querySelector('a[href="/application-configs/11"]')).toBeNull()
+  expect(document.querySelector('a[href="/application-configs?file_id=11&related=app"]')).toBeNull()
   wrapper.unmount()
 })
 
@@ -119,6 +119,19 @@ it('主机详情链接按 ID 直达，不依赖当前列表记录', async () => 
 
 it('从主机关联应用跳转时打开详情并只列出该应用', async () => {
   api.routeQuery = { id: '7', related: 'host' }
+  api.listApps.mockImplementation(async (params: { app_id?: number }) =>
+    params.app_id === 7 ? { items: [app], total: 1 } : { items: [app, { ...app, id: 8, name: '订单应用扩展' }], total: 2 })
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  expect(document.querySelector('.ant-drawer-title')?.textContent).toBe('订单应用')
+  expect(wrapper.find<HTMLInputElement>('input[placeholder="搜索应用信息"]').element.value).toBe('订单应用')
+  expect(api.listApps).toHaveBeenCalledWith(expect.objectContaining({ app_id: 7 }))
+  expect(wrapper.findAll('.ant-table-tbody tr[data-row-key]')).toHaveLength(1)
+  wrapper.unmount()
+})
+
+it.each(['ticket', 'config'])('从 %s 关联应用跳转时搜索框回填并只列出目标应用', async (related) => {
+  api.routeQuery = { id: '7', related }
   api.listApps.mockImplementation(async (params: { app_id?: number }) =>
     params.app_id === 7 ? { items: [app], total: 1 } : { items: [app, { ...app, id: 8, name: '订单应用扩展' }], total: 2 })
   const wrapper = mount(AppList, { attachTo: document.body })

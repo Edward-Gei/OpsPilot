@@ -77,8 +77,10 @@ def _process_snapshot(process: ProcessTemplate, steps: list[ProcessStep]) -> dic
 
 async def list_process_templates(session: AsyncSession, *, page: int, page_size: int,
                                  keyword: str | None = None, status: str | None = None,
-                                 name_only: bool = False):
+                                 name_only: bool = False, process_id: int | None = None):
     query = select(ProcessTemplate)
+    if process_id is not None:
+        query = query.where(ProcessTemplate.id == process_id)
     if keyword:
         like = f"%{keyword}%"
         if name_only:
@@ -171,8 +173,11 @@ async def delete_process_template(session: AsyncSession, process_id: int) -> Pro
 
 async def list_templates(session: AsyncSession, *, page: int, page_size: int, keyword: str | None = None,
                          type_: str | None = None, status: str | None = None,
-                         process_template_id: int | None = None, name_only: bool = False):
+                         process_template_id: int | None = None, name_only: bool = False,
+                         template_id: int | None = None):
     query = select(TicketTemplate)
+    if template_id is not None:
+        query = query.where(TicketTemplate.id == template_id)
     if keyword:
         like = f"%{keyword}%"
         if name_only:

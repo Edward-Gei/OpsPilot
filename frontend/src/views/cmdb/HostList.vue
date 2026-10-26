@@ -50,6 +50,8 @@ const items = ref<cmdbApi.HostItem[]>([])
 const total = ref(0)
 const route = useRoute()
 const router = useRouter()
+const focusedHostId = ref<number | undefined>()
+let listRequestId = 0
 
 const query = reactive({
   page: 1,
@@ -84,12 +86,14 @@ const columns = ref(makeResizable([
 
 /** 拉取主机列表（携带全部筛选条件） */
 async function loadList() {
+  const requestId = ++listRequestId
   loading.value = true
   try {
     const data = await cmdbApi.listHosts({
       page: query.page,
       page_size: query.page_size,
       keyword: query.keyword || undefined,
+      host_id: focusedHostId.value,
       platform: query.platform || undefined,
       region: query.region || undefined,
       environment: query.environment,
@@ -97,11 +101,13 @@ async function loadList() {
       sort_by: query.sort_by,
       sort_order: query.sort_order,
     })
-    items.value = data.items
-    total.value = data.total
-    selectedKeys.value = []
+    if (requestId === listRequestId) {
+      items.value = data.items
+      total.value = data.total
+      selectedKeys.value = []
+    }
   } finally {
-    loading.value = false
+    if (requestId === listRequestId) loading.value = false
   }
 }
 
@@ -156,8 +162,16 @@ function refreshAll() {
 }
 
 function onSearch() {
+  if (focusedHostId.value !== undefined && query.keyword !== detail.value?.hostname) {
+    focusedHostId.value = undefined
+    void router.replace({ path: route.path })
+  }
   query.page = 1
   loadList()
+}
+
+function onKeywordChange() {
+  if (focusedHostId.value !== undefined && query.keyword !== detail.value?.hostname) onSearch()
 }
 
 function onTableChange(
@@ -347,6 +361,7 @@ async function onExport() {
   try {
     await cmdbApi.exportHosts({
       keyword: query.keyword || undefined,
+      host_id: focusedHostId.value,
       platform: query.platform || undefined,
       region: query.region || undefined,
       environment: query.environment,
@@ -378,7 +393,19 @@ async function openDetail(row: Pick<cmdbApi.HostItem, 'id'>) {
 onMounted(() => {
   // 应用关联主机链接按 ID 直达详情，不依赖目标是否出现在当前分页。
   const qid = typeof route.query.id === 'string' ? Number(route.query.id) : NaN
-  if (Number.isSafeInteger(qid) && qid > 0) void openDetail({ id: qid }).catch(() => { detailVisible.value = false })
+  if (Number.isSafeInteger(qid) && qid > 0) {
+    if (route.query.related === 'app') focusedHostId.value = qid
+    void openDetail({ id: qid }).then(() => {
+      if (focusedHostId.value === qid) query.keyword = detail.value?.hostname || ''
+    }).catch(() => {
+      detailVisible.value = false
+      if (focusedHostId.value === qid) {
+        focusedHostId.value = undefined
+        void router.replace({ path: route.path })
+        loadList()
+      }
+    })
+  }
   // 全局搜索跳转：?keyword= 带入搜索框自动过滤，随后清掉 query 避免刷新残留（SEARCH-04）
   const qkw = route.query.keyword
   if (typeof qkw === 'string' && qkw) {
@@ -413,6 +440,7 @@ onMounted(() => {
         class="kw"
         allow-clear
         @press-enter="onSearch"
+        @change="onKeywordChange"
       >
         <template #prefix><SearchOutlined /></template>
       </a-input>

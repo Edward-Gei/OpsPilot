@@ -164,6 +164,7 @@ export interface ConfigFileQuery {
   page: number
   page_size: number
   keyword?: string
+  file_id?: number
   platform_instance_id?: number
   status?: ConfigListStatus
   sort_by?: 'last_synced_at'

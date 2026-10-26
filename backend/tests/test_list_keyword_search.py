@@ -102,6 +102,26 @@ async def test_process_template_search_counts_strategy_and_status(db_factory):
         assert total == 0
 
 
+async def test_template_lists_filter_exact_id_before_pagination(db_factory):
+    async with db_factory() as session:
+        first = ProcessTemplate(name="related-flow", status="enabled")
+        second = ProcessTemplate(name="related-flow-extra", status="enabled")
+        session.add_all([first, second])
+        await session.flush()
+        one = TicketTemplate(name="related-entry", type="release", job_host_id=1,
+                             process_template_id=first.id)
+        two = TicketTemplate(name="related-entry-extra", type="release", job_host_id=1,
+                             process_template_id=second.id)
+        session.add_all([one, two])
+        await session.commit()
+        process_rows, process_total = await template_service.list_process_templates(
+            session, page=1, page_size=1, keyword="related-flow", process_id=first.id)
+        assert process_total == 1 and [row.id for row in process_rows] == [first.id]
+        rows, total = await template_service.list_templates(
+            session, page=1, page_size=1, keyword="related-entry", template_id=one.id)
+        assert total == 1 and [row.id for row in rows] == [one.id]
+
+
 async def test_ticket_template_search_associations_roles_and_name_only(db_factory, seed):
     async with db_factory() as session:
         process = ProcessTemplate(name="linked-flow")

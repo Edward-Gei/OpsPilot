@@ -126,7 +126,7 @@ export function defaultExecStrategy(): ExecStrategy {
   return { timeout: 600, fail_fast: true, kill_on_stop: false }
 }
 
-export function listProcessTemplates(params: { page?: number; page_size?: number; keyword?: string; status?: string; name_only?: boolean } = {}) {
+export function listProcessTemplates(params: { page?: number; page_size?: number; keyword?: string; status?: string; name_only?: boolean; process_id?: number } = {}) {
   return request<PageResult<ProcessTemplateItem>>({ url: '/process-templates', method: 'get', params })
 }
 
@@ -195,6 +195,7 @@ export function listTemplates(params: {
   type?: string
   status?: string
   process_template_id?: number
+  template_id?: number
 }) {
   return request<PageResult<TemplateItem>>({ url: '/templates', method: 'get', params })
 }
