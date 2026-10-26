@@ -26,8 +26,7 @@ function toggleSetting(type: string) {
 // ---------- 各配置块的编辑状态 ----------
 const mfaPolicy = ref<'off' | 'optional' | 'required'>('off')
 const tokenPolicy = reactive({
-  access_minutes: null as number | null,
-  refresh_days: null as number | null,
+  session_hours: 8,
 })
 const pwdPolicy = reactive({
   min_length: 8,
@@ -82,8 +81,7 @@ async function loadConfigs() {
     mfaPolicy.value = (cfg['mfa.policy'] as typeof mfaPolicy.value) || 'off'
 
     const token = (cfg['token.policy'] as Record<string, number | null>) || {}
-    tokenPolicy.access_minutes = token.access_minutes ?? null
-    tokenPolicy.refresh_days = token.refresh_days ?? null
+    tokenPolicy.session_hours = token.session_hours ?? 8
 
     Object.assign(pwdPolicy, (cfg['password.policy'] as object) || {})
 
@@ -107,7 +105,7 @@ async function save(name: string, configs: Record<string, unknown>) {
   saving.value = name
   try {
     await sysApi.updateConfigs(configs)
-    message.success('已保存，即时生效')
+    message.success(name === 'security' ? '已保存；最长登录时长对新登录生效' : '已保存，即时生效')
   } catch {
     /* 错误提示由拦截器统一弹出 */
   } finally {
@@ -115,12 +113,17 @@ async function save(name: string, configs: Record<string, unknown>) {
   }
 }
 
-const onSaveSecurity = () =>
-  save('security', {
+function onSaveSecurity() {
+  if (!Number.isInteger(tokenPolicy.session_hours) || tokenPolicy.session_hours < 1 || tokenPolicy.session_hours > 168) {
+    message.warning('最长登录时长须为 1-168 小时')
+    return
+  }
+  return save('security', {
     'mfa.policy': mfaPolicy.value,
     'token.policy': { ...tokenPolicy },
     'password.policy': { ...pwdPolicy },
   })
+}
 
 function onSaveLdap() {
   if (ldapEnabled.value && (!ldapForm.server_url || !ldapForm.base_dn)) {
@@ -159,7 +162,7 @@ onMounted(loadConfigs)
         <div class="op-hero-icon"><SettingOutlined /></div>
         <div>
           <div class="op-hero-title">系统设置</div>
-          <div class="op-hero-sub">安全策略与 SSO 认证源配置，保存后即时生效</div>
+          <div class="op-hero-sub">安全策略与 SSO 认证源配置</div>
         </div>
         <div class="op-hero-extra">
           <div class="op-hero-stat"><b>{{ mfaPolicyLabel }}</b><span>MFA 策略</span></div>
@@ -175,7 +178,7 @@ onMounted(loadConfigs)
           <div class="op-icon-grad block-icon"><SafetyCertificateOutlined /></div>
           <div class="block-title">
             <b>安全策略</b>
-            <span>MFA 多因子认证、登录令牌有效期与密码策略</span>
+            <span>MFA 多因子认证、登录时长与密码策略</span>
           </div>
           <a-button type="primary" :loading="saving === 'security'" @click.stop="onSaveSecurity">
             保存
@@ -197,30 +200,21 @@ onMounted(loadConfigs)
         </div>
 
         <div class="field">
-          <div class="field-label"><ClockCircleOutlined /> 登录令牌有效期</div>
+          <div class="field-label"><ClockCircleOutlined /> 登录时长</div>
           <a-space :size="16" wrap :style="{ marginBottom: 0 }">
             <span class="inline-item">
-              Access Token
+              最长登录时长
               <a-input-number
-                v-model:value="tokenPolicy.access_minutes"
-                :min="5"
-                :max="1440"
-                placeholder="默认 15"
-              />
-              分钟
-            </span>
-            <span class="inline-item">
-              Refresh Token
-              <a-input-number
-                v-model:value="tokenPolicy.refresh_days"
+                v-model:value="tokenPolicy.session_hours"
                 :min="1"
-                :max="90"
-                placeholder="默认 7"
+                :max="168"
+                :precision="0"
+                placeholder="默认 8"
               />
-              天
+              小时
             </span>
           </a-space>
-          <div class="field-tip">留空使用部署默认值；修改后对新签发的令牌生效，已登录会话不受影响。</div>
+          <div class="field-tip">从登录时起算，持续操作不会延长；到期后需重新登录。修改后对新登录生效。</div>
         </div>
 
         <div class="field">

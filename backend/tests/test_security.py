@@ -1,20 +1,23 @@
 """core/security 纯逻辑单测：JWT / 密码策略 / AES-GCM / TOTP。"""
+from datetime import datetime, timedelta, timezone
+
 import pyotp
 import pytest
 
 from app.core import security
-from app.core.config import settings
 from app.core.response import BizError, Errors
 
 
 def test_token_roundtrip():
     """签发与解码往返：claims 完整、scope 匹配。"""
-    token, jti, expires_in = security.create_token(1, "admin", security.SCOPE_ACCESS)
+    deadline = int(datetime.now(timezone.utc).timestamp()) + 8 * 3600
+    token, jti, expires_in = security.create_token(1, "admin", security.SCOPE_ACCESS, session_exp=deadline)
     payload = security.decode_token(token, security.SCOPE_ACCESS)
     assert payload["sub"] == "1"
     assert payload["username"] == "admin"
     assert payload["jti"] == jti
-    assert expires_in == settings.access_token_minutes * 60
+    assert payload["session_exp"] == deadline
+    assert expires_in == 15 * 60
 
 
 def test_token_scope_mismatch():
@@ -25,10 +28,10 @@ def test_token_scope_mismatch():
     assert exc.value.code == Errors.UNAUTHORIZED
 
 
-def test_token_expired(monkeypatch):
+def test_token_expired():
     """过期令牌抛 40102（前端据此触发刷新）。"""
-    monkeypatch.setattr(settings, "access_token_minutes", -1)
-    token, _, _ = security.create_token(1, "admin", security.SCOPE_ACCESS)
+    token, _, _ = security.create_token(1, "admin", security.SCOPE_ACCESS,
+                                      ttl=timedelta(seconds=-1))
     with pytest.raises(BizError) as exc:
         security.decode_token(token, security.SCOPE_ACCESS)
     assert exc.value.code == Errors.TOKEN_EXPIRED

@@ -226,7 +226,7 @@ onBeforeUnmount(() => {
       <div class="op-hero-extra"><div class="op-hero-stat"><b>{{ total }}</b><span>配置文件</span></div></div>
     </div>
     <div class="config-toolbar">
-      <a-input v-model:value="query.keyword" class="config-search" allow-clear placeholder="搜索配置文件名称" @press-enter="onSearch">
+      <a-input v-model:value="query.keyword" class="config-search" allow-clear placeholder="搜索配置文件" @press-enter="onSearch">
         <template #prefix><SearchOutlined /></template>
       </a-input>
       <a-select v-model:value="query.platform_instance_id" class="config-filter" allow-clear show-search

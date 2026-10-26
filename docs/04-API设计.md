@@ -33,7 +33,7 @@
 | GET | `/auth/reset-password/validate` | 公开 | `token` 查询参数；返回 `valid`、`expired`、`used` 或 `invalid` |
 | POST | `/auth/reset-password` | 公开 | `{token,new_password}`；成功后吊销全部 Refresh Token |
 | GET | `/auth/password-policy` | 公开 | 返回当前密码策略 |
-| POST | `/auth/refresh` | 公开 | `{refresh_token}`；旋转并吊销旧 Refresh Token |
+| POST | `/auth/refresh` | 公开 | `{refresh_token}`；旋转并吊销旧 Refresh Token；不得延长首次登录截止时间，到点返回 40102 |
 | POST | `/auth/logout` | 登录 | 吊销当前 Refresh jti |
 | GET | `/auth/me` | 登录 | 当前用户、角色、权限和菜单信息 |
 | PUT | `/auth/me` | 登录 | 修改本人显示名和邮箱 |
@@ -48,6 +48,8 @@
 
 密码重置只面向本地且绑定邮箱的用户。令牌随机生成、Redis 只保存哈希、默认 30 分钟、校验不消费、提交原子单次消费。审计动作严格为 `pwd_reset_requested`、`pwd_reset_success`、`pwd_reset_failed`，失败原因写入详情。
 
+`token.policy` 只接受整数 `session_hours`（1-168，缺省 8）；Access Token 固定 15 分钟，Refresh Token 最长 7 天，两者有效期均受首次登录截止时间限制。新签发的 Access/Refresh JWT 都含 Unix 秒 `session_exp`，刷新沿用原截止时间，`expires_in` 为实际 Access TTL。旧数据库配置中的 `access_minutes` / `refresh_days` 不再生效，读取接口只返回 `session_hours`，缺失时回退 8 小时；新写入含旧字段返回 40001。无 `session_exp` 的旧正式令牌在部署新版本后的首次校验返回 40102，用户需重新登录。
+
 ### 2.2 `/user/tokens`
 
 | 方法 | 路径 | 鉴权 | 说明 |
@@ -60,7 +62,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/users` | `user:read` | 分页、关键字、状态、来源筛选 |
+| GET | `/users` | `user:read` | 分页；`keyword` 匹配用户名、显示名、角色名、来源、状态和 MFA 可见文案，另可筛选状态、来源 |
 | POST | `/users` | `user:write` | 创建本地用户并分配角色 |
 | PUT | `/users/{id}` | `user:write` | 更新资料、状态和角色，不能禁用自己 |
 | PUT | `/users/{id}/password` | `user:write` | 管理员重置本地用户密码：写入新哈希、置首登强制改密并解除锁定；SSO 用户返回业务拒绝。不吊销该用户的 Refresh Token |
@@ -78,7 +80,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/cmdb/hosts` | `cmdb:read` | 分页、关键字、平台/区域/环境/状态筛选 |
+| GET | `/cmdb/hosts` | `cmdb:read` | 分页、可见业务列关键字、平台/区域/环境/状态筛选及列排序 |
 | POST | `/cmdb/hosts` | `cmdb:write` | 新建主机，内网 IP 唯一 |
 | GET | `/cmdb/hosts/{id}` | `cmdb:read` | 主机详情和关联应用 |
 | PUT | `/cmdb/hosts/{id}` | `cmdb:write` | 编辑主机 |
@@ -86,20 +88,23 @@
 | GET | `/cmdb/hosts/suggest` | `cmdb:read` | 平台/区域/主机系列补全 |
 | GET | `/cmdb/hosts/import-template` | `cmdb:import` | 下载 Excel 模板 |
 | POST | `/cmdb/hosts/import` | `cmdb:import` | 逐行校验、可选存在即更新 |
-| GET | `/cmdb/hosts/export` | `cmdb:read` | 导出当前筛选 |
+| GET | `/cmdb/hosts/export` | `cmdb:read` | 导出当前筛选，并沿用指定列排序 |
+
+主机列表的 `sort_by` 可取 `hostname`、`ip`、`public_ip`、`project`、`ri`、`host_series`、`platform`、`region`、`os`、`spec`、`environment`、`status`、`ssh_port`、`created_at`；`sort_order` 为 `asc` 或 `desc`。排序先于分页，文本列（包括 IP）按数据库文本顺序，SSH 端口按数值；资源配置 `spec` 按 CPU、内存、磁盘数值依次比较，空值始终置后，同值按 ID 倒序。默认列表按 ID 倒序，默认导出按 ID 升序。关键词匹配除时间、操作外的显示业务列，包括资源配置的单位和缺失值占位文本及状态中文文案；列表和导出使用相同规则。`name_only=true` 保留原主机名/内网 IP 关键词范围，供全局搜索使用。
 
 ### 4.2 `/cmdb/apps`
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/cmdb/apps` | `cmdb:read` | 应用分页；关键词匹配应用名、所属系统、运维负责人、开发负责人和服务端口，并支持部署方式、项目类型、所属业务线和服务级别筛选及列排序 |
+| GET | `/cmdb/apps` | `cmdb:read` | 应用分页；关键词匹配显示业务列；可用 `app_id` 或已有所属系统名称精确筛选，并支持部署方式、项目类型、所属业务线和服务级别筛选及列排序 |
+| GET | `/cmdb/apps/systems` | `cmdb:read` | 返回去重的已有非空所属系统名称，供应用列表下拉筛选 |
 | POST | `/cmdb/apps` | `cmdb:write` | 创建应用和主机关联 |
 | GET | `/cmdb/apps/{id}` | `cmdb:read` | 应用详情，含关联主机、配置文件元信息及关联工单模板（名称、流程模板、状态）；不含配置正文，无需 `config:read`；模板名称跳转受 `template:read` 控制 |
 | PUT | `/cmdb/apps/{id}` | `cmdb:write` | 编辑应用并全量替换主机关联；请求体省略 `host_ids` 时按默认空列表处理，等同解除全部关联，客户端须回读详情后提交完整列表。该语义与工单模板 `app_ids`（省略则保留原关联）相反 |
 | DELETE | `/cmdb/apps/{id}` | `cmdb:delete` | 删除应用 |
-| GET | `/cmdb/apps/export` | `cmdb:read` | 按当前筛选导出完整用户可见应用台账 |
+| GET | `/cmdb/apps/export` | `cmdb:read` | 按当前筛选导出完整用户可见应用台账，支持 `app_id`、`system_name` 精确筛选 |
 
-应用列表的 `sort_by` 可取 `name`、`language`、`deploy_type`、`project_type`、`host_count`、`business_line`、`system_name`、`service_level`、`ops_owner`、`dev_owner`、`service_port`、`cpu_quota`、`mem_quota`、`description`、`created_at`；`sort_order` 为 `asc` 或 `desc`。排序先于分页，关联主机数按数值排序，服务端口和配额作为文本排序；未指定时按应用 ID 倒序。列表与导出共用关键词匹配规则。
+应用列表的 `sort_by` 可取 `name`、`language`、`deploy_type`、`project_type`、`host_count`、`business_line`、`system_name`、`service_level`、`ops_owner`、`dev_owner`、`service_port`、`cpu_quota`、`mem_quota`、`description`、`created_at`；`sort_order` 为 `asc` 或 `desc`。排序先于分页，关联主机数按数值排序，服务端口和配额作为文本排序；未指定时按应用 ID 倒序。关键词匹配除时间、操作外的显示业务列，包括“1 台”格式的关联主机数及前端/后端等显示文案；列表与导出共用匹配规则。`name_only=true` 保留原应用名、所属系统、运维负责人、开发负责人、服务端口的关键词范围，供全局搜索使用。
 
 ## 5. 凭据和作业主机
 
@@ -107,7 +112,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/credentials` | `credential:read` 或 `secret:read` | 分页和凭据类型筛选，按权限仅返回 SSH 凭据或脚本密钥，永不返回密文 |
+| GET | `/credentials` | `credential:read` 或 `secret:read` | 分页；`keyword` 匹配可见凭据列，另可筛选类型；按权限仅返回 SSH 凭据或脚本密钥，密文既不返回也不参与检索 |
 | POST | `/credentials` | SSH 类型需 `credential:write`；脚本密钥需 `secret:write` | 创建凭据，类型创建后不可修改 |
 | PUT | `/credentials/{id}` | 同创建类型的写权限 | 更新；secret 为空表示保留原密文 |
 | DELETE | `/credentials/{id}` | 同创建类型的删除权限 | SSH 凭据被作业主机引用、脚本密钥被模板或活动工单引用时拒绝 |
@@ -116,7 +121,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/job-hosts` | `job_host:read` | 分页、关键字和启用状态筛选 |
+| GET | `/job-hosts` | `job_host:read` | 分页；`keyword` 匹配可见业务列，最近测试仅匹配结果而不匹配时间；另可筛选启用状态 |
 | POST | `/job-hosts` | `job_host:write` | 创建并绑定 SSH 凭据（拒绝脚本密钥） |
 | GET | `/job-hosts/{id}` | `job_host:read` | 详情，不返回凭据密文 |
 | PUT | `/job-hosts/{id}` | `job_host:write` | 编辑连接信息 |
@@ -136,7 +141,7 @@
 | POST | `/domains/zones/discover` | `domain:write` | 使用 `{provider, credential_id}` 发现可访问的公网 Zone |
 | POST | `/domains/zones` | `domain:write` | 创建 Zone 绑定任务并返回 `202`；请求含 `provider`、`credential_id` 和 `selections`，每个选择项可携带已发现的 `zone_name` |
 | GET | `/domains/zone-bind-tasks/{task_id}` | `domain:read` | 查询绑定任务及每个 Zone 的处理进度与结果 |
-| GET | `/domains/zones` | `domain:read` | 分页读取 Zone 台账，支持 `keyword`、`provider`、`sync_status` 筛选，以及 `sort_by`、`sort_order` 排序 |
+| GET | `/domains/zones` | `domain:read` | 分页读取 Zone 台账，`keyword` 匹配非时间可见列；支持 `provider`、`sync_status` 筛选及列排序 |
 | GET | `/domains/zones/{zone_id}` | `domain:read` | 查询单个 Zone 快照详情 |
 | PUT | `/domains/zones/{zone_id}` | `domain:write` | 仅更新本地 `description` |
 | DELETE | `/domains/zones/{zone_id}` | `domain:delete` | 解除本地绑定并删除本地记录快照，不删除远端 Zone 或记录 |
@@ -150,7 +155,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/domains/zones/{zone_id}/records` | `domain:read` | 分页读取本地记录快照，支持 `keyword`、`record_type`、`read_only` 筛选 |
+| GET | `/domains/zones/{zone_id}/records` | `domain:read` | 分页读取本地记录快照，`keyword` 匹配记录名、类型、TTL、记录值、只读状态与原因；另可按类型和只读状态筛选 |
 | POST | `/domains/zones/{zone_id}/records` | `domain:write` | 新增简单记录集：`owner_name`、`record_type`、`ttl`、`values` |
 | PUT | `/domains/zones/{zone_id}/records/{record_id}` | `domain:write` | 更新已有记录集的 `ttl` 和 `values`，名称与类型不可修改 |
 | DELETE | `/domains/zones/{zone_id}/records/{record_id}` | `domain:delete` | 删除可编辑记录集 |
@@ -173,7 +178,7 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/process-templates` | `template:read` | 分页、关键字和状态筛选 |
+| GET | `/process-templates` | `template:read` | 分页；`keyword` 匹配流程名、步骤数、引用数、执行策略与状态显示文案；`name_only=true` 时仅匹配名称 |
 | POST | `/process-templates` | `template:write` | 创建步骤、审批角色和执行策略 |
 | GET | `/process-templates/{id}` | `template:read` | 流程及步骤详情 |
 | PUT | `/process-templates/{id}` | `template:write` | 全量更新 |
@@ -184,12 +189,14 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/templates` | `template:read` | 分页、关键字、类型、流程模板和状态筛选 |
+| GET | `/templates` | `template:read` | 分页；`keyword` 匹配模板名、类型、作业主机、流程模板、可见角色与状态显示文案；`name_only=true` 时仅匹配名称 |
 | POST | `/templates` | `template:write` | 创建工单入口、参数定义和可选同模板并发控制 |
 | GET | `/templates/{id}` | `template:read` | 入口详情和流程引用 |
 | PUT | `/templates/{id}` | `template:write` | 全量更新；并发控制开关对后续提交立即生效 |
 | PUT | `/templates/{id}/status` | `template:write` | 启停 |
 | DELETE | `/templates/{id}` | `template:delete` | 有进行中工单时拒绝 |
+
+`GET /templates` 的列表项返回 `job_host_name`、`process_template_name`，供列表直接展示关联名称，不受作业主机和流程模板候选的分页范围影响。
 
 模板创建/更新可提交 `app_ids: [应用ID, ...]`，仅允许存在且不重复的正整数 ID；`[]` 解除全部绑定。创建时省略表示不绑定，更新时省略则保留原关联，以兼容旧客户端；显式 `null` 无效。创建非空绑定及更新显式提交 `app_ids` 时额外要求 `cmdb:read`，候选应用复用分页 `GET /cmdb/apps`。
 
@@ -203,7 +210,7 @@
 | GET | `/tickets/templates/{template_id}/form` | `ticket:write` | 参数表单和作业主机/步骤只读预览 |
 | POST | `/tickets/prepare` | `ticket:write` | 执行动态参数脚本并生成短期 `prepare_id` |
 | POST | `/tickets` | `ticket:write` | `{template_id,params,prepare_id?}` 提交工单；同模板并发控制开启且已有活跃执行时返回 `40901`、占用工单号和执行状态 |
-| GET | `/tickets` | `ticket:read` | 分页、工单状态、创建人、关键字（工单号/标题/提交人）、创建时间，以及最新执行实例的 `execution_status`、`has_execution`、`execution_active` 筛选；列表项包含可空 `execution` 摘要 |
+| GET | `/tickets` | `ticket:read` | 分页、工单状态、创建人、关键字（工单号/标题/作业主机快照名/状态文案/提交人）、创建时间，以及最新执行实例的 `execution_status`、`has_execution`、`execution_active` 筛选；列表项包含可空 `execution` 摘要 |
 | GET | `/tickets/todo` | `ticket:approve` | 当前角色待审批列表：服务端取出全部 `approving` 工单后逐单读取当前步骤快照角色过滤，再在内存分页；`total` 兼作菜单角标计数 |
 | GET | `/tickets/todo/events` | `ticket:approve` | `since_seq`（整数，`>=0`，默认 `0`）回放当前用户的待办变更事件；无新事件最长等待 30 秒，返回 `{events:[{seq,kind:"todo.changed"}],last_seq}`，超时返回空 `events` 和原 `since_seq`。客户端必须直接赋值返回的 `last_seq`；若游标大于当前序号，返回一条合成 `todo.changed` 重同步事件和较小的 `last_seq` |
 | GET | `/tickets/{id}` | `ticket:read` | 工单、快照、审批时间线和执行概要 |
@@ -257,10 +264,12 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/audit/logs` | `audit:read` | 时间、操作人、模块、动作、结果和对象关键字组合筛选 |
+| GET | `/audit/logs` | `audit:read` | 时间、操作人模糊匹配及模块/动作/结果精确筛选可组合；`keyword` 模糊匹配非时间可见列（操作人、来源 IP、模块文案、动作、对象和结果文案） |
 | GET | `/audit/logs/export` | `audit:export` | 当前筛选导出 CSV 或 XLSX，最多 100000 行；导出行为写审计 |
 
 安全审计页面的模块列表、详情及筛选使用中文名称，筛选值仍提交原始模块编码。当前写入模块为 `auth`（认证）、`user`（用户）、`cmdb`（资产）、`job`（作业管理）、`domain`（域名管理）、`config`（应用配置）、`ticket`（工单）、`execution`（执行）、`notify`（通知）、`system`（系统）、`audit`（审计）；筛选兼容 `role`（角色）、`credential`（凭据）、`template`（模板）历史编码。
+
+审计列表与导出共用 `keyword` 筛选语义；对象列显示名称时不按隐藏的对象 ID 命中。原有仅匹配对象名称的 `keyword` 语义已扩展。
 
 ## 11. 系统、工作台和搜索
 
@@ -273,7 +282,7 @@
 | GET | `/dashboard/summary` | 登录 | 按权限返回概览各段 |
 | GET | `/dashboard/ticket-trend` | `ticket:read` | 日/周/月/年提单趋势 |
 | GET | `/dashboard/activity-trend` | `ticket:read` 或 `execution:read` | 工单提交与完成执行双系列趋势；无对应权限的系列为 `null` |
-| GET | `/search?keyword=` | 登录 | 按权限裁剪的主机、应用、Zone、工单和模板聚合搜索；Zone 仅搜索名称和描述 |
+| GET | `/search?keyword=` | 登录 | 按权限裁剪的主机、应用、Zone、工单和模板聚合搜索；保留原模块关键词范围，Zone 仅搜索名称、描述和服务商，不搜索 DNS 记录值 |
 
 工作台展示主机、应用、托管 Zone、有效配置文件、本月工单和个人待办六项指标，以及工单与执行趋势、应用配置状态、主机环境与状态、应用部署方式、域名资源与同步、工单状态、DNS 记录类型、今日审计模块八类图表；各项按当前用户读取权限展示。主机状态来自 CMDB 登记值，域名与配置状态来自本地最近同步结果，不代表实时监控。
 
@@ -338,7 +347,7 @@ notify:read notify:write notify:test system:config
 | GET/POST | `/files/{id}/drift`、`/files/{id}/drift/import` | `config:read` / `config:write` | 双栏脱敏快照包含 `latest_snapshot_id`；导入仅创建内部正式版本，不写外部 |
 | GET | `/tasks/{id}`、`/files/{id}/tasks` | `config:read` | 查询任务逐项进度、单文件最近 50 项任务摘要 |
 
-`GET /files` 支持 `keyword` 名称搜索、`platform_instance_id` 实例筛选和 `status` 标签筛选（`clean` 一致、`drifted` 存在漂移、`remote_missing` 远端缺失、`sync_failed` 同步失败、`unpublished` 待首次发布、`archived` 已归档）。筛选可组合，计数和分页均基于筛选结果；归档优先于漂移状态，一致仅包含已有正式版本的活跃文件。`sort_by=last_synced_at` 配合 `sort_order=asc|desc` 按最近同步时间排序，未同步记录始终置后，同时间按 ID 降序；未指定排序字段时保持 ID 降序。
+`GET /files` 支持 `keyword` 匹配配置文件名、平台实例、远端定位值、格式、关联应用数、审批角色、当前版本和状态显示文案，不检索配置正文；另可用 `platform_instance_id` 筛选实例、用 `status` 筛选标签（`clean` 一致、`drifted` 存在漂移、`remote_missing` 远端缺失、`sync_failed` 同步失败、`unpublished` 待首次发布、`archived` 已归档）。筛选可组合，计数和分页均基于筛选结果；归档优先于漂移状态，一致仅包含已有正式版本的活跃文件。`sort_by=last_synced_at` 配合 `sort_order=asc|desc` 按最近同步时间排序，未同步记录始终置后，同时间按 ID 降序；未指定排序字段时保持 ID 降序。
 
 文件格式限定 `properties`、YAML、JSON、TEXT 和 Consul KV；仅生产环境。正文响应基于 `secret:read` 脱敏，敏感键、服务账号 JSON 字符串和带签名/令牌参数的 URL 用占位符隐藏；无密钥权限的编辑只能保留这些既有值。任务错误和审计不包含正文与凭据。
 版本比较响应包含 `version_id`、`version_no`、`content_format`、`content`、`base_version_id`、`base_version_no`、`base_content` 和 `has_changes`。审批正文接口额外保留 `file_id`、`file_name`。生成候选或导入漂移时冻结当前正式版本作为基准，跳过未生效候选；无旧正式版本时基准 ID/版本号为空、正文为空字符串。双方保留注释，`has_changes` 根据原始正文判断，敏感值脱敏后内容相同仍提示存在隐藏变更。历史版本不会随后续发布切换基准。旧数据由迁移 `0024` 按现存发布时间和版本号回填；此前重新发布已覆盖的发布时间无法完整还原，因此旧记录的回填仅使用仍留存的时间信息。

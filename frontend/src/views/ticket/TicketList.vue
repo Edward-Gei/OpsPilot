@@ -86,7 +86,7 @@ const columns = ref(makeResizable([
   { title: '操作', key: 'action', width: 171, fixed: 'right' as const },
 ]))
 
-/** 拉取工单列表（keyword 匹配工单号、标题或提交人） */
+/** 拉取工单列表（keyword 匹配可见业务列） */
 async function loadList() {
   loading.value = true
   try {
@@ -240,7 +240,7 @@ onMounted(() => {
     <div class="toolbar">
       <a-input
         v-model:value="query.keyword"
-        placeholder="搜索工单号/标题/提交人"
+        placeholder="搜索工单"
         class="kw"
         allow-clear
         @press-enter="onSearch"

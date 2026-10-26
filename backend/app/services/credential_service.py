@@ -5,7 +5,7 @@
 - 任何查询接口不返回密文字段，明文仅执行引擎（M5）解密使用；
 - 凭据被作业主机 / 模板引用时删除保护（42201）。
 """
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.response import Errors
@@ -17,6 +17,7 @@ from app.models.application_config import ConfigPlatformInstance
 from app.models.job import Credential
 from app.models.ticket import Ticket
 from app.models.job import TicketTemplate
+from app.services.list_search import label_matches
 
 SCRIPT_SECRET_TYPES = {
     CredentialAuthType.API_TOKEN.value,
@@ -48,11 +49,19 @@ async def list_credentials(
     auth_type: str | None = None,
     auth_types: set[str] | None = None,
 ) -> tuple[list[Credential], int]:
-    """分页查凭据；keyword 模糊匹配名称/登录用户（响应序列化不含密文）。"""
+    """按可见列检索凭据；密文和口令内容始终不参与搜索。"""
     query = select(Credential)
     if keyword:
         like = f"%{keyword}%"
-        query = query.where(Credential.name.like(like) | Credential.login_user.like(like))
+        query = query.where(or_(
+            Credential.name.like(like), Credential.login_user.like(like),
+            Credential.file_name.like(like), Credential.description.like(like),
+            label_matches(Credential.auth_type, keyword, {
+                "password": "SSH 密码", "private_key": "SSH 私钥", "api_token": "API Token",
+                "username_password": "用户名密码", "secret_file": "文本密钥文件",
+            }),
+            Credential.passphrase_enc.is_not(None) if keyword in "有" else False,
+        ))
     if auth_type:
         query = query.where(Credential.auth_type == auth_type)
     if auth_types is not None:

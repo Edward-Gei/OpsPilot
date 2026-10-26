@@ -152,6 +152,22 @@ async def test_config_approval_todo_is_scoped_to_current_members_and_admin(clien
         tasks = (await session.execute(select(ConfigTask).where(ConfigTask.config_version_id == version_id))).scalars().all()
         assert len(tasks) == 1
         assert tasks[0].status == "queued"
+    result_url = f"/api/v1/application-configs/approval-results/{version_id}/publish"
+    queued = await client.get(result_url, headers=ops)
+    assert queued.json()["data"] == {"status": "queued", "last_error": None}
+    assert (await client.get(result_url, headers=admin)).status_code == 404
+    async with db_factory() as session:
+        task = await session.get(ConfigTask, tasks[0].id)
+        task.status = "success"
+        await session.commit()
+    assert (await client.get(result_url, headers=ops)).json()["data"]["status"] == "success"
+    async with db_factory() as session:
+        task = await session.get(ConfigTask, tasks[0].id)
+        task.status = "failed"
+        task.last_error = "远端回读不一致"
+        await session.commit()
+    failed = await client.get(result_url, headers=ops)
+    assert failed.json()["data"] == {"status": "failed", "last_error": "远端回读不一致"}
     assert (await client.get(base, headers=ops)).json()["data"]["total"] == 0
     assert (await client.get("/api/v1/dashboard/summary", headers=ops)).json()["data"]["todo_total"] == 0
 

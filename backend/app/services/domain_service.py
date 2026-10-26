@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import String, cast, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +33,7 @@ from app.models.domain import DnsRecordSet, DnsZone
 from app.models.job import Credential
 from app.schemas.domain import ZoneBindResult, ZoneBindSelection
 from app.services.credential_service import get_credential_or_404
+from app.services.list_search import label_matches
 
 
 COMPATIBLE_AUTH_TYPES = {
@@ -131,6 +132,26 @@ async def get_zone(session: AsyncSession, zone_id: int) -> DnsZone:
     return zone
 
 
+def zone_keyword_condition(keyword: str):
+    """Zone 列表与导出共用可见业务列检索，不包含 DNS 记录值。"""
+    like = f"%{keyword}%"
+    credential_match = select(Credential.id).where(
+        Credential.id == DnsZone.credential_id, Credential.name.like(like)
+    ).correlate(DnsZone).exists()
+    return or_(
+        DnsZone.zone_name.like(like), DnsZone.description.like(like),
+        DnsZone.last_sync_error.like(like), credential_match,
+        cast(DnsZone.record_count, String).like(like),
+        label_matches(DnsZone.provider, keyword, {
+            "aws_route53": "AWS Route 53", "tencent_dnspod": "腾讯云 DNSPod",
+            "google_cloud_dns": "Google Cloud DNS",
+        }),
+        label_matches(DnsZone.sync_status, keyword, {
+            "success": "已同步", "failed": "同步失败", "syncing": "同步中",
+        }),
+    )
+
+
 async def list_zones(
     session: AsyncSession,
     *,
@@ -145,8 +166,7 @@ async def list_zones(
     """分页读取本地 Zone 台账，按名称、说明和状态筛选。"""
     query = select(DnsZone)
     if keyword:
-        like = f"%{keyword}%"
-        query = query.where(DnsZone.zone_name.like(like) | DnsZone.description.like(like))
+        query = query.where(zone_keyword_condition(keyword))
     if provider:
         query = query.where(
             DnsZone.provider == (provider.value if isinstance(provider, DomainProvider) else provider)
@@ -195,7 +215,23 @@ async def list_record_sets(
     await get_zone(session, zone_id)
     query = select(DnsRecordSet).where(DnsRecordSet.zone_id == zone_id)
     if keyword:
-        query = query.where(DnsRecordSet.record_name.like(f"%{keyword}%"))
+        like = f"%{keyword}%"
+        if session.bind.dialect.name == "sqlite":
+            value_item = func.json_each(DnsRecordSet.values).table_valued("value")
+            value_match = (
+                select(1).select_from(value_item)
+                .where(cast(value_item.c.value, String).like(like))
+                .correlate(DnsRecordSet).exists()
+            )
+        else:
+            value_match = func.json_search(DnsRecordSet.values, "one", like).is_not(None)
+        query = query.where(or_(
+            DnsRecordSet.record_name.like(like), DnsRecordSet.record_type.like(like),
+            cast(DnsRecordSet.ttl, String).like(like),
+            value_match,
+            DnsRecordSet.read_only_reason.like(like),
+            label_matches(DnsRecordSet.read_only, keyword, {True: "只读", False: "可编辑"}),
+        ))
     if record_type:
         query = query.where(DnsRecordSet.record_type == record_type)
     if read_only is not None:

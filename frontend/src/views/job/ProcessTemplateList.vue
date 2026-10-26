@@ -80,7 +80,7 @@ function onCopySearch(keyword: string): void {
 async function searchCopyOptions(keyword: string): Promise<void> {
   copySearching.value = true
   try {
-    const data = await api.listProcessTemplates({ page: 1, page_size: 100, keyword: keyword || undefined })
+    const data = await api.listProcessTemplates({ page: 1, page_size: 100, keyword: keyword || undefined, name_only: true })
     copyOptions.value = data.items.map((item) => ({ label: `${item.name}${item.status === 'disabled' ? '（已停用）' : ''}`, value: item.id }))
   } finally {
     copySearching.value = false

@@ -2,7 +2,7 @@
 // 40102 静默刷新重试（单飞）；40103/40104/40105 三态静默透传给登录页处理
 import axios, { AxiosError, type AxiosRequestConfig, type InternalAxiosRequestConfig } from 'axios'
 import { message } from 'ant-design-vue'
-import { clearTokens, getAccessToken, getRefreshToken, setTokens } from './token'
+import { clearTokens, expireIfNeeded, getAccessToken, getRefreshToken, getSessionId, setTokens, waitForTokenChange } from './token'
 
 export interface ApiResponse<T = unknown> {
   code: number
@@ -39,6 +39,7 @@ const http = axios.create({
 
 // 请求拦截：注入 Bearer 头
 http.interceptors.request.use((config) => {
+  expireIfNeeded()
   const token = getAccessToken()
   if (token && !config.headers.Authorization) {
     config.headers.Authorization = `Bearer ${token}`
@@ -52,25 +53,29 @@ let refreshing: Promise<boolean> | null = null
 /** 用 refresh_token 换新令牌对（旋转），失败返回 false */
 async function tryRefresh(): Promise<boolean> {
   const refreshToken = getRefreshToken()
-  if (!refreshToken) return false
+  const sessionId = getSessionId()
+  if (!refreshToken || !sessionId || expireIfNeeded()) return false
   try {
     const resp = await axios.post<ApiResponse<{ access_token: string; refresh_token: string }>>(
       '/api/v1/auth/refresh',
       { refresh_token: refreshToken },
     )
     if (resp.data.code === 0) {
-      setTokens(resp.data.data.access_token, resp.data.data.refresh_token)
+      if (expireIfNeeded() || getSessionId() !== sessionId) return false
+      if (getRefreshToken() === refreshToken) {
+        setTokens(resp.data.data.access_token, resp.data.data.refresh_token)
+      }
       return true
     }
   } catch {
     /* 刷新失败走会话清理 */
   }
-  return false
+  return (await waitForTokenChange(sessionId, refreshToken)) && !expireIfNeeded()
 }
 
 /** 会话失效：清令牌并回登录页 */
 function forceLogin(): void {
-  clearTokens()
+  clearTokens(false)
   if (!window.location.pathname.startsWith('/login')) {
     window.location.href = '/login'
   }
@@ -99,7 +104,7 @@ http.interceptors.response.use(
         config.headers.Authorization = `Bearer ${getAccessToken()}`
         return http.request(config)
       }
-      forceLogin()
+      if (getAccessToken()) forceLogin()
       return Promise.reject(new ApiError(body.code, '登录已过期，请重新登录'))
     }
     // 登录三态：静默交给调用方（登录页状态机）

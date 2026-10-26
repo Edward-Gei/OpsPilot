@@ -1,4 +1,6 @@
 """RBAC 接口测试：权限裁决 / 用户角色管理 / 内置角色保护 / 系统配置。"""
+import pytest
+
 from tests.conftest import TEST_PASSWORD, auth_header, login_for_tokens
 
 
@@ -157,6 +159,11 @@ async def test_system_configs(client):
     assert resp.json()["code"] == 0
     resp = await client.get("/api/v1/system/configs", headers=headers)
     assert resp.json()["data"]["mfa.policy"] == "optional"
+    resp = await client.put("/api/v1/system/configs",
+                            json={"configs": {"token.policy": {"session_hours": 12}}}, headers=headers)
+    assert resp.json()["code"] == 0
+    resp = await client.get("/api/v1/system/configs", headers=headers)
+    assert resp.json()["data"]["token.policy"] == {"session_hours": 12}
     # 未知键拒绝
     resp = await client.put("/api/v1/system/configs",
                             json={"configs": {"evil.key": 1}}, headers=headers)
@@ -165,6 +172,23 @@ async def test_system_configs(client):
     ops_tokens = await login_for_tokens(client, "ops1")
     resp = await client.get("/api/v1/system/configs", headers=auth_header(ops_tokens))
     assert resp.json()["code"] == 40301
+
+
+@pytest.mark.parametrize("policy", [
+    {"session_hours": 0},
+    {"session_hours": 169},
+    {"session_hours": True},
+    {"session_hours": "8"},
+    {"session_hours": 8, "access_minutes": 30},
+    {"session_hours": 8, "refresh_days": 1},
+    "invalid",
+])
+async def test_token_policy_rejects_invalid_fields(client, policy):
+    headers = auth_header(await login_for_tokens(client, "admin"))
+    response = await client.put("/api/v1/system/configs", headers=headers,
+                                json={"configs": {"token.policy": policy}})
+    assert response.status_code == 400
+    assert response.json()["code"] == 40001
 
 
 async def test_admin_manage_user_mfa(client, seed):

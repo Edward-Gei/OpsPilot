@@ -54,7 +54,6 @@ cp .env.example .env
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` | Redis 连接地址，默认 `redis:6379/0` |
 | `JWT_SECRET_KEY` | JWT 签名密钥，生产环境必须替换 |
 | `SECRET_ENCRYPT_KEY` | AES-256-GCM 字段加密密钥；留空时从 JWT 密钥派生并告警 |
-| `ACCESS_TOKEN_MINUTES` / `REFRESH_TOKEN_DAYS` | Access/Refresh Token 有效期，默认 `15` 分钟/`7` 天 |
 | `MFA_TOKEN_MINUTES` / `PWD_CHANGE_TOKEN_MINUTES` | MFA 挑战和强制改密令牌有效期，默认 `5`/`10` 分钟 |
 | `RESET_TOKEN_TTL_MINUTES` | 密码重置令牌有效期，默认 `30` 分钟 |
 | `PUBLIC_BASE_URL` | 密码重置邮件使用的前端公共地址 |
@@ -64,6 +63,8 @@ cp .env.example .env
 | `EXEC_GLOBAL_CONCURRENCY_DEFAULT` | 配置项默认 `50`，当前 Worker 未用它限流；不能视为生效的并发上限 |
 | `CORS_ORIGINS` | 本地 Vite 直连 API 时的允许来源，生产同源部署通常无需修改 |
 | `DEBUG` | 调试开关，生产必须为 `false` |
+
+正式 Access Token 固定 15 分钟；系统设置中的“最长登录时长”默认 8 小时，仅对新登录生效。旧版 `ACCESS_TOKEN_MINUTES`、`REFRESH_TOKEN_DAYS` 和数据库中的对应自定义值不再生效。升级后旧正式令牌因缺少会话截止字段，在首次校验时要求重新登录。
 
 `exec.global_concurrency` 的种子值来自 [SYSTEM_CONFIG_DEFAULTS](../backend/app/core/constants.py)，[种子服务](../backend/app/services/seed.py)只补缺失键；当前执行链未消费该值。已实现的同模板互斥由工单模板的并发控制开关决定，不等同于全局限流。
 

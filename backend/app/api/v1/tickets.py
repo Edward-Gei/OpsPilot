@@ -162,7 +162,7 @@ async def list_tickets(
     page_size: int = Query(20, ge=1, le=100),
     status: str | None = None,
     creator_id: int | None = None,
-    keyword: str | None = Query(None, description="模糊匹配标题/工单号/提交人"),
+    keyword: str | None = Query(None, description="模糊匹配工单号、标题、作业主机、状态或提交人"),
     start: str | None = None,
     end: str | None = None,
     execution_status: str | None = None,

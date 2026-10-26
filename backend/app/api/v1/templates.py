@@ -1,11 +1,14 @@
 """工单模板 API；页面维护业务入口、参数契约和一个流程引用。"""
 
 from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy import select
 
 from app import audit
 from app.core.deps import DbSession, get_client_ip, require_perm
 from app.core.response import BizError, Errors, ok
 from app.models.auth import User
+from app.models.cmdb import JobHost
+from app.models.job import ProcessTemplate
 from app.schemas.ticket_template import TicketTemplateStatusRequest, TicketTemplateUpsertRequest
 from app.services import rbac_service, template_service
 
@@ -37,15 +40,28 @@ async def _can_view_secret_refs(session: DbSession, actor: User) -> bool:
 async def list_templates(session: DbSession, actor: User = Depends(require_perm("template:read")),
                          page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
                          keyword: str | None = None, type: str | None = None, status: str | None = None,
-                         process_template_id: int | None = Query(None, ge=1)):
+                         process_template_id: int | None = Query(None, ge=1),
+                         name_only: bool = False):
     rows, total = await template_service.list_templates(
         session, page=page, page_size=page_size, keyword=keyword, type_=type, status=status,
-        process_template_id=process_template_id,
+        process_template_id=process_template_id, name_only=name_only,
     )
     can_view_refs = await _can_view_secret_refs(session, actor)
+    host_names = dict((await session.execute(
+        select(JobHost.id, JobHost.name).where(JobHost.id.in_({t.job_host_id for t in rows}))
+    )).all()) if rows else {}
+    process_names = dict((await session.execute(
+        select(ProcessTemplate.id, ProcessTemplate.name).where(
+            ProcessTemplate.id.in_({t.process_template_id for t in rows})
+        )
+    )).all()) if rows else {}
     items = [
-        _brief(t, await template_service.credential_ref_metadata(session, t.credential_refs or []))
-        if can_view_refs else _brief(t)
+        {
+            **(_brief(t, await template_service.credential_ref_metadata(session, t.credential_refs or []))
+               if can_view_refs else _brief(t)),
+            "job_host_name": host_names.get(t.job_host_id),
+            "process_template_name": process_names.get(t.process_template_id),
+        }
         for t in rows
     ]
     return ok({"items": items, "total": total, "page": page, "page_size": page_size})

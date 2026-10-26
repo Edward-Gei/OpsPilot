@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import urlsplit
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import String, and_, case, cast, delete, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -244,7 +244,58 @@ async def list_config_files(
 ) -> tuple[list[ConfigFile], int]:
     query = select(ConfigFile)
     if keyword:
-        query = query.where(ConfigFile.name.like(f"%{keyword}%"))
+        like = f"%{keyword}%"
+        instance_match = select(ConfigPlatformInstance.id).where(
+            ConfigPlatformInstance.id == ConfigFile.platform_instance_id,
+            ConfigPlatformInstance.name.like(like),
+        ).correlate(ConfigFile).exists()
+        role_match = select(Role.id).where(
+            Role.id == ConfigFile.approval_role_id, Role.name.like(like)
+        ).correlate(ConfigFile).exists()
+        provider = (
+            select(ConfigPlatformInstance.provider)
+            .where(ConfigPlatformInstance.id == ConfigFile.platform_instance_id)
+            .correlate(ConfigFile).scalar_subquery()
+        )
+        locator = ConfigFile.locator
+        def part(key: str):
+            return func.coalesce(locator[key].as_string(), literal(""))
+        namespace = locator["namespace"].as_string()
+        locator_text = case(
+            (provider == "apollo", part("app_id") + literal(" / ") + part("cluster")
+             + literal(" / ") + part("namespace")),
+            (provider == "nacos", case(
+                (or_(namespace.is_(None), namespace == ""), "public"), else_=namespace,
+            ) + literal(" / ") + part("group") + literal(" / ") + part("data_id")),
+            (provider == "consul", part("datacenter") + literal(" / ") + part("kv_prefix")),
+            else_="",
+        )
+        app_count = (
+            select(func.count(ConfigFileApplication.id))
+            .where(ConfigFileApplication.config_file_id == ConfigFile.id)
+            .correlate(ConfigFile).scalar_subquery()
+        )
+        version_no = (
+            select(ConfigVersion.version_no)
+            .where(ConfigVersion.id == ConfigFile.current_version_id)
+            .correlate(ConfigFile).scalar_subquery()
+        )
+        status_text = case(
+            (ConfigFile.status == "archived", "已归档"),
+            (ConfigFile.drift_status == "drifted", "存在漂移"),
+            (ConfigFile.drift_status == "remote_missing", "远端缺失"),
+            (ConfigFile.drift_status == "sync_failed", "同步失败"),
+            (ConfigFile.current_version_id.is_(None), "待首次发布"),
+            else_="一致",
+        )
+        query = query.where(or_(
+            ConfigFile.name.like(like), instance_match, role_match,
+            locator_text.like(like),
+            ConfigFile.content_format.like(like), cast(app_count, String).like(like),
+            (literal("v") + cast(version_no, String)).like(like),
+            ConfigFile.current_version_id.is_(None) if keyword in "未发布" else False,
+            status_text.like(like),
+        ))
     if platform_instance_id is not None:
         query = query.where(ConfigFile.platform_instance_id == platform_instance_id)
     # 筛选沿用列表状态标签的优先级：归档、漂移异常、未发布、一致。

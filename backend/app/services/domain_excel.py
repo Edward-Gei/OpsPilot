@@ -223,8 +223,7 @@ async def load_zone_export_rows(
     """按 Zone 列表同样的筛选条件加载导出行，凭据只取名称。"""
     query = select(DnsZone, Credential.name).outerjoin(Credential, Credential.id == DnsZone.credential_id)
     if keyword:
-        like = f"%{keyword}%"
-        query = query.where(DnsZone.zone_name.like(like) | DnsZone.description.like(like))
+        query = query.where(domain_service.zone_keyword_condition(keyword))
     if provider:
         query = query.where(DnsZone.provider == provider)
     if sync_status:

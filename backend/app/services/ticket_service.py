@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from jinja2 import Environment, meta
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import redis as redis_mod
@@ -16,6 +16,7 @@ from app.models.execution import Execution, ExecutionStep
 from app.models.job import TicketTemplate
 from app.models.ticket import Ticket, TicketApproval, TicketStep
 from app.services import notify_service, parameter_prepare_service, template_service
+from app.services.list_search import label_matches
 
 
 async def get_ticket_or_404(session: AsyncSession, ticket_id: int) -> Ticket:
@@ -507,7 +508,8 @@ async def cancel_ticket(session: AsyncSession, ticket_id: int, *, actor: User) -
 async def list_tickets(session: AsyncSession, *, page: int, page_size: int, status: str | None = None,
                        creator_id: int | None = None, keyword: str | None = None, start: str | None = None,
                        end: str | None = None, execution_status: str | None = None,
-                       has_execution: bool | None = None, execution_active: bool | None = None):
+                       has_execution: bool | None = None, execution_active: bool | None = None,
+                       legacy_keyword: bool = False):
     query = select(Ticket)
     latest_execution_id = (
         select(Execution.id)
@@ -520,16 +522,27 @@ async def list_tickets(session: AsyncSession, *, page: int, page_size: int, stat
     if status: query = query.where(Ticket.status == status)
     if creator_id: query = query.where(Ticket.creator_id == creator_id)
     if keyword:
+        like = f"%{keyword}%"
         creator_matches = (
             select(User.id)
             .where(
                 User.id == Ticket.creator_id,
-                User.display_name.like(f"%{keyword}%") | User.username.like(f"%{keyword}%"),
+                User.display_name.like(like) | User.username.like(like),
             )
             .correlate(Ticket)
             .exists()
         )
-        query = query.where(Ticket.ticket_no.like(f"%{keyword}%") | Ticket.title.like(f"%{keyword}%") | creator_matches)
+        keyword_conds = [Ticket.ticket_no.like(like), Ticket.title.like(like), creator_matches]
+        if not legacy_keyword:
+            keyword_conds.extend([
+                Ticket.job_host_snap["name"].as_string().like(like),
+                label_matches(Ticket.status, keyword, {
+                    "approving": "审批中", "queued": "排队中", "running": "执行中",
+                    "paused": "已暂停", "success": "成功", "failed": "失败",
+                    "rejected": "已驳回", "cancelled": "已撤回", "interrupted": "已中断",
+                }),
+            ])
+        query = query.where(or_(*keyword_conds))
     if start: query = query.where(Ticket.created_at >= start)
     if end: query = query.where(Ticket.created_at <= (f"{end} 23:59:59" if len(end) == 10 else end))
     if has_execution:

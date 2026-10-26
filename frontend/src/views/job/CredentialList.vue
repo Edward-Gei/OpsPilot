@@ -268,7 +268,7 @@ onMounted(() => {
     <div class="toolbar">
       <a-input
         v-model:value="query.keyword"
-        placeholder="搜索凭据名/登录用户"
+        placeholder="搜索凭据"
         class="kw"
         allow-clear
         @press-enter="onSearch"

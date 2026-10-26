@@ -8,10 +8,11 @@
 import json
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit import AuditLog
+from app.services.list_search import label_matches
 
 # 导出上限（契约：流式下载，上限 10 万行）
 EXPORT_MAX_ROWS = 100_000
@@ -38,7 +39,7 @@ def _conditions(
     """构建组合筛选条件（列表查询与导出共用，保证两者语义一致）。
 
     - start/end：created_at 闭区间（分区键，命中分区裁剪）；
-    - actor：操作人名称模糊匹配；keyword：对象名称模糊匹配（契约 keyword→target_name）；
+    - actor：操作人名称模糊匹配；keyword：列表非时间业务列的模糊匹配；
     - module/action/result：精确匹配。
     """
     conds = []
@@ -55,7 +56,25 @@ def _conditions(
     if result:
         conds.append(AuditLog.result == result)
     if keyword:
-        conds.append(AuditLog.target_name.like(f"%{keyword}%"))
+        like = f"%{keyword}%"
+        conds.append(or_(
+            AuditLog.actor_name.like(like), AuditLog.source_ip.like(like),
+            AuditLog.action.like(like), AuditLog.target_type.like(like),
+            and_(
+                AuditLog.target_type.is_not(None),
+                AuditLog.target_type != "",
+                or_(AuditLog.target_name.is_(None), AuditLog.target_name == ""),
+                AuditLog.target_id.like(like),
+            ),
+            AuditLog.target_name.like(like),
+            label_matches(AuditLog.module, keyword, {
+                "auth": "认证", "user": "用户", "role": "角色", "cmdb": "资产",
+                "credential": "凭据", "template": "模板", "job": "作业管理",
+                "domain": "域名管理", "config": "应用配置", "ticket": "工单",
+                "execution": "执行", "notify": "通知", "system": "系统", "audit": "审计",
+            }),
+            label_matches(AuditLog.result, keyword, {"success": "成功", "failed": "失败"}),
+        ))
     return conds
 
 

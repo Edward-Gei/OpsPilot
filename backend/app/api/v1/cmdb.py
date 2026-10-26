@@ -19,6 +19,10 @@ from app.services import app_excel, cmdb_service, host_excel
 router = APIRouter(prefix="/cmdb", tags=["CMDB"])
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+HostSortBy = Literal[
+    "hostname", "ip", "public_ip", "project", "ri", "host_series", "platform",
+    "region", "os", "spec", "environment", "status", "ssh_port", "created_at",
+]
 
 
 def _xlsx_response(content: bytes, filename: str) -> Response:
@@ -136,15 +140,19 @@ async def export_hosts(
     session: DbSession,
     actor: User = Depends(require_perm("cmdb:read")),
     keyword: str | None = None,
+    name_only: bool = False,
     platform: str | None = None,
     region: str | None = None,
     environment: str | None = None,
     status: str | None = None,
+    sort_by: HostSortBy | None = None,
+    sort_order: Literal["asc", "desc"] | None = None,
 ) -> Response:
     """导出与列表相同筛选语义的全量结果（HOST-07）。"""
     hosts = await cmdb_service.iter_hosts_filtered(
         session, keyword=keyword, platform=platform, region=region,
-        environment=environment, status=status,
+        environment=environment, status=status, name_only=name_only,
+        sort_by=sort_by, sort_order=sort_order,
     )
     audit.log(module="cmdb", action="host.export", actor_id=actor.id, actor_name=actor.username,
               source_ip=get_client_ip(request), target_type="host",
@@ -159,17 +167,19 @@ async def list_hosts(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     keyword: str | None = None,
+    name_only: bool = False,
     platform: str | None = None,
     region: str | None = None,
     environment: str | None = None,
     status: str | None = None,
-    sort_by: Literal["created_at"] | None = None,
+    sort_by: HostSortBy | None = None,
     sort_order: Literal["asc", "desc"] | None = None,
 ) -> dict:
-    """分页查主机（keyword 模糊匹配主机名/IP）。"""
+    """分页查主机；关键词匹配可见业务列。"""
     hosts, total = await cmdb_service.list_hosts(
         session, page=page, page_size=page_size, keyword=keyword,
         platform=platform, region=region, environment=environment, status=status,
+        name_only=name_only,
         sort_by=sort_by, sort_order=sort_order,
     )
     return ok({"items": [_host_brief(h) for h in hosts], "total": total,
@@ -239,22 +249,35 @@ async def delete_host(
 
 # ---------- 应用 ----------
 
+@router.get("/apps/systems", summary="已有所属系统名称")
+async def list_app_systems(
+    session: DbSession,
+    _: User = Depends(require_perm("cmdb:read")),
+) -> dict:
+    """返回去重系统名称，供应用列表筛选。"""
+    return ok({"items": await cmdb_service.list_app_systems(session)})
+
+
 @router.get("/apps/export", summary="导出应用（按当前筛选）")
 async def export_apps(
     request: Request,
     session: DbSession,
     actor: User = Depends(require_perm("cmdb:read")),
     keyword: str | None = None,
+    name_only: bool = False,
+    app_id: int | None = Query(None, ge=1),
     language: str | None = None,
     deploy_type: str | None = None,
     project_type: Literal["frontend", "backend"] | None = None,
     business_line: Literal["mitrade", "tradingkey"] | None = None,
+    system_name: str | None = None,
     service_level: Literal["核心服务", "一般服务"] | None = None,
 ) -> Response:
     """导出与列表相同筛选语义的全量应用。"""
     apps, host_stats = await cmdb_service.iter_apps_filtered(
-        session, keyword=keyword, language=language, deploy_type=deploy_type, project_type=project_type,
-        business_line=business_line, service_level=service_level,
+        session, keyword=keyword, app_id=app_id, language=language, deploy_type=deploy_type, project_type=project_type,
+        business_line=business_line, system_name=system_name, service_level=service_level,
+        name_only=name_only,
     )
     audit.log(module="cmdb", action="app.export", actor_id=actor.id, actor_name=actor.username,
               source_ip=get_client_ip(request), target_type="app", detail={"count": len(apps)})
@@ -267,10 +290,13 @@ async def list_apps(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     keyword: str | None = None,
+    name_only: bool = False,
+    app_id: int | None = Query(None, ge=1),
     language: str | None = None,
     deploy_type: str | None = None,
     project_type: Literal["frontend", "backend"] | None = None,
     business_line: Literal["mitrade", "tradingkey"] | None = None,
+    system_name: str | None = None,
     service_level: Literal["核心服务", "一般服务"] | None = None,
     sort_by: Literal[
         "name", "language", "deploy_type", "project_type", "host_count", "business_line",
@@ -281,9 +307,10 @@ async def list_apps(
 ) -> dict:
     """分页查应用；items 含关联主机数与 IP 清单。"""
     apps, total, host_stats = await cmdb_service.list_apps(
-        session, page=page, page_size=page_size, keyword=keyword,
+        session, page=page, page_size=page_size, keyword=keyword, app_id=app_id,
         language=language, deploy_type=deploy_type, project_type=project_type,
-        business_line=business_line, service_level=service_level,
+        business_line=business_line, system_name=system_name, service_level=service_level,
+        name_only=name_only,
         sort_by=sort_by, sort_order=sort_order,
     )
     return ok({

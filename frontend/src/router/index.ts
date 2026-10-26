@@ -2,6 +2,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import BasicLayout from '@/layouts/BasicLayout.vue'
+import { expireIfNeeded, restoreTokensFromPeer } from '@/api/token'
 import { useUserStore } from '@/stores/user'
 
 const router = createRouter({
@@ -172,12 +173,13 @@ const router = createRouter({
 // 登录守卫：未登录回登录页；已登录补拉用户信息；meta.perm 权限过滤
 router.beforeEach(async (to) => {
   const userStore = useUserStore()
+  expireIfNeeded()
   if (to.name === 'login' || to.name === 'forgot-password' || to.name === 'reset-password') {
     // 已登录访问登录页直接回工作台（携带 SSO ticket 时放行走换票流程）
     if (userStore.isLoggedIn() && !to.query.ticket) return { path: '/' }
     return true
   }
-  if (!userStore.isLoggedIn()) {
+  if (!userStore.isLoggedIn() && !(await restoreTokensFromPeer())) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
   // 刷新页面后用户信息丢失：先补拉（失败由拦截器清会话回登录页）
@@ -194,6 +196,10 @@ router.beforeEach(async (to) => {
     return { path: '/' }
   }
   return true
+})
+
+window.addEventListener('opspilot:session-expired', () => {
+  if (router.currentRoute.value.name !== 'login') void router.replace({ name: 'login' })
 })
 
 // 统一页面标题

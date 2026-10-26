@@ -334,7 +334,7 @@ onMounted(refreshAll)
       <a-input
         v-model:value="recordQuery.keyword"
         class="keyword-input"
-        placeholder="搜索记录名称"
+        placeholder="搜索记录集"
         allow-clear
         @press-enter="onRecordSearch"
       >

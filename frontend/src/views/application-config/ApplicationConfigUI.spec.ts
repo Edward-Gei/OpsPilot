@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { config, flushPromises, mount } from '@vue/test-utils'
-import Antd from 'ant-design-vue'
+import { config, flushPromises, mount, shallowMount } from '@vue/test-utils'
+import Antd, { message } from 'ant-design-vue'
 import { createPinia } from 'pinia'
 import { reactive } from 'vue'
 import ConfigContentEditor from './ConfigContentEditor.vue'
@@ -10,6 +10,7 @@ import ApplicationConfigList from './ApplicationConfigList.vue'
 import NewConfigDrawer from './NewConfigDrawer.vue'
 import ApplicationConfigDetail from './ApplicationConfigDetail.vue'
 import ConfigVersionCompare from './ConfigVersionCompare.vue'
+import ConfigDiscoverPanel from './ConfigDiscoverPanel.vue'
 import TodoList from '@/views/ticket/TodoList.vue'
 
 const api = vi.hoisted(() => ({
@@ -21,6 +22,7 @@ const api = vi.hoisted(() => ({
   getDraft: vi.fn(), saveDraft: vi.fn(), discardDraft: vi.fn(), submitCandidate: vi.fn(),
   listConfigFileTasks: vi.fn(), getVersionContent: vi.fn(), getVersionComparison: vi.fn(),
   listConfigApprovalTodo: vi.fn(), getConfigApprovalContent: vi.fn(), readSecret: false,
+  approveCandidate: vi.fn(), getApprovalPublishResult: vi.fn(),
 }))
 vi.mock('@/api/applicationConfig', () => api)
 vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: (perm: string) => perm === 'config:write' || (perm === 'secret:read' && api.readSecret) }) }))
@@ -90,7 +92,7 @@ beforeEach(() => {
     { locator: { namespace: 'stage-id', group: 'ORDERS', data_id: 'c.yaml' }, display_name: 'c.yaml', revision: null },
   ] })
 })
-afterEach(() => { document.body.innerHTML = '' })
+afterEach(() => { vi.useRealTimers(); document.body.innerHTML = '' })
 
 describe('编辑页草稿恢复', () => {
   function mountDetail() {
@@ -318,6 +320,84 @@ describe('编辑页草稿恢复', () => {
 })
 
 describe('版本差异与审批预览', () => {
+  async function openApproval() {
+    const wrapper = shallowMount(TodoList)
+    await flushPromises()
+    ;(wrapper.vm as unknown as { selectedConfig: { file_id: number; version_id: number } }).selectedConfig = {
+      file_id: 2, version_id: 6,
+    }
+    return wrapper
+  }
+
+  it('审批后等待发布任务完成才提示成功', async () => {
+    const success = vi.spyOn(message, 'success')
+    api.approveCandidate.mockResolvedValue({ id: 6, status: 'approved' })
+    api.getApprovalPublishResult.mockResolvedValueOnce({ status: 'queued', last_error: null })
+      .mockResolvedValueOnce({ status: 'success', last_error: null })
+    const wrapper = await openApproval()
+    vi.useFakeTimers()
+    await (wrapper.vm as unknown as { decideConfig: (approved: boolean) => Promise<void> }).decideConfig(true)
+    await flushPromises()
+    expect(success).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(success).toHaveBeenCalledWith(expect.stringContaining('发布成功'))
+    wrapper.unmount()
+    success.mockRestore()
+  })
+
+  it('审批后的发布任务失败时提示失败原因', async () => {
+    const warning = vi.spyOn(message, 'warning')
+    const success = vi.spyOn(message, 'success')
+    api.approveCandidate.mockResolvedValue({ id: 6, status: 'approved' })
+    api.getApprovalPublishResult.mockResolvedValue({ status: 'failed', last_error: '远端回读不一致' })
+    const wrapper = await openApproval()
+    await (wrapper.vm as unknown as { decideConfig: (approved: boolean) => Promise<void> }).decideConfig(true)
+    await flushPromises()
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('远端回读不一致'))
+    expect(success).not.toHaveBeenCalled()
+    wrapper.unmount()
+    warning.mockRestore()
+    success.mockRestore()
+  })
+
+  it('发布结果请求异常时提示未确认，不误报成功', async () => {
+    const warning = vi.spyOn(message, 'warning')
+    const success = vi.spyOn(message, 'success')
+    api.approveCandidate.mockResolvedValue({ id: 6, status: 'approved' })
+    const wrapper = await openApproval()
+    vi.useFakeTimers()
+    api.getApprovalPublishResult.mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 181_000)
+      throw new Error('offline')
+    })
+    await (wrapper.vm as unknown as { decideConfig: (approved: boolean) => Promise<void> }).decideConfig(true)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('发布结果暂未确认'))
+    expect(success).not.toHaveBeenCalled()
+    wrapper.unmount()
+    warning.mockRestore()
+    success.mockRestore()
+  })
+
+  it('发布任务等待超时后提示未确认，不误报成功', async () => {
+    const warning = vi.spyOn(message, 'warning')
+    const success = vi.spyOn(message, 'success')
+    api.approveCandidate.mockResolvedValue({ id: 6, status: 'approved' })
+    const wrapper = await openApproval()
+    vi.useFakeTimers()
+    api.getApprovalPublishResult.mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 181_000)
+      return { status: 'queued', last_error: null }
+    })
+    await (wrapper.vm as unknown as { decideConfig: (approved: boolean) => Promise<void> }).decideConfig(true)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('发布结果暂未确认'))
+    expect(success).not.toHaveBeenCalled()
+    wrapper.unmount()
+    warning.mockRestore()
+    success.mockRestore()
+  })
+
   it('审批详情直接使用授权响应的双方正文，不借用历史读取权限', async () => {
     const wrapper = mount(TodoList, { attachTo: document.body, global: { stubs: { TicketDetailDrawer: true } } })
     await flushPromises()
@@ -575,6 +655,21 @@ describe('新建配置默认格式与应用搜索', () => {
     expect(mode === 'manual' ? vm.manual.application_ids : vm.discovered[0]!.application_ids).toEqual([101])
     wrapper.unmount()
   })
+})
+
+it('发现结果可按可见定位列筛选', async () => {
+  const wrapper = mount(ConfigDiscoverPanel, { props: { platformInstanceId: 1, provider: 'apollo' } })
+  await wrapper.find('input[placeholder="输入发现范围"]').setValue('test-app')
+  await (wrapper.vm as unknown as { discover: () => Promise<void> }).discover()
+  await flushPromises()
+  const filter = wrapper.find('input[placeholder="筛选发现结果"]')
+  await filter.setValue('ORDERS')
+  await flushPromises()
+  const rows = wrapper.findAll('.ant-table-tbody tr.ant-table-row')
+  expect(rows).toHaveLength(1)
+  expect(rows[0]!.text()).toContain('c.yaml')
+  expect(rows[0]!.text()).not.toContain('a.yaml')
+  wrapper.unmount()
 })
 
 describe('Nacos 手工新建', () => {

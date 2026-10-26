@@ -39,6 +39,7 @@ const businessLineText: Record<string, { text: string; color: string }> = {
   tradingkey: { text: 'tradingkey', color: 'green' },
 }
 const businessLineOptions = Object.entries(businessLineText).map(([value, v]) => ({ label: v.text, value }))
+const systemOptions = ref<{ label: string; value: string }[]>([])
 const serviceLevelText: Record<string, { text: string; color: string }> = {
   核心服务: { text: '核心服务', color: 'red' },
   一般服务: { text: '一般服务', color: 'default' },
@@ -51,6 +52,8 @@ const items = ref<cmdbApi.AppItem[]>([])
 const total = ref(0)
 const route = useRoute()
 const router = useRouter()
+const focusedAppId = ref<number | undefined>()
+let listRequestId = 0
 
 const query = reactive({
   page: 1,
@@ -59,6 +62,7 @@ const query = reactive({
   deploy_type: undefined as string | undefined,
   project_type: undefined as cmdbApi.AppProjectType | undefined,
   business_line: undefined as cmdbApi.AppBusinessLine | undefined,
+  system_name: undefined as string | undefined,
   service_level: undefined as cmdbApi.AppServiceLevel | undefined,
   sort_by: undefined as cmdbApi.AppQuery['sort_by'],
   sort_order: undefined as 'asc' | 'desc' | undefined,
@@ -86,24 +90,29 @@ const columns = ref(makeResizable([
 
 /** 拉取应用列表（items 含关联主机数） */
 async function loadList() {
+  const requestId = ++listRequestId
   loading.value = true
   try {
     const data = await cmdbApi.listApps({
       page: query.page,
       page_size: query.page_size,
       keyword: query.keyword || undefined,
+      app_id: focusedAppId.value,
       deploy_type: query.deploy_type,
       project_type: query.project_type,
       business_line: query.business_line,
+      system_name: query.system_name,
       service_level: query.service_level,
       sort_by: query.sort_by,
       sort_order: query.sort_order,
     })
-    items.value = data.items
-    total.value = data.total
-    selectedKeys.value = []
+    if (requestId === listRequestId) {
+      items.value = data.items
+      total.value = data.total
+      selectedKeys.value = []
+    }
   } finally {
-    loading.value = false
+    if (requestId === listRequestId) loading.value = false
   }
 }
 
@@ -151,15 +160,29 @@ async function loadStats() {
   stats.k8s = k8s.total
 }
 
+async function loadSystems() {
+  const data = await cmdbApi.listAppSystems()
+  systemOptions.value = data.items.map((name) => ({ label: name, value: name }))
+}
+
 /** 列表 + 统计一起刷新（变更操作后调用） */
 function refreshAll() {
   loadList()
   loadStats()
+  loadSystems()
 }
 
 function onSearch() {
+  if (focusedAppId.value !== undefined && query.keyword !== detail.value?.name) {
+    focusedAppId.value = undefined
+    void router.replace({ path: route.path })
+  }
   query.page = 1
   loadList()
+}
+
+function onKeywordChange() {
+  if (focusedAppId.value !== undefined && query.keyword !== detail.value?.name) onSearch()
 }
 
 function onTableChange(
@@ -182,9 +205,11 @@ async function onExport() {
   try {
     await cmdbApi.exportApps({
       keyword: query.keyword || undefined,
+      app_id: focusedAppId.value,
       deploy_type: query.deploy_type,
       project_type: query.project_type,
       business_line: query.business_line,
+      system_name: query.system_name,
       service_level: query.service_level,
     })
   } catch {
@@ -396,7 +421,9 @@ async function openDetail(row: Pick<cmdbApi.AppItem, 'id'>) {
   detailVisible.value = true
   detailLoading.value = true
   try {
-    detail.value = await cmdbApi.getApp(row.id)
+    const app = await cmdbApi.getApp(row.id)
+    detail.value = app
+    return app
   } finally {
     detailLoading.value = false
   }
@@ -412,7 +439,19 @@ function onNameClick(event: MouseEvent, row: cmdbApi.AppItem) {
 onMounted(() => {
   // 详情链接按 ID 查询，不依赖分页列表中是否包含目标应用。
   const qid = typeof route.query.id === 'string' ? Number(route.query.id) : NaN
-  if (Number.isSafeInteger(qid) && qid > 0) void openDetail({ id: qid }).catch(() => { detailVisible.value = false })
+  if (Number.isSafeInteger(qid) && qid > 0) {
+    if (route.query.related === 'host') focusedAppId.value = qid
+    void openDetail({ id: qid }).then((app) => {
+      if (focusedAppId.value === qid) query.keyword = app.name
+    }).catch(() => {
+      detailVisible.value = false
+      if (focusedAppId.value === qid) {
+        focusedAppId.value = undefined
+        void router.replace({ path: route.path })
+        loadList()
+      }
+    })
+  }
   // 全局搜索跳转：?keyword= 带入搜索框自动过滤，随后清掉 query 避免刷新残留（SEARCH-04）
   const qkw = route.query.keyword
   if (typeof qkw === 'string' && qkw) {
@@ -443,10 +482,11 @@ onMounted(() => {
     <div class="toolbar">
       <a-input
         v-model:value="query.keyword"
-        placeholder="应用/系统/负责人/端口"
+        placeholder="搜索应用信息"
         class="kw"
         allow-clear
         @press-enter="onSearch"
+        @change="onKeywordChange"
       >
         <template #prefix><SearchOutlined /></template>
       </a-input>
@@ -472,6 +512,16 @@ onMounted(() => {
         class="deploy-sel"
         allow-clear
         :options="businessLineOptions"
+        @change="onSearch"
+      />
+      <a-select
+        v-model:value="query.system_name"
+        placeholder="所属系统"
+        class="deploy-sel"
+        allow-clear
+        show-search
+        option-filter-prop="label"
+        :options="systemOptions"
         @change="onSearch"
       />
       <a-select

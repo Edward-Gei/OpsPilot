@@ -82,11 +82,13 @@ export interface HostQuery {
   page?: number
   page_size?: number
   keyword?: string
+  name_only?: boolean
   platform?: string
   region?: string
   environment?: string
   status?: string
-  sort_by?: 'created_at'
+  sort_by?: 'hostname' | 'ip' | 'public_ip' | 'project' | 'ri' | 'host_series'
+    | 'platform' | 'region' | 'os' | 'spec' | 'environment' | 'status' | 'ssh_port' | 'created_at'
   sort_order?: 'asc' | 'desc'
 }
 
@@ -182,10 +184,13 @@ export interface AppQuery {
   page?: number
   page_size?: number
   keyword?: string
+  name_only?: boolean
+  app_id?: number
   language?: string
   deploy_type?: string
   project_type?: AppProjectType
   business_line?: AppBusinessLine
+  system_name?: string
   service_level?: AppServiceLevel
   sort_by?: 'name' | 'language' | 'deploy_type' | 'project_type' | 'host_count' | 'business_line'
     | 'system_name' | 'service_level' | 'ops_owner' | 'dev_owner' | 'service_port'
@@ -195,6 +200,10 @@ export interface AppQuery {
 
 export function listApps(params: AppQuery) {
   return request<PageResult<AppItem>>({ url: '/cmdb/apps', method: 'get', params })
+}
+
+export function listAppSystems() {
+  return request<{ items: string[] }>({ url: '/cmdb/apps/systems', method: 'get' })
 }
 
 /** 按当前筛选导出应用 */

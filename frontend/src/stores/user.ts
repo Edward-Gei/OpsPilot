@@ -6,6 +6,7 @@ import { clearTokens, getAccessToken, getRefreshToken, setTokens } from '@/api/t
 
 export const useUserStore = defineStore('user', () => {
   const userInfo = ref<MeInfo | null>(null)
+  window.addEventListener('opspilot:session-expired', () => { userInfo.value = null })
 
   const permissions = computed(() => new Set(userInfo.value?.permissions ?? []))
 
@@ -26,7 +27,7 @@ export const useUserStore = defineStore('user', () => {
 
   /** 登录成功后保存令牌对 */
   function applyTokens(tokens: TokenPair): void {
-    setTokens(tokens.access_token, tokens.refresh_token)
+    setTokens(tokens.access_token, tokens.refresh_token, true)
   }
 
   /** 拉取当前用户信息（守卫在信息缺失时调用） */

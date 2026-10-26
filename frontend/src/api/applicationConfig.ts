@@ -243,6 +243,12 @@ export function getConfigApprovalContent(versionId: number) {
   return request<ConfigApprovalContent>({ url: `${prefix}/approval-todo/${versionId}/content`, method: 'get' })
 }
 
+export function getApprovalPublishResult(versionId: number) {
+  return request<Pick<ConfigTask, 'status' | 'last_error'>>({
+    url: `${prefix}/approval-results/${versionId}/publish`, method: 'get', silentTransportError: true,
+  })
+}
+
 export function listCmdbApplications(keyword?: string) {
   return request<{ items: NamedOption[] }>({
     url: `${prefix}/cmdb-applications`, method: 'get', params: { keyword },

@@ -508,7 +508,7 @@ onBeforeUnmount(stopBindPolling)
       <a-input
         v-model:value="query.keyword"
         class="keyword-input"
-        placeholder="搜索 Zone 名称或描述"
+        placeholder="搜索 Zone"
         allow-clear
         @press-enter="onSearch"
       >

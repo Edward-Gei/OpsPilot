@@ -33,6 +33,19 @@ beforeEach(() => {
 })
 afterEach(() => { document.body.innerHTML = '' })
 
+it('列表使用响应中的关联名称，不依赖前 100 项候选', async () => {
+  api.routeQuery = {}
+  api.listTemplates.mockResolvedValue({ items: [{ id: 21, name: '部署入口', type: 'release',
+    job_host_id: 121, job_host_name: '远端作业主机', process_template_id: 122,
+    process_template_name: '远端流程模板', visible_role_ids: [], status: 'enabled',
+    params_schema: [], notify_rules: [] }], total: 1 })
+  const wrapper = mount(TicketTemplateList, { global: { stubs: { TicketTemplateEditor: true } } })
+  await flushPromises()
+  expect(wrapper.text()).toContain('远端作业主机')
+  expect(wrapper.find('a[href="/job/templates/processes?id=122"]').text()).toBe('远端流程模板')
+  wrapper.unmount()
+})
+
 it('工单模板链接按 ID 直达只读详情，并展示适用应用链接', async () => {
   const wrapper = mount(TicketTemplateList, { attachTo: document.body,
     global: { stubs: { TicketTemplateEditor: true } } })

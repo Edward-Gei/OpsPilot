@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from app import audit
 from app.core.deps import CurrentUser, DbSession, get_client_ip, require_perm
 from app.core.constants import ConfigTaskKind
-from app.core.response import ok
+from app.core.response import Errors, ok
 from app.models.auth import User
 from app.models.auth import Role
 from app.models.cmdb import Application
@@ -525,6 +525,21 @@ async def approve_candidate(file_id: int, version_id: int, request: Request, ses
               source_ip=get_client_ip(request), target_type="config_file", target_id=str(file_id),
               detail={"version_no": version.version_no, "approval_role_id": version.approval_role_id})
     return ok(application_config_service.version_to_dict(version))
+
+
+@router.get("/approval-results/{version_id}/publish", summary="查询本人批准后自动发布的结果")
+async def get_approval_publish_result(version_id: int, session: DbSession, actor: CurrentUser) -> dict:
+    """仅暴露本人批准时创建的首个发布任务，不扩大普通任务查询权限。"""
+    version = await session.get(ConfigVersion, version_id)
+    if version is None or version.approved_by != actor.id:
+        raise Errors.not_found("发布结果不存在")
+    task = (await session.execute(select(ConfigTask).where(
+        ConfigTask.config_version_id == version_id,
+        ConfigTask.kind == ConfigTaskKind.PUBLISH.value,
+    ).order_by(ConfigTask.id).limit(1))).scalar_one_or_none()
+    if task is None or task.created_by != actor.id:
+        raise Errors.not_found("发布结果不存在")
+    return ok({"status": task.status, "last_error": task.last_error if task.status == "failed" else None})
 
 
 @router.post("/files/{file_id}/candidates/{version_id}/reject", summary="驳回候选版本")

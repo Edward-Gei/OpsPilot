@@ -73,7 +73,7 @@ CMDB 主机和应用是资产台账；域名管理独立维护公网 Zone 与 DN
 ### 4.1 认证与账号
 
 - 本地账号密码使用 bcrypt 存储；密码策略由 `password.policy` 控制。
-- Access Token 默认 15 分钟，Refresh Token 默认 7 天；有效期可由 `token.policy` 覆盖。
+- Access Token 固定 15 分钟并自动续签；单次登录会话默认最长 8 小时，可在系统设置中配置为 1-168 小时。刷新不延长本次登录截止时间，Access/Refresh Token 均不能越过它，到点须重新登录。
 - 登录失败按配置计数并锁定；登出吊销当前 Refresh Token。
 - LDAP/OIDC 首次登录创建对应来源用户，并使用配置的默认角色。
 - 强制 MFA 时，用户完成 TOTP 绑定前不能进入工作台。

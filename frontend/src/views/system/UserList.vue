@@ -306,7 +306,7 @@ onMounted(() => {
     <div class="toolbar">
       <a-input
         v-model:value="query.keyword"
-        placeholder="搜索用户名 / 显示名"
+        placeholder="搜索列表内容"
         class="kw"
         allow-clear
         @press-enter="onSearch"
@@ -358,9 +358,9 @@ onMounted(() => {
         onChange: onPageChange,
       }"
     >
-      <template #bodyCell="{ column, record, index }">
+      <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'roles'">
-          <a-tag v-for="(r, i) in record.roles" :key="r.id" :color="roleColors[(index + i) % roleColors.length]">
+          <a-tag v-for="r in record.roles" :key="r.id" :color="roleColors[(r.id - 1) % roleColors.length]">
             {{ r.name }}
           </a-tag>
         </template>

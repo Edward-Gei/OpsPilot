@@ -23,8 +23,11 @@ function locatorText(locator: Record<string, string>) {
   return props.provider === 'nacos' && locator.namespace === ''
     ? `public / ${locator.group} / ${locator.data_id}` : Object.values(locator).join(' / ')
 }
-const filtered = computed(() => discovered.value.filter((resource) =>
-  resource.display_name.toLowerCase().includes(keyword.value.trim().toLowerCase())))
+const filtered = computed(() => {
+  const term = keyword.value.trim().toLowerCase()
+  return discovered.value.filter((resource) =>
+    resource.display_name.toLowerCase().includes(term) || locatorText(resource.locator).toLowerCase().includes(term))
+})
 
 function clearDiscovery() {
   requestSequence += 1

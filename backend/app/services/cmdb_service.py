@@ -5,7 +5,7 @@
     与 CMDB 主机已解耦，无工单侧删除保护
     删应用：V2 模型中工单不再引用应用，无工单侧删除保护
 """
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import String, and_, case, cast, delete, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.response import Errors
@@ -34,20 +34,17 @@ async def list_hosts(
     region: str | None = None,
     environment: str | None = None,
     status: str | None = None,
+    name_only: bool = False,
     sort_by: str | None = None,
     sort_order: str | None = None,
 ) -> tuple[list[Host], int]:
-    """分页查主机；keyword 模糊匹配主机名/IP，其余精确筛选。"""
+    """分页查主机；默认搜索可见业务列，name_only 保留原主机名/IP 范围。"""
     query = _host_filter_query(
-        keyword=keyword, platform=platform, region=region, environment=environment, status=status
+        keyword=keyword, platform=platform, region=region, environment=environment,
+        status=status, name_only=name_only,
     )
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
-    order_by = (Host.id.desc(),)
-    if sort_by == "created_at":
-        order_by = (
-            Host.created_at.asc() if sort_order == "asc" else Host.created_at.desc(),
-            Host.id.desc(),
-        )
+    order_by = _host_order_by(sort_by, sort_order)
     rows = await session.execute(query.order_by(*order_by).offset((page - 1) * page_size).limit(page_size))
     return list(rows.scalars()), total
 
@@ -59,12 +56,39 @@ def _host_filter_query(
     region: str | None = None,
     environment: str | None = None,
     status: str | None = None,
+    name_only: bool = False,
 ):
     """主机筛选查询构造：列表与导出共用同一套过滤语义。"""
     query = select(Host)
     if keyword:
         like = f"%{keyword}%"
-        query = query.where(Host.hostname.like(like) | Host.ip.like(like))
+        if name_only:
+            query = query.where(Host.hostname.like(like) | Host.ip.like(like))
+        else:
+            columns = (
+                Host.hostname, Host.ip, Host.public_ip, Host.project, Host.ri, Host.host_series,
+                Host.platform, Host.region, Host.os, Host.environment,
+            )
+            numeric = (Host.cpu_cores, Host.memory_gb, Host.disk_gb, Host.ssh_port)
+            # 与 HostList.specText 的单位、缺失值占位和全空显示保持一致。
+            cpu = case((Host.cpu_cores.is_(None), literal("?")),
+                       else_=cast(Host.cpu_cores, String) + literal("C"))
+            memory = case((Host.memory_gb.is_(None), literal("?")),
+                          else_=cast(Host.memory_gb, String) + literal("G"))
+            disk = case((Host.disk_gb.is_(None), literal("?")),
+                        else_=cast(Host.disk_gb, String) + literal("G"))
+            spec = case(
+                (and_(Host.cpu_cores.is_(None), Host.memory_gb.is_(None), Host.disk_gb.is_(None)), literal("—")),
+                else_=cpu + literal(" / ") + memory + literal(" / ") + disk,
+            )
+            labels = {"online": "在线", "offline": "离线", "maintenance": "维护"}
+            states = [Host.status == value for value, label in labels.items() if keyword in label]
+            query = query.where(or_(
+                *(column.like(like) for column in columns),
+                *(cast(column, String).like(like) for column in numeric),
+                spec.like(like),
+                *states,
+            ))
     if platform:
         query = query.where(Host.platform == platform)
     if region:
@@ -76,9 +100,32 @@ def _host_filter_query(
     return query
 
 
-async def iter_hosts_filtered(session: AsyncSession, **filters) -> list[Host]:
-    """按筛选条件取全量主机（导出用，按 id 升序保证行序稳定）。"""
-    rows = await session.execute(_host_filter_query(**filters).order_by(Host.id.asc()))
+def _host_order_by(sort_by: str | None, sort_order: str | None):
+    """主机可见列排序；合并资源列按数值三元组比较，空值始终置后。"""
+    columns = {
+        "hostname": Host.hostname, "ip": Host.ip, "public_ip": Host.public_ip,
+        "project": Host.project, "ri": Host.ri, "host_series": Host.host_series,
+        "platform": Host.platform, "region": Host.region, "os": Host.os,
+        "environment": Host.environment, "status": Host.status, "ssh_port": Host.ssh_port,
+        "created_at": Host.created_at,
+    }
+    if sort_by == "spec":
+        fields = (Host.cpu_cores, Host.memory_gb, Host.disk_gb)
+        return tuple(part for field in fields for part in (
+            field.is_(None), field.asc() if sort_order == "asc" else field.desc()
+        )) + (Host.id.desc(),)
+    if sort_by in columns:
+        field = columns[sort_by]
+        return (field.is_(None), field.asc() if sort_order == "asc" else field.desc(), Host.id.desc())
+    return (Host.id.desc(),)
+
+
+async def iter_hosts_filtered(
+    session: AsyncSession, *, sort_by: str | None = None, sort_order: str | None = None, **filters
+) -> list[Host]:
+    """按筛选条件取全量主机；默认按 ID 升序，指定排序时与列表一致。"""
+    order_by = _host_order_by(sort_by, sort_order) if sort_by else (Host.id.asc(),)
+    rows = await session.execute(_host_filter_query(**filters).order_by(*order_by))
     return list(rows.scalars())
 
 
@@ -157,6 +204,15 @@ async def get_host_apps(session: AsyncSession, host_id: int) -> list[Application
 
 # ---------- 应用 ----------
 
+async def list_app_systems(session: AsyncSession) -> list[str]:
+    """返回已有的非空所属系统名称，供列表精确筛选。"""
+    rows = await session.execute(
+        select(Application.system_name).where(Application.system_name.is_not(None))
+        .distinct().order_by(Application.system_name)
+    )
+    return [name for name in rows.scalars() if name and name.strip()]
+
+
 async def get_app_or_404(session: AsyncSession, app_id: int) -> Application:
     """按 ID 取应用，不存在抛 40401。"""
     app = await session.get(Application, app_id)
@@ -171,18 +227,22 @@ async def list_apps(
     page: int,
     page_size: int,
     keyword: str | None = None,
+    app_id: int | None = None,
     language: str | None = None,
     deploy_type: str | None = None,
     project_type: str | None = None,
     business_line: str | None = None,
+    system_name: str | None = None,
     service_level: str | None = None,
+    name_only: bool = False,
     sort_by: str | None = None,
     sort_order: str | None = None,
 ) -> tuple[list[Application], int, dict[int, dict]]:
     """分页查应用；返回 (列表, 总数, {app_id: 关联主机数+IP 清单})。"""
     query = _app_filter_query(
-        keyword=keyword, language=language, deploy_type=deploy_type, project_type=project_type,
-        business_line=business_line, service_level=service_level,
+        keyword=keyword, app_id=app_id, language=language, deploy_type=deploy_type, project_type=project_type,
+        business_line=business_line, system_name=system_name, service_level=service_level,
+        name_only=name_only,
     )
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
     # 关联主机数须在数据库侧排序，分页后聚合会使跨页顺序错误。
@@ -219,22 +279,43 @@ async def list_apps(
 def _app_filter_query(
     *,
     keyword: str | None = None,
+    app_id: int | None = None,
     language: str | None = None,
     deploy_type: str | None = None,
     project_type: str | None = None,
     business_line: str | None = None,
+    system_name: str | None = None,
     service_level: str | None = None,
+    name_only: bool = False,
 ):
-    """应用列表与导出共用筛选语义；关键词匹配名称、系统、负责人及端口。"""
+    """应用列表与导出共用筛选；默认搜索可见业务列，name_only 保留旧范围。"""
     query = select(Application)
+    if app_id is not None:
+        query = query.where(Application.id == app_id)
     if keyword:
-        query = query.where(or_(
-            Application.name.like(f"%{keyword}%"),
-            Application.system_name.like(f"%{keyword}%"),
-            Application.ops_owner.like(f"%{keyword}%"),
-            Application.dev_owner.like(f"%{keyword}%"),
-            Application.service_port.like(f"%{keyword}%"),
-        ))
+        like = f"%{keyword}%"
+        original_columns = (
+            Application.name, Application.system_name, Application.ops_owner,
+            Application.dev_owner, Application.service_port,
+        )
+        columns = original_columns if name_only else (
+            Application.name, Application.language,
+            Application.business_line, Application.system_name, Application.service_level,
+            Application.ops_owner, Application.dev_owner, Application.service_port,
+            Application.cpu_quota, Application.mem_quota, Application.description,
+        )
+        matches = [column.like(like) for column in columns]
+        if not name_only:
+            host_count = select(func.count(AppHost.id)).where(AppHost.app_id == Application.id).correlate(Application).scalar_subquery()
+            labels = {"shell": "Shell", "docker": "Docker", "k8s": "K8s",
+                      "frontend": "前端", "backend": "后端"}
+            matches.append((cast(host_count, String) + literal(" 台")).like(like))
+            matches.extend(
+                Application.deploy_type == value if value in ("shell", "docker", "k8s")
+                else Application.project_type == value
+                for value, label in labels.items() if keyword.lower() in label.lower()
+            )
+        query = query.where(or_(*matches))
     if language:
         query = query.where(Application.language == language)
     if deploy_type:
@@ -243,6 +324,8 @@ def _app_filter_query(
         query = query.where(Application.project_type == project_type)
     if business_line:
         query = query.where(Application.business_line == business_line)
+    if system_name:
+        query = query.where(Application.system_name == system_name)
     if service_level:
         query = query.where(Application.service_level == service_level)
     return query

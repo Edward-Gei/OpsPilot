@@ -59,25 +59,25 @@ const query = reactive({
   region: undefined as string | undefined,
   environment: undefined as string | undefined,
   status: undefined as string | undefined,
-  sort_by: undefined as 'created_at' | undefined,
+  sort_by: undefined as cmdbApi.HostQuery['sort_by'],
   sort_order: undefined as 'asc' | 'desc' | undefined,
 })
 
 // 列宽尽量均匀；操作列固定右侧，其余列可拖拽调宽（响应式包装使 width 变更生效）
 const columns = ref(makeResizable([
-  { title: '主机名', dataIndex: 'hostname', key: 'hostname', width: 130, ellipsis: true },
-  { title: '内网 IP 地址', dataIndex: 'ip', key: 'ip', width: 120 },
-  { title: '公网 IP 地址', key: 'public_ip', width: 120 },
-  { title: '项目', dataIndex: 'project', key: 'project', width: 100 },
-  { title: 'RI', key: 'ri', width: 110, ellipsis: true },
-  { title: '主机系列', key: 'host_series', width: 110, ellipsis: true },
-  { title: '平台', key: 'platform', width: 100, ellipsis: true },
-  { title: '区域', key: 'region', width: 100, ellipsis: true },
-  { title: '操作系统', key: 'os', width: 110, ellipsis: true },
-  { title: '资源配置', key: 'spec', width: 120 },
-  { title: '环境', key: 'environment', width: 90 },
-  { title: '状态', key: 'status', width: 90 },
-  { title: 'SSH 端口', dataIndex: 'ssh_port', key: 'ssh_port', width: 90 },
+  { title: '主机名', dataIndex: 'hostname', key: 'hostname', width: 130, ellipsis: true, sorter: true },
+  { title: '内网 IP 地址', dataIndex: 'ip', key: 'ip', width: 120, sorter: true },
+  { title: '公网 IP 地址', dataIndex: 'public_ip', key: 'public_ip', width: 120, sorter: true },
+  { title: '项目', dataIndex: 'project', key: 'project', width: 100, sorter: true },
+  { title: 'RI', dataIndex: 'ri', key: 'ri', width: 110, ellipsis: true, sorter: true },
+  { title: '主机系列', dataIndex: 'host_series', key: 'host_series', width: 110, ellipsis: true, sorter: true },
+  { title: '平台', dataIndex: 'platform', key: 'platform', width: 100, ellipsis: true, sorter: true },
+  { title: '区域', dataIndex: 'region', key: 'region', width: 100, ellipsis: true, sorter: true },
+  { title: '操作系统', dataIndex: 'os', key: 'os', width: 110, ellipsis: true, sorter: true },
+  { title: '资源配置', dataIndex: 'spec', key: 'spec', width: 120, sorter: true },
+  { title: '环境', dataIndex: 'environment', key: 'environment', width: 90, sorter: true },
+  { title: '状态', dataIndex: 'status', key: 'status', width: 90, sorter: true },
+  { title: 'SSH 端口', dataIndex: 'ssh_port', key: 'ssh_port', width: 90, sorter: true },
   { title: '创建时间', dataIndex: 'created_at', key: 'created', width: 155, sorter: true },
   { title: '操作', key: 'action', width: canDelete ? 244 : canWrite ? 171 : 98, fixed: 'right' as const },
 ]))
@@ -166,7 +166,7 @@ function onTableChange(
   sorter: { field?: string; order?: 'ascend' | 'descend' | null } | { field?: string; order?: 'ascend' | 'descend' | null }[],
 ) {
   const current = Array.isArray(sorter) ? sorter[0] : sorter
-  const sortBy = current.order && current.field === 'created_at' ? 'created_at' : undefined
+  const sortBy = current.order ? current.field as cmdbApi.HostQuery['sort_by'] : undefined
   const sortOrder = current.order === 'ascend' ? 'asc' : current.order === 'descend' ? 'desc' : undefined
   const sortChanged = query.sort_by !== sortBy || query.sort_order !== sortOrder
   query.sort_by = sortBy
@@ -351,6 +351,8 @@ async function onExport() {
       region: query.region || undefined,
       environment: query.environment,
       status: query.status,
+      sort_by: query.sort_by,
+      sort_order: query.sort_order,
     })
   } catch {
     message.error('导出失败')
@@ -407,7 +409,7 @@ onMounted(() => {
     <div class="toolbar">
       <a-input
         v-model:value="query.keyword"
-        placeholder="搜索主机名 / IP"
+        placeholder="搜索主机信息"
         class="kw"
         allow-clear
         @press-enter="onSearch"
@@ -696,7 +698,7 @@ onMounted(() => {
             :pagination="false"
           >
             <template #bodyCell="{ column, record }">
-              <a v-if="column.key === 'name'" :href="`/cmdb/apps?id=${record.id}`">{{ record.name }}</a>
+              <a v-if="column.key === 'name'" :href="`/cmdb/apps?id=${record.id}&related=host`">{{ record.name }}</a>
             </template>
           </a-table>
         </template>

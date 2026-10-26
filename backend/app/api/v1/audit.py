@@ -57,9 +57,9 @@ async def list_audit_logs(
     module: str | None = None,
     action: str | None = None,
     result: str | None = None,
-    keyword: str | None = Query(None, description="对象名称模糊匹配"),
+    keyword: str | None = Query(None, description="模糊匹配操作人、来源 IP、模块、动作、对象或结果"),
 ) -> dict:
-    """组合检索：时间范围 / 操作人 / 模块 / 动作 / 结果 / 对象名称（AUDIT-02）。"""
+    """组合检索：时间范围 / 精确筛选 / 非时间业务列关键词（AUDIT-02）。"""
     rows, total = await audit_service.list_logs(
         session, page=page, page_size=page_size,
         start=start, end=end, actor=actor, module=module,

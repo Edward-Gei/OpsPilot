@@ -104,6 +104,25 @@ async function openConfig(row: configApi.ConfigApprovalTodo) {
   catch { configOpen.value = false }
 }
 
+async function waitForConfigPublish(versionId: number) {
+  const hide = message.loading('审批已通过，正在发布', 0)
+  const deadline = Date.now() + 180_000
+  try {
+    while (Date.now() < deadline) {
+      let result: Awaited<ReturnType<typeof configApi.getApprovalPublishResult>>
+      try { result = await configApi.getApprovalPublishResult(versionId) }
+      catch { message.warning('审批已通过，发布结果暂未确认，请稍后查看'); return }
+      if (result.status === 'success') { message.success('配置发布成功'); return }
+      if (result.status === 'failed' || result.status === 'partial_failed') {
+        message.warning(result.last_error ? `配置发布失败：${result.last_error}` : '配置发布失败')
+        return
+      }
+      await new Promise<void>(resolve => window.setTimeout(resolve, 1500))
+    }
+    message.warning('审批已通过，发布结果暂未确认，请稍后查看')
+  } finally { hide() }
+}
+
 async function decideConfig(approved: boolean) {
   if (!selectedConfig.value) return
   decisionBusy.value = true
@@ -111,7 +130,8 @@ async function decideConfig(approved: boolean) {
     const { file_id, version_id } = selectedConfig.value
     if (approved) await configApi.approveCandidate(file_id, version_id)
     else await configApi.rejectCandidate(file_id, version_id, rejectReason.value || undefined)
-    message.success(approved ? '审批已通过，已自动发起发布' : '已驳回')
+    if (approved) void waitForConfigPublish(version_id)
+    else message.success('已驳回')
     configOpen.value = false
     rejectOpen.value = false
     rejectReason.value = ''

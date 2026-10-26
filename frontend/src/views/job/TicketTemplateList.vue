@@ -112,7 +112,7 @@ function onCopySearch(keyword: string): void {
 async function searchCopyOptions(keyword: string): Promise<void> {
   copySearching.value = true
   try {
-    const data = await api.listTemplates({ page: 1, page_size: 100, keyword: keyword || undefined })
+    const data = await api.listTemplates({ page: 1, page_size: 100, keyword: keyword || undefined, name_only: true })
     copyOptions.value = data.items.map((item) => ({ label: `${item.name}${item.status === 'disabled' ? '（已停用）' : ''}`, value: item.id }))
   } finally {
     copySearching.value = false
@@ -187,8 +187,8 @@ onMounted(() => {
     <a-table :columns="columns" :data-source="rows" :loading="loading" bordered row-key="id" :scroll="{ x: 1060 }" :row-selection="rowSelection" @resize-column="onResizeColumn" :pagination="{ current: query.page, pageSize: query.page_size, total, showSizeChanger: true, showQuickJumper: true, showTotal: (t: number) => `共 ${t} 个模板`, onChange: pageChange }">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'type'"><a-tag :color="typeText[record.type as api.TemplateType]?.color">{{ typeText[record.type as api.TemplateType]?.text || record.type }}</a-tag></template>
-        <template v-else-if="column.key === 'host'">{{ hostMap[record.job_host_id] || `#${record.job_host_id}` }}</template>
-        <template v-else-if="column.key === 'process'"><a-tag color="cyan"><a :href="`/job/templates/processes?id=${record.process_template_id}`">{{ processMap[record.process_template_id] || `#${record.process_template_id}` }}</a></a-tag></template>
+        <template v-else-if="column.key === 'host'">{{ record.job_host_name || hostMap[record.job_host_id] || `#${record.job_host_id}` }}</template>
+        <template v-else-if="column.key === 'process'"><a-tag color="cyan"><a :href="`/job/templates/processes?id=${record.process_template_id}`">{{ record.process_template_name || processMap[record.process_template_id] || `#${record.process_template_id}` }}</a></a-tag></template>
         <template v-else-if="column.key === 'visible_roles'">
           <template v-if="record.visible_role_ids?.length">
             <a-tag v-for="roleId in record.visible_role_ids" :key="roleId" color="blue">{{ roleMap[roleId] || roleId }}</a-tag>

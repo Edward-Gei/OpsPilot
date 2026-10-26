@@ -6,7 +6,7 @@ import { createPinia } from 'pinia'
 import AppList from './AppList.vue'
 import HostList from './HostList.vue'
 
-const api = vi.hoisted(() => ({ listApps: vi.fn(), getApp: vi.fn(), listHosts: vi.fn(), getHost: vi.fn(),
+const api = vi.hoisted(() => ({ listApps: vi.fn(), getApp: vi.fn(), listHosts: vi.fn(), getHost: vi.fn(), listAppSystems: vi.fn(), exportApps: vi.fn(),
   routeQuery: {} as Record<string, string>, configRead: true }))
 vi.mock('@/api/cmdb', () => api)
 vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: (perm: string) => perm !== 'config:read' || api.configRead }) }))
@@ -37,6 +37,7 @@ beforeEach(() => {
   api.routeQuery = {}
   api.configRead = true
   api.listApps.mockResolvedValue({ items: [app], total: 1 })
+  api.listAppSystems.mockResolvedValue({ items: ['订单系统', '订单系统扩展'] })
   api.getApp.mockResolvedValue({ ...app, hosts: [], config_files: [{
     id: 11, name: 'common.yaml', platform_instance_name: '生产 Nacos', provider: 'nacos',
     locator: { namespace: 'prod', group: 'DEFAULT_GROUP', data_id: 'common.yaml' },
@@ -99,6 +100,7 @@ it('应用详情链接按 ID 直达，不依赖当前分页是否包含该应用
   const wrapper = mount(AppList, { attachTo: document.body })
   await flushPromises()
   expect(document.querySelector('.ant-drawer-title')?.textContent).toBe('订单应用')
+  expect(api.listApps.mock.calls.every(([params]) => params.app_id === undefined)).toBe(true)
   wrapper.unmount()
 })
 
@@ -111,7 +113,85 @@ it('主机详情链接按 ID 直达，不依赖当前列表记录', async () => 
   await flushPromises()
   expect(document.querySelector('.ant-drawer-title')?.textContent).toBe('demo-host')
   expect(document.body.textContent).toContain('192.0.2.1')
-  expect(document.querySelector('a[href="/cmdb/apps?id=7"]')?.textContent).toBe('订单应用')
+  expect(document.querySelector('a[href="/cmdb/apps?id=7&related=host"]')?.textContent).toBe('订单应用')
+  wrapper.unmount()
+})
+
+it('从主机关联应用跳转时打开详情并只列出该应用', async () => {
+  api.routeQuery = { id: '7', related: 'host' }
+  api.listApps.mockImplementation(async (params: { app_id?: number }) =>
+    params.app_id === 7 ? { items: [app], total: 1 } : { items: [app, { ...app, id: 8, name: '订单应用扩展' }], total: 2 })
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  expect(document.querySelector('.ant-drawer-title')?.textContent).toBe('订单应用')
+  expect(wrapper.find<HTMLInputElement>('input[placeholder="搜索应用信息"]').element.value).toBe('订单应用')
+  expect(api.listApps).toHaveBeenCalledWith(expect.objectContaining({ app_id: 7 }))
+  expect(wrapper.findAll('.ant-table-tbody tr[data-row-key]')).toHaveLength(1)
+  wrapper.unmount()
+})
+
+it('关联应用搜索词未修改时按回车仍保留精确结果', async () => {
+  api.routeQuery = { id: '7', related: 'host' }
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  await wrapper.find('input[placeholder="搜索应用信息"]').trigger('keydown.enter')
+  await flushPromises()
+  expect(api.listApps.mock.lastCall?.[0].app_id).toBe(7)
+  wrapper.unmount()
+})
+
+it('修改关联应用搜索词后恢复普通搜索', async () => {
+  api.routeQuery = { id: '7', related: 'host' }
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  await wrapper.find('input[placeholder="搜索应用信息"]').setValue('其他应用')
+  await flushPromises()
+  const params = api.listApps.mock.lastCall?.[0]
+  expect(params.keyword).toBe('其他应用')
+  expect(params.app_id).toBeUndefined()
+  wrapper.unmount()
+})
+
+it('清空关联应用搜索词后恢复完整列表', async () => {
+  api.routeQuery = { id: '7', related: 'host' }
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  await wrapper.find('input[placeholder="搜索应用信息"]').setValue('')
+  await flushPromises()
+  const params = api.listApps.mock.lastCall?.[0]
+  expect(params.keyword).toBeUndefined()
+  expect(params.app_id).toBeUndefined()
+  wrapper.unmount()
+})
+
+it('旧的关联应用列表响应不会覆盖修改后的搜索结果', async () => {
+  api.routeQuery = { id: '7', related: 'host' }
+  const other = { ...app, id: 8, name: '其他应用' }
+  let finishFocused!: (value: { items: typeof app[]; total: number }) => void
+  api.listApps.mockImplementation(async (params: { app_id?: number; keyword?: string }) => {
+    if (params.app_id === 7) return new Promise((resolve) => { finishFocused = resolve })
+    if (params.keyword === '其他应用') return { items: [other], total: 1 }
+    return { items: [app], total: 1 }
+  })
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  await wrapper.find('input[placeholder="搜索应用信息"]').setValue('其他应用')
+  await flushPromises()
+  finishFocused({ items: [app], total: 1 })
+  await flushPromises()
+  expect(wrapper.find('.ant-table-tbody tr[data-row-key]').text()).toContain('其他应用')
+  wrapper.unmount()
+})
+
+it('关联应用详情不存在时恢复普通列表', async () => {
+  api.routeQuery = { id: '7', related: 'host' }
+  api.getApp.mockRejectedValue(new Error('应用不存在'))
+  api.listApps.mockImplementation(async (params: { app_id?: number }) =>
+    params.app_id === 7 ? { items: [], total: 0 } : { items: [app], total: 1 })
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  expect(wrapper.find('.ant-table-tbody tr[data-row-key]').exists()).toBe(true)
+  expect(wrapper.find('.ant-table-tbody tr[data-row-key]').text()).toContain('订单应用')
   wrapper.unmount()
 })
 
@@ -133,7 +213,7 @@ it('每个非操作列表头均有排序入口，服务端口排序传给后端'
   const wrapper = mount(AppList, { attachTo: document.body })
   await flushPromises()
   const headers = [...document.querySelectorAll<HTMLElement>('.ant-table-thead th')]
-    .filter((header) => header.textContent?.trim() && !header.textContent.includes('操作'))
+    .filter((header) => header.textContent?.trim() && header.textContent.trim() !== '操作')
   expect(headers).toHaveLength(15)
   expect(headers.every((header) => !!header.querySelector('.ant-table-column-sorter'))).toBe(true)
   headers.find((header) => header.textContent?.includes('服务端口'))!
@@ -142,5 +222,46 @@ it('每个非操作列表头均有排序入口，服务端口排序传给后端'
   expect(api.listApps).toHaveBeenLastCalledWith(expect.objectContaining({
     sort_by: 'service_port', sort_order: 'asc', page: 1,
   }))
+  wrapper.unmount()
+})
+
+it('主机每个非操作列表头均有排序入口，资源配置排序传给后端', async () => {
+  api.listHosts.mockResolvedValue({ items: [], total: 0 })
+  const wrapper = mount(HostList, { attachTo: document.body })
+  await flushPromises()
+  const headers = [...document.querySelectorAll<HTMLElement>('.ant-table-thead th')]
+    .filter((header) => header.textContent?.trim() && header.textContent.trim() !== '操作')
+  expect(headers).toHaveLength(14)
+  expect(headers.every((header) => !!header.querySelector('.ant-table-column-sorter'))).toBe(true)
+  headers.find((header) => header.textContent?.includes('资源配置'))!
+    .querySelector<HTMLElement>('.ant-table-column-sorters')!.click()
+  await flushPromises()
+  expect(api.listHosts).toHaveBeenLastCalledWith(expect.objectContaining({
+    sort_by: 'spec', sort_order: 'asc', page: 1,
+  }))
+  wrapper.unmount()
+})
+
+it('所属系统下拉展示已有名称，并精确筛选应用', async () => {
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  expect(api.listAppSystems).toHaveBeenCalled()
+  const select = [...document.querySelectorAll<HTMLElement>('.ant-select')]
+    .find((item) => item.querySelector('.ant-select-selection-placeholder')?.textContent === '所属系统')!
+  select.querySelector('.ant-select-selector')!
+    .dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  await flushPromises()
+  const option = [...document.querySelectorAll<HTMLElement>('.ant-select-item-option')]
+    .find((item) => item.textContent?.includes('订单系统'))!
+  option.click()
+  await flushPromises()
+  expect(api.listApps).toHaveBeenLastCalledWith(expect.objectContaining({
+    system_name: '订单系统', page: 1,
+  }))
+  const exportButton = [...document.querySelectorAll<HTMLButtonElement>('button')]
+    .find((button) => button.textContent?.includes('导出'))!
+  exportButton.click()
+  await flushPromises()
+  expect(api.exportApps).toHaveBeenCalledWith(expect.objectContaining({ system_name: '订单系统' }))
   wrapper.unmount()
 })
