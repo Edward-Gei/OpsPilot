@@ -640,54 +640,34 @@ describe('列表同步', () => {
 })
 
 describe('配置编辑器', () => {
-  it.each(['yaml', 'json', 'consul_kv'] as const)('%s 查看时可在框内搜索并跳转匹配项', async (format) => {
-    const wrapper = mount(ConfigContentEditor, { props: { format, modelValue: 'key: first\nkey: second', readonly: true } })
-    await wrapper.find('button[aria-label="查找配置内容"]').trigger('click')
-    await wrapper.find('input[aria-label="查找内容"]').setValue('key')
-    await flushPromises()
+  it.each(['yaml', 'json', 'consul_kv', 'text'] as const)('%s 查看时 Ctrl+F 打开 CodeMirror 原生查找框', async (format) => {
+    const wrapper = mount(ConfigContentEditor, { props: { format, modelValue: 'key: first\nkey: second', readonly: true }, attachTo: document.body })
     const view = EditorView.findFromDOM(wrapper.find('.cm-editor').element as HTMLElement)!
-    expect(wrapper.find('.config-editor-find-count').text()).toBe('1 / 2')
-    expect([view.state.selection.main.from, view.state.selection.main.to]).toEqual([0, 3])
-    await wrapper.find('button[aria-label="下一个匹配"]').trigger('click')
-    expect([view.state.selection.main.from, view.state.selection.main.to]).toEqual([11, 14])
-    await wrapper.find('input[aria-label="查找内容"]').setValue('missing')
+    view.focus()
+    wrapper.find('.cm-content').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true }))
     await flushPromises()
-    expect(wrapper.find('.config-editor-find-count').text()).toBe('0 / 0')
-    expect(view.state.selection.main.empty).toBe(true)
+    expect(wrapper.find('.cm-panels-bottom .cm-search').exists()).toBe(true)
+    expect(wrapper.find('.config-editor-search').exists()).toBe(false)
     expect(wrapper.emitted('update:modelValue')).toBeUndefined()
     wrapper.unmount()
   })
 
-  it('TEXT 查看时用纯文本编辑器查找，不改写正文', async () => {
-    const wrapper = mount(ConfigContentEditor, { props: { format: 'text', modelValue: 'alpha beta alpha', readonly: true }, attachTo: document.body })
-    await wrapper.find('button[aria-label="查找配置内容"]').trigger('click')
-    const search = wrapper.find<HTMLInputElement>('input[aria-label="查找内容"]')
-    search.element.focus()
-    await search.setValue('alpha')
+  it.each([
+    ['yaml', true], ['yaml', false], ['text', true], ['text', false],
+  ] as const)('%s 只读状态 %s 可从底边中部拖动整体高度', async (format, readonly) => {
+    const wrapper = mount(ConfigContentEditor, { props: { format, modelValue: 'key: value', readonly } })
+    const handle = wrapper.find('.config-editor-resize-handle')
+    expect(handle.exists()).toBe(true)
+    await handle.trigger('pointerdown', { button: 0, clientY: 400 })
+    window.dispatchEvent(new MouseEvent('pointermove', { clientY: 520 }))
     await flushPromises()
-    const view = EditorView.findFromDOM(wrapper.find('.cm-editor').element as HTMLElement)!
-    expect(document.activeElement).toBe(search.element)
-    expect([view.state.selection.main.from, view.state.selection.main.to]).toEqual([0, 5])
-    await wrapper.find('button[aria-label="下一个匹配"]').trigger('click')
-    expect([view.state.selection.main.from, view.state.selection.main.to]).toEqual([11, 16])
-    expect(view.state.doc.toString()).toBe('alpha beta alpha')
-    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
-    wrapper.unmount()
-  })
-
-  it('查找词中的特殊字符按普通文本匹配', async () => {
-    const wrapper = mount(ConfigContentEditor, { props: { format: 'text', modelValue: 'a.b a-b', readonly: true } })
-    await wrapper.find('button[aria-label="查找配置内容"]').trigger('click')
-    await wrapper.find('input[aria-label="查找内容"]').setValue('a.b')
+    expect(wrapper.find('.config-editor-frame').attributes('style')).toContain('height: 480px')
+    window.dispatchEvent(new MouseEvent('pointermove', { clientY: 0 }))
     await flushPromises()
-    expect(wrapper.find('.config-editor-find-count').text()).toBe('1 / 1')
-    wrapper.unmount()
-  })
-
-  it.each([true, false])('只读状态 %s 的配置框可纵向调整高度', (readonly) => {
-    const wrapper = mount(ConfigContentEditor, { props: { format: 'yaml', modelValue: 'key: value', readonly } })
-    expect(wrapper.find('.config-editor-frame').attributes('style')).toContain('resize: vertical')
-    expect(wrapper.findComponent(CodeEditor).props('height')).toBe('100%')
+    expect(wrapper.find('.config-editor-frame').attributes('style')).toContain('height: 180px')
+    window.dispatchEvent(new MouseEvent('pointerup'))
+    if (format !== 'text' || readonly) expect(wrapper.findComponent(CodeEditor).props('height')).toBe('100%')
+    else expect(wrapper.find('textarea.config-editor-input').exists()).toBe(true)
     wrapper.unmount()
   })
 

@@ -30,16 +30,7 @@ const insertText = (text: string) => {
   view.dispatch({ changes: { from: selection.from, to: selection.to, insert: text }, selection: { anchor: selection.from + text.length } })
   view.focus()
 }
-/** 只移动选区并滚动到匹配项，供只读配置内容查找使用。 */
-const selectRange = (from: number, to: number) => {
-  if (!view) return
-  view.dispatch({ selection: { anchor: from, head: to }, effects: EditorView.scrollIntoView(from, { y: 'center' }) })
-}
-const clearSelection = () => {
-  if (!view) return
-  view.dispatch({ selection: { anchor: view.state.selection.main.from } })
-}
-defineExpose({ insertText, selectRange, clearSelection })
+defineExpose({ insertText })
 
 const themeStore = useThemeStore()
 const holder = ref<HTMLDivElement>()
