@@ -4,7 +4,9 @@ import { config, flushPromises, mount, shallowMount } from '@vue/test-utils'
 import Antd, { message } from 'ant-design-vue'
 import { createPinia } from 'pinia'
 import { reactive } from 'vue'
+import { EditorView } from 'codemirror'
 import ConfigContentEditor from './ConfigContentEditor.vue'
+import CodeEditor from '@/components/CodeEditor.vue'
 import DriftCompareDrawer from './DriftCompareDrawer.vue'
 import ApplicationConfigList from './ApplicationConfigList.vue'
 import NewConfigDrawer from './NewConfigDrawer.vue'
@@ -638,6 +640,57 @@ describe('列表同步', () => {
 })
 
 describe('配置编辑器', () => {
+  it.each(['yaml', 'json', 'consul_kv'] as const)('%s 查看时可在框内搜索并跳转匹配项', async (format) => {
+    const wrapper = mount(ConfigContentEditor, { props: { format, modelValue: 'key: first\nkey: second', readonly: true } })
+    await wrapper.find('button[aria-label="查找配置内容"]').trigger('click')
+    await wrapper.find('input[aria-label="查找内容"]').setValue('key')
+    await flushPromises()
+    const view = EditorView.findFromDOM(wrapper.find('.cm-editor').element as HTMLElement)!
+    expect(wrapper.find('.config-editor-find-count').text()).toBe('1 / 2')
+    expect([view.state.selection.main.from, view.state.selection.main.to]).toEqual([0, 3])
+    await wrapper.find('button[aria-label="下一个匹配"]').trigger('click')
+    expect([view.state.selection.main.from, view.state.selection.main.to]).toEqual([11, 14])
+    await wrapper.find('input[aria-label="查找内容"]').setValue('missing')
+    await flushPromises()
+    expect(wrapper.find('.config-editor-find-count').text()).toBe('0 / 0')
+    expect(view.state.selection.main.empty).toBe(true)
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('TEXT 查看时用纯文本编辑器查找，不改写正文', async () => {
+    const wrapper = mount(ConfigContentEditor, { props: { format: 'text', modelValue: 'alpha beta alpha', readonly: true }, attachTo: document.body })
+    await wrapper.find('button[aria-label="查找配置内容"]').trigger('click')
+    const search = wrapper.find<HTMLInputElement>('input[aria-label="查找内容"]')
+    search.element.focus()
+    await search.setValue('alpha')
+    await flushPromises()
+    const view = EditorView.findFromDOM(wrapper.find('.cm-editor').element as HTMLElement)!
+    expect(document.activeElement).toBe(search.element)
+    expect([view.state.selection.main.from, view.state.selection.main.to]).toEqual([0, 5])
+    await wrapper.find('button[aria-label="下一个匹配"]').trigger('click')
+    expect([view.state.selection.main.from, view.state.selection.main.to]).toEqual([11, 16])
+    expect(view.state.doc.toString()).toBe('alpha beta alpha')
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('查找词中的特殊字符按普通文本匹配', async () => {
+    const wrapper = mount(ConfigContentEditor, { props: { format: 'text', modelValue: 'a.b a-b', readonly: true } })
+    await wrapper.find('button[aria-label="查找配置内容"]').trigger('click')
+    await wrapper.find('input[aria-label="查找内容"]').setValue('a.b')
+    await flushPromises()
+    expect(wrapper.find('.config-editor-find-count').text()).toBe('1 / 1')
+    wrapper.unmount()
+  })
+
+  it.each([true, false])('只读状态 %s 的配置框可纵向调整高度', (readonly) => {
+    const wrapper = mount(ConfigContentEditor, { props: { format: 'yaml', modelValue: 'key: value', readonly } })
+    expect(wrapper.find('.config-editor-frame').attributes('style')).toContain('resize: vertical')
+    expect(wrapper.findComponent(CodeEditor).props('height')).toBe('100%')
+    wrapper.unmount()
+  })
+
   it.each([
     ['yaml', 'app:\n  name: test'],
     ['json', '{\n  "name": "test"\n}'],
@@ -652,6 +705,7 @@ describe('配置编辑器', () => {
   it('TEXT 仍使用普通输入框', () => {
     const plain = mount(ConfigContentEditor, { props: { format: 'text', modelValue: 'plain' } })
     expect(plain.find('textarea').exists()).toBe(true)
+    expect(plain.find('.cm-editor').exists()).toBe(false)
     plain.unmount()
   })
 })

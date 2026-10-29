@@ -16,7 +16,7 @@ import { useThemeStore } from '@/stores/theme'
 const props = withDefaults(
   defineProps<{
     modelValue: string
-    lang?: 'shell' | 'yaml' | 'json'
+    lang?: 'shell' | 'yaml' | 'json' | 'text'
     readonly?: boolean
     height?: string
     indentGuides?: boolean
@@ -30,7 +30,16 @@ const insertText = (text: string) => {
   view.dispatch({ changes: { from: selection.from, to: selection.to, insert: text }, selection: { anchor: selection.from + text.length } })
   view.focus()
 }
-defineExpose({ insertText })
+/** 只移动选区并滚动到匹配项，供只读配置内容查找使用。 */
+const selectRange = (from: number, to: number) => {
+  if (!view) return
+  view.dispatch({ selection: { anchor: from, head: to }, effects: EditorView.scrollIntoView(from, { y: 'center' }) })
+}
+const clearSelection = () => {
+  if (!view) return
+  view.dispatch({ selection: { anchor: view.state.selection.main.from } })
+}
+defineExpose({ insertText, selectRange, clearSelection })
 
 const themeStore = useThemeStore()
 const holder = ref<HTMLDivElement>()
@@ -42,7 +51,8 @@ const themeComp = new Compartment()
 const readonlyComp = new Compartment()
 
 /** 语言扩展：playbook 用 yaml，shell/adhoc 用 shell 流式高亮 */
-function langExt(lang: 'shell' | 'yaml' | 'json') {
+function langExt(lang: 'shell' | 'yaml' | 'json' | 'text') {
+  if (lang === 'text') return []
   if (lang === 'yaml') return yaml()
   if (lang === 'json') return StreamLanguage.define({ ...jsonParser, tokenTable: { property: tags.propertyName } })
   return StreamLanguage.define(shell)
