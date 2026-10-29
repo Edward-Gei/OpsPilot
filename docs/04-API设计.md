@@ -262,6 +262,16 @@
 | PUT | `/notifications/{id}/read` | 标记本人单条已读 |
 | PUT | `/notifications/read-all` | 本人全部已读 |
 
+应用配置复用上述站内信接口，新增以下事件与关联对象，不加入 `/notify/events` 的外部渠道映射：
+
+| `event` | 触发节点与接收人 | `ref_type` / `ref_id` |
+| --- | --- | --- |
+| `config.pending_approval` | 候选提交后，通知冻结审批角色的当前有效成员 | `config_approval` / 候选版本 ID |
+| `config.approved`、`config.rejected` | 审批通过或驳回后，通知修改提交人；驳回通知附带审批原因 | `config_file` / 配置文件 ID |
+| `config.publish_success`、`config.publish_failed` | 发布任务最终成功或失败后，通知修改提交人和本次任务发起人并去重 | `config_file` / 配置文件 ID |
+
+`config_approval` 通知点击进入 `/ticket/todo?tab=config`，`config_file` 通知进入 `/application-configs/{file_id}`；目标接口和页面继续校验当前审批身份或 `config:read`。发布结果包括自动发布、人工重试和确认重新发布；排队、执行及自动重试中不产生结果通知，接入和手动同步不产生这些事件。系统不自动附带配置正文或凭据，也不生成外部渠道发送记录。
+
 ## 10. 审计
 
 | 方法 | 路径 | 权限 | 说明 |

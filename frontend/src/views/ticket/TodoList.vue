@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 待办审批：工单与配置候选按当前角色分别展示；配置预览和裁决不依赖工单权限。
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { AuditOutlined, EyeOutlined } from '@ant-design/icons-vue'
 import * as ticketApi from '@/api/ticket'
@@ -12,8 +13,10 @@ import TicketDetailDrawer from './TicketDetailDrawer.vue'
 import ConfigVersionCompare from '@/views/application-config/ConfigVersionCompare.vue'
 
 const user = useUserStore()
+const route = useRoute()
 const canApproveTicket = computed(() => user.hasPerm('ticket:approve'))
-const activeTab = ref(canApproveTicket.value ? 'ticket' : 'config')
+// 配置通知直达配置审批，普通入口保留原有权限对应的默认页签。
+const activeTab = ref(route.query.tab === 'config' || !canApproveTicket.value ? 'config' : 'ticket')
 
 // ---------- 列表 ----------
 const loading = ref(false)

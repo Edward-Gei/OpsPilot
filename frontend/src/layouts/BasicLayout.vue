@@ -224,7 +224,7 @@ const notifOpen = ref(false)
 const notifLoading = ref(false)
 const notifItems = ref<NotificationItem[]>([])
 
-// 事件标签：与通知中心六事件一致的中文短名
+// 事件标签：工单执行与配置修改共用铃铛列表。
 const EVENT_LABELS: Record<string, string> = {
   'ticket.pending_approval': '待审批',
   'ticket.approved': '审批通过',
@@ -232,6 +232,11 @@ const EVENT_LABELS: Record<string, string> = {
   'execution.success': '执行成功',
   'execution.failed': '执行失败',
   'execution.interrupted': '执行中断',
+  'config.pending_approval': '配置待审批',
+  'config.approved': '配置审批通过',
+  'config.rejected': '配置审批驳回',
+  'config.publish_success': '配置发布成功',
+  'config.publish_failed': '配置发布失败',
 }
 
 /** 相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前（超 7 天显日期） */
@@ -272,7 +277,7 @@ async function onNotifOpenChange(open: boolean) {
   }
 }
 
-/** 单条点击：置已读后按 ref_type 跳转（ticket → 工单中心自动开详情，execution → 执行详情） */
+/** 单条点击：先标记已读，再按关联对象进入对应详情或配置审批页签。 */
 async function onNotifClick(item: NotificationItem) {
   if (!item.is_read) {
     try {
@@ -288,6 +293,10 @@ async function onNotifClick(item: NotificationItem) {
     await router.push(`/executions/${item.ref_id}`)
   } else if (item.ref_type === 'ticket' && item.ref_id) {
     await router.push({ path: '/ticket/list', query: { id: String(item.ref_id) } })
+  } else if (item.ref_type === 'config_approval' && item.ref_id) {
+    await router.push({ path: '/ticket/todo', query: { tab: 'config' } })
+  } else if (item.ref_type === 'config_file' && item.ref_id) {
+    await router.push(`/application-configs/${item.ref_id}`)
   } else {
     return
   }

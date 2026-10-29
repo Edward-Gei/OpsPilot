@@ -34,6 +34,7 @@ from app.models.application_config import (
 from app.models.auth import Role, User, UserRole
 from app.models.cmdb import Application
 from app.models.job import Credential
+from app.services import notify_service
 from app.services.config_content_service import (
     merge_redacted_update,
     redact_content,
@@ -615,6 +616,18 @@ async def submit_candidate(session: AsyncSession, file_id: int, actor_id: int) -
     await session.delete(draft)
     await session.flush()
     await session.refresh(version)
+    receivers = list((await session.execute(
+        select(User.username).join(UserRole, UserRole.user_id == User.id).where(
+            UserRole.role_id == version.approval_role_id, User.status == "active",
+        )
+    )).scalars())
+    # 按候选冻结的审批角色通知当前成员，消息与提交事务一起生效。
+    await notify_service.emit_inapp(
+        session, "config.pending_approval", receiver=",".join(receivers),
+        title=f"配置 {config_file.name} v{version.version_no} 待审批",
+        content=f"配置文件 {config_file.name} 的版本 v{version.version_no} 已提交，请前往配置审批处理。",
+        ref_type="config_approval", ref_id=version.id,
+    )
     return version
 
 
@@ -726,6 +739,18 @@ async def decide_candidate(
         version.rejected_at = datetime.now()
         version.reject_reason = reason
     await session.flush()
+    submitter = await session.get(User, version.submitted_by) if version.submitted_by else None
+    if submitter:
+        config_file = await get_config_file(session, file_id)
+        result = "审批通过" if approved else "审批驳回"
+        # 审批结果随请求事务提交，自动发布入队失败时也会一起回滚。
+        await notify_service.emit_inapp(
+            session, "config.approved" if approved else "config.rejected", receiver=submitter.username,
+            title=f"配置 {config_file.name} v{version.version_no} {result}",
+            content=f"配置文件 {config_file.name} 的版本 v{version.version_no} {result}。"
+                    + (f"驳回原因：{reason}" if not approved and reason else ""),
+            ref_type="config_file", ref_id=file_id,
+        )
     return version
 
 
