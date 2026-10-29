@@ -640,16 +640,20 @@ describe('列表同步', () => {
 })
 
 describe('配置编辑器', () => {
-  it.each(['yaml', 'json', 'consul_kv', 'text'] as const)('%s 查看时 Ctrl+F 打开 CodeMirror 原生查找框', async (format) => {
-    const wrapper = mount(ConfigContentEditor, { props: { format, modelValue: 'key: first\nkey: second', readonly: true }, attachTo: document.body })
+  it.each([
+    ['yaml', true], ['yaml', false], ['json', true], ['json', false],
+    ['consul_kv', true], ['consul_kv', false], ['text', true], ['text', false],
+  ] as const)('%s 只读状态 %s 时 Ctrl+F 在顶部打开 CodeMirror 原生查找框', async (format, readonly) => {
+    const wrapper = mount(ConfigContentEditor, { props: { format, modelValue: 'key: first\nkey: second', readonly }, attachTo: document.body })
     const view = EditorView.findFromDOM(wrapper.find('.cm-editor').element as HTMLElement)!
     const content = wrapper.find('.cm-content')
     expect(content.attributes('contenteditable')).toBe('true')
-    expect(view.state.readOnly).toBe(true)
+    expect(view.state.readOnly).toBe(readonly)
     view.focus()
     content.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true }))
     await flushPromises()
-    expect(wrapper.find('.cm-panels-bottom .cm-search').exists()).toBe(true)
+    expect(wrapper.find('.cm-panels-top .cm-search').exists()).toBe(true)
+    expect(wrapper.find('.cm-panels-bottom .cm-search').exists()).toBe(false)
     expect(wrapper.find('.config-editor-search').exists()).toBe(false)
     expect(wrapper.emitted('update:modelValue')).toBeUndefined()
     wrapper.unmount()
@@ -669,8 +673,7 @@ describe('配置编辑器', () => {
     await flushPromises()
     expect(wrapper.find('.config-editor-frame').attributes('style')).toContain('height: 180px')
     window.dispatchEvent(new MouseEvent('pointerup'))
-    if (format !== 'text' || readonly) expect(wrapper.findComponent(CodeEditor).props('height')).toBe('100%')
-    else expect(wrapper.find('textarea.config-editor-input').exists()).toBe(true)
+    expect(wrapper.findComponent(CodeEditor).props('height')).toBe('100%')
     wrapper.unmount()
   })
 
@@ -685,10 +688,15 @@ describe('配置编辑器', () => {
     structured.unmount()
   })
 
-  it('TEXT 仍使用普通输入框', () => {
-    const plain = mount(ConfigContentEditor, { props: { format: 'text', modelValue: 'plain' } })
-    expect(plain.find('textarea').exists()).toBe(true)
-    expect(plain.find('.cm-editor').exists()).toBe(false)
+  it('TEXT 编辑使用 CodeMirror 并保留完整替换提示', () => {
+    const plain = mount(ConfigContentEditor, { props: { format: 'text', modelValue: '', masked: true, canReadSecret: false } })
+    expect(plain.find('textarea').exists()).toBe(false)
+    expect(plain.find('.cm-editor').exists()).toBe(true)
+    expect(plain.find('.config-editor-alert').exists()).toBe(true)
+    expect(plain.find('.cm-placeholder').text()).toBe('输入完整替换内容')
+    const view = EditorView.findFromDOM(plain.find('.cm-editor').element as HTMLElement)!
+    view.dispatch({ changes: { from: 0, insert: '完整替换内容' } })
+    expect(plain.emitted('update:modelValue')?.[0]).toEqual(['完整替换内容'])
     plain.unmount()
   })
 })

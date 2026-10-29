@@ -52,12 +52,11 @@ onBeforeUnmount(stopResize)
     <a-alert v-if="format === 'text' && masked && !canReadSecret && !readonly" type="warning" show-icon
       message="原文已隐藏；保存时须完整替换内容" class="config-editor-alert" />
     <div class="config-editor-frame" :style="{ height: `${frameHeight}px` }">
-      <CodeEditor v-if="readonly || format !== 'text'"
-        :model-value="props.modelValue" :readonly="readonly" :focusable-readonly="readonly" :indent-guides="format !== 'text'"
+      <CodeEditor
+        :model-value="props.modelValue" :readonly="readonly" :focusable-readonly="readonly" search-panel-top
+        :placeholder="format === 'text' ? masked && !canReadSecret ? '输入完整替换内容' : '配置内容' : undefined"
+        :indent-guides="format !== 'text'"
         :lang="format === 'yaml' ? 'yaml' : format === 'text' ? 'text' : 'json'" height="100%" @update:model-value="update" />
-      <a-textarea v-else :value="props.modelValue" :readonly="readonly" :rows="16"
-        :placeholder="format === 'text' && masked && !canReadSecret ? '输入完整替换内容' : '配置内容'"
-        class="config-editor-input" spellcheck="false" @update:value="update" />
       <div class="config-editor-resize-handle" role="separator" aria-label="调整配置内容高度"
         aria-orientation="horizontal" :aria-valuenow="frameHeight" aria-valuemin="180" tabindex="0"
         @pointerdown="startResize" @keydown="resizeByKeyboard" />
@@ -70,6 +69,5 @@ onBeforeUnmount(stopResize)
 .config-editor-alert { margin-bottom: 10px; }
 .config-editor-frame { display: flex; flex-direction: column; height: 360px; min-height: 180px; min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; }
 .config-editor-frame :deep(.code-editor) { flex: 1; min-height: 0; border: 0; border-radius: 0; }
-.config-editor-input { flex: 1; width: 100%; min-height: 0; font-family: Consolas, 'Courier New', monospace; line-height: 1.55; resize: none; border: 0; border-radius: 0; }
 .config-editor-resize-handle { flex: none; width: 100%; height: 10px; cursor: ns-resize; touch-action: none; }
 </style>
