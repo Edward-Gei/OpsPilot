@@ -13,6 +13,8 @@ import {
   SearchOutlined,
 } from '@ant-design/icons-vue'
 import * as cmdbApi from '@/api/cmdb'
+import * as configApi from '@/api/applicationConfig'
+import * as jobApi from '@/api/job'
 import { makeResizable, onResizeColumn } from '@/utils/table'
 import { useUserStore } from '@/stores/user'
 
@@ -21,6 +23,8 @@ const canWrite = userStore.hasPerm('cmdb:write')
 const canDelete = userStore.hasPerm('cmdb:delete')
 const canReadConfigs = userStore.hasPerm('config:read')
 const canReadTemplates = userStore.hasPerm('template:read')
+const canManageConfigs = canWrite && canReadConfigs && userStore.hasPerm('config:write')
+const canManageTemplates = canWrite && canReadTemplates && userStore.hasPerm('template:write')
 
 // 部署方式彩色标签（与 M1 列表标签风格一致）
 const deployText: Record<string, { text: string; color: string }> = {
@@ -288,8 +292,44 @@ const editForm = reactive<{
 })
 // a-transfer 的 targetKeys 为字符串，提交时转回 number[]
 const targetKeys = ref<string[]>([])
+const configFileIds = ref<number[]>([])
+const ticketTemplateIds = ref<number[]>([])
+const configOptions = ref<{ label: string; value: number }[]>([])
+const templateOptions = ref<{ label: string; value: number }[]>([])
+let editRequestId = 0
+
+/** 关联候选按页加载，包含归档配置文件和停用模板。 */
+async function loadConfigOptions() {
+  if (!canManageConfigs) return []
+  const options: { label: string; value: number }[] = []
+  for (let page = 1; ; page += 1) {
+    const data = await configApi.listConfigFiles({ page, page_size: 100 })
+    options.push(...data.items.map((file) => ({
+      label: `${file.name}（${file.platform_instance_name || '未知实例'}${file.status === 'archived' ? '，已归档' : ''}）`,
+      value: file.id,
+    })))
+    if (!data.items.length || options.length >= data.total) break
+  }
+  return options
+}
+
+async function loadTemplateOptions() {
+  if (!canManageTemplates) return []
+  const options: { label: string; value: number }[] = []
+  for (let page = 1; ; page += 1) {
+    const data = await jobApi.listTemplates({ page, page_size: 100 })
+    options.push(...data.items.map((template) => ({
+      label: `${template.name}${template.status === 'disabled' ? '（已停用）' : ''}`,
+      value: template.id,
+    })))
+    if (!data.items.length || options.length >= data.total) break
+  }
+  return options
+}
 
 function openCreate() {
+  editRequestId += 1
+  editLoading.value = false
   editing.value = null
   Object.assign(editForm, {
     name: '', language: '', deploy_type: 'shell', project_type: 'frontend', business_line: 'mitrade',
@@ -297,13 +337,16 @@ function openCreate() {
     service_port: '', cpu_quota: '', mem_quota: '', description: '',
   })
   targetKeys.value = []
+  configFileIds.value = []
+  ticketTemplateIds.value = []
   formStep.value = 1
   editVisible.value = true
   loadAllHosts()
 }
 
-/** 编辑：先查详情回填已关联主机（穿梭框右侧） */
+/** 编辑：详情与完整候选加载完成后才允许保存，避免未回显时清空关联。 */
 async function openEdit(row: cmdbApi.AppItem) {
+  const requestId = ++editRequestId
   editing.value = row
   Object.assign(editForm, {
     name: row.name,
@@ -323,9 +366,25 @@ async function openEdit(row: cmdbApi.AppItem) {
   })
   formStep.value = 1
   editVisible.value = true
-  loadAllHosts()
-  const detail = await cmdbApi.getApp(row.id)
-  targetKeys.value = detail.hosts.map((h) => String(h.id))
+  editLoading.value = true
+  targetKeys.value = []
+  configFileIds.value = []
+  ticketTemplateIds.value = []
+  try {
+    const [appDetail, , configs, templates] = await Promise.all([
+      cmdbApi.getApp(row.id), loadAllHosts(), loadConfigOptions(), loadTemplateOptions(),
+    ])
+    if (requestId !== editRequestId || !editVisible.value) return
+    targetKeys.value = appDetail.hosts.map((host) => String(host.id))
+    configFileIds.value = appDetail.config_files.map((file) => file.id)
+    ticketTemplateIds.value = appDetail.ticket_templates.map((template) => template.id)
+    configOptions.value = canManageConfigs ? configs : appDetail.config_files.map((file) => ({ label: file.name, value: file.id }))
+    templateOptions.value = canManageTemplates ? templates : appDetail.ticket_templates.map((template) => ({ label: template.name, value: template.id }))
+  } catch {
+    if (requestId === editRequestId) editVisible.value = false
+  } finally {
+    if (requestId === editRequestId) editLoading.value = false
+  }
 }
 
 function nextFormStep() {
@@ -342,6 +401,7 @@ function previousFormStep() {
 
 /** 提交创建/编辑（host_ids 全量替换关联；名称冲突 40901 由拦截器提示） */
 async function onSubmitEdit() {
+  if (editLoading.value) return
   if (!editForm.name) {
     message.warning('请填写应用名')
     return
@@ -364,6 +424,8 @@ async function onSubmitEdit() {
       mem_quota: editForm.mem_quota || undefined,
       description: editForm.description || undefined,
       host_ids: targetKeys.value.map(Number),
+      ...(editing.value && canManageConfigs ? { config_file_ids: configFileIds.value } : {}),
+      ...(editing.value && canManageTemplates ? { ticket_template_ids: ticketTemplateIds.value } : {}),
     }
     if (editing.value) {
       await cmdbApi.updateApp(editing.value.id, payload)
@@ -699,6 +761,18 @@ onMounted(() => {
               />
             </a-spin>
           </a-form-item>
+          <template v-if="editing">
+            <a-form-item label="关联配置文件">
+              <a-select v-model:value="configFileIds" data-testid="app-config-links" mode="multiple"
+                show-search allow-clear option-filter-prop="label" :options="configOptions"
+                :loading="editLoading" :disabled="!canManageConfigs" placeholder="搜索并选择配置文件" />
+            </a-form-item>
+            <a-form-item label="关联工单模板">
+              <a-select v-model:value="ticketTemplateIds" data-testid="app-template-links" mode="multiple"
+                show-search allow-clear option-filter-prop="label" :options="templateOptions"
+                :loading="editLoading" :disabled="!canManageTemplates" placeholder="搜索并选择工单模板" />
+            </a-form-item>
+          </template>
         </template>
       </a-form>
       <template #footer>

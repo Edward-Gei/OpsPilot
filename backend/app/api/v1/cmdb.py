@@ -11,10 +11,10 @@ from fastapi.responses import Response
 
 from app import audit
 from app.core.deps import DbSession, get_client_ip, require_perm
-from app.core.response import Errors, ok
+from app.core.response import BizError, Errors, ok
 from app.models.auth import User
-from app.schemas.cmdb import AppUpsertRequest, HostUpsertRequest
-from app.services import app_excel, cmdb_service, host_excel
+from app.schemas.cmdb import AppUpdateRequest, AppUpsertRequest, HostUpsertRequest
+from app.services import app_excel, cmdb_service, host_excel, rbac_service
 
 router = APIRouter(prefix="/cmdb", tags=["CMDB"])
 
@@ -359,19 +359,26 @@ async def get_app(
 @router.put("/apps/{app_id}", summary="编辑应用")
 async def update_app(
     app_id: int,
-    req: AppUpsertRequest,
+    req: AppUpdateRequest,
     request: Request,
     session: DbSession,
     actor: User = Depends(require_perm("cmdb:write")),
 ) -> dict:
-    """编辑基本信息；host_ids 全量替换关联。"""
-    app = await cmdb_service.update_app(
-        session, app_id, host_ids=req.host_ids, **req.model_dump(exclude={"host_ids"})
-    )
+    """编辑应用；变更跨模块关联时检查对应写权限。"""
+    association_fields = {"config_file_ids", "ticket_template_ids"} & req.model_fields_set
+    if association_fields:
+        perms = await rbac_service.get_user_perms(session, actor.id)
+        for field, perm in (("config_file_ids", "config:write"), ("ticket_template_ids", "template:write")):
+            if field in association_fields and perm not in perms:
+                raise BizError(Errors.NO_PERM, f"缺少权限: {perm}", 403)
+    app = await cmdb_service.update_app(session, app_id, host_ids=req.host_ids,
+        config_file_ids=req.config_file_ids, ticket_template_ids=req.ticket_template_ids,
+        **req.model_dump(exclude={"host_ids", "config_file_ids", "ticket_template_ids"}))
+    association_detail = {field: getattr(req, field) for field in association_fields}
     audit.log(module="cmdb", action="app.update", actor_id=actor.id, actor_name=actor.username,
               source_ip=get_client_ip(request), target_type="app",
               target_id=str(app.id), target_name=app.name,
-              detail={"host_ids": req.host_ids})
+              detail={"host_ids": req.host_ids, **association_detail})
     return ok()
 
 

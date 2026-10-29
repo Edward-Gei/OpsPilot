@@ -100,9 +100,11 @@
 | GET | `/cmdb/apps/systems` | `cmdb:read` | 返回去重的已有非空所属系统名称，供应用列表下拉筛选 |
 | POST | `/cmdb/apps` | `cmdb:write` | 创建应用和主机关联 |
 | GET | `/cmdb/apps/{id}` | `cmdb:read` | 应用详情，含关联主机、配置文件元信息及关联工单模板（名称、流程模板、状态）；不含配置正文，无需 `config:read`；模板名称跳转受 `template:read` 控制 |
-| PUT | `/cmdb/apps/{id}` | `cmdb:write` | 编辑应用并全量替换主机关联；请求体省略 `host_ids` 时按默认空列表处理，等同解除全部关联，客户端须回读详情后提交完整列表。该语义与工单模板 `app_ids`（省略则保留原关联）相反 |
+| PUT | `/cmdb/apps/{id}` | `cmdb:write`；提交 `config_file_ids` 另需 `config:write`，提交 `ticket_template_ids` 另需 `template:write` | 编辑应用并全量替换主机关联；请求体省略 `host_ids` 时按默认空列表处理，等同解除全部关联，客户端须回读详情后提交完整列表。可选的 `config_file_ids`、`ticket_template_ids` 分别全量替换配置文件和工单模板关联；省略时保留原关联，`[]` 清空，显式 `null`、重复、非正整数及不存在的 ID 拒绝。允许关联已归档配置文件和已停用工单模板；所有校验通过后同事务更新，不修改配置正文或模板字段 |
 | DELETE | `/cmdb/apps/{id}` | `cmdb:delete` | 删除应用 |
 | GET | `/cmdb/apps/export` | `cmdb:read` | 按当前筛选导出完整用户可见应用台账，支持 `app_id`、`system_name` 精确筛选 |
+
+应用编辑页的关联候选分别复用 `GET /application-configs/files` 和 `GET /templates`，因此可编辑下拉还需对应的 `config:read` 或 `template:read`；缺少对应写权限时仅回显已关联名称，不提交该关联字段。
 
 应用列表的 `sort_by` 可取 `name`、`language`、`deploy_type`、`project_type`、`host_count`、`business_line`、`system_name`、`service_level`、`ops_owner`、`dev_owner`、`service_port`、`cpu_quota`、`mem_quota`、`description`、`created_at`；`sort_order` 为 `asc` 或 `desc`。排序先于分页，关联主机数按数值排序，服务端口和配额作为文本排序；未指定时按应用 ID 倒序。关键词匹配除时间、操作外的显示业务列，包括“1 台”格式的关联主机数及前端/后端等显示文案；列表与导出共用匹配规则。`name_only=true` 保留原应用名、所属系统、运维负责人、开发负责人、服务端口的关键词范围，供全局搜索使用。
 

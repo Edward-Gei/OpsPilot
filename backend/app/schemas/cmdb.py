@@ -1,6 +1,6 @@
 """CMDB 请求模型（04-API设计 §4）：主机 / 应用。"""
 import ipaddress
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -56,3 +56,17 @@ class AppUpsertRequest(BaseModel):
     cpu_quota: str | None = Field(default=None, max_length=64)
     mem_quota: str | None = Field(default=None, max_length=64)
     host_ids: list[int] = Field(default_factory=list)
+
+
+class AppUpdateRequest(AppUpsertRequest):
+    """编辑应用时可按需全量替换配置文件和工单模板关联。"""
+
+    config_file_ids: list[Annotated[int, Field(strict=True, gt=0)]] | None = None
+    ticket_template_ids: list[Annotated[int, Field(strict=True, gt=0)]] | None = None
+
+    @field_validator("config_file_ids", "ticket_template_ids")
+    @classmethod
+    def validate_association_ids(cls, value: list[int] | None) -> list[int]:
+        if value is None or len(value) != len(set(value)):
+            raise ValueError("关联 ID 不能为空或重复")
+        return value

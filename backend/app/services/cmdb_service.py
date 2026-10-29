@@ -438,16 +438,43 @@ async def create_app(
 
 
 async def update_app(
-    session: AsyncSession, app_id: int, *, host_ids: list[int], **fields
+    session: AsyncSession, app_id: int, *, host_ids: list[int],
+    config_file_ids: list[int] | None = None, ticket_template_ids: list[int] | None = None, **fields
 ) -> Application:
-    """编辑应用；host_ids 全量替换关联。"""
+    """校验全部目标后，按请求字段替换应用的跨模块关联。"""
     app = await get_app_or_404(session, app_id)
     if fields.get("name") and fields["name"] != app.name:
         await _ensure_app_name_unique(session, fields["name"], exclude_id=app_id)
     await _validate_host_ids(session, host_ids)
+    for ids, model, label in ((config_file_ids, ConfigFile, "配置文件"),
+                              (ticket_template_ids, TicketTemplate, "工单模板")):
+        if ids is not None:
+            found = set((await session.execute(select(model.id).where(model.id.in_(ids)))).scalars())
+            if set(ids) - found:
+                raise Errors.param(f"{label}不存在: {sorted(set(ids) - found)}")
     for key, value in fields.items():
         setattr(app, key, value)
     await _replace_app_hosts(session, app_id, host_ids)
+    if config_file_ids is not None:
+        existing = (await session.execute(select(ConfigFileApplication).where(
+            ConfigFileApplication.application_id == app_id))).scalars().all()
+        target = set(config_file_ids)
+        for link in existing:
+            if link.config_file_id not in target:
+                await session.delete(link)
+        current = {link.config_file_id for link in existing}
+        session.add_all([ConfigFileApplication(config_file_id=file_id, application_id=app_id)
+                         for file_id in target - current])
+    if ticket_template_ids is not None:
+        existing = (await session.execute(select(TicketTemplateApplication).where(
+            TicketTemplateApplication.app_id == app_id))).scalars().all()
+        target = set(ticket_template_ids)
+        for link in existing:
+            if link.template_id not in target:
+                await session.delete(link)
+        current = {link.template_id for link in existing}
+        session.add_all([TicketTemplateApplication(template_id=template_id, app_id=app_id)
+                         for template_id in target - current])
     await session.flush()
     return app
 

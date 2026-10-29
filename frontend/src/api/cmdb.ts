@@ -254,6 +254,8 @@ export function updateApp(
     cpu_quota?: string
     mem_quota?: string
     host_ids: number[]
+    config_file_ids?: number[]
+    ticket_template_ids?: number[]
   },
 ) {
   return request<null>({ url: `/cmdb/apps/${id}`, method: 'put', data })

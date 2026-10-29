@@ -6,10 +6,17 @@ import { createPinia } from 'pinia'
 import AppList from './AppList.vue'
 import HostList from './HostList.vue'
 
-const api = vi.hoisted(() => ({ listApps: vi.fn(), getApp: vi.fn(), listHosts: vi.fn(), getHost: vi.fn(), listAppSystems: vi.fn(), exportApps: vi.fn(),
-  routeQuery: {} as Record<string, string>, configRead: true }))
+const api = vi.hoisted(() => ({ listApps: vi.fn(), getApp: vi.fn(), updateApp: vi.fn(), listHosts: vi.fn(), getHost: vi.fn(), listAppSystems: vi.fn(), exportApps: vi.fn(),
+  routeQuery: {} as Record<string, string>, configRead: true, configWrite: true, templateRead: true, templateWrite: true }))
+const configApi = vi.hoisted(() => ({ listConfigFiles: vi.fn() }))
+const jobApi = vi.hoisted(() => ({ listTemplates: vi.fn() }))
 vi.mock('@/api/cmdb', () => api)
-vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: (perm: string) => perm !== 'config:read' || api.configRead }) }))
+vi.mock('@/api/applicationConfig', () => configApi)
+vi.mock('@/api/job', () => jobApi)
+vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: (perm: string) => ({
+  'config:read': api.configRead, 'config:write': api.configWrite,
+  'template:read': api.templateRead, 'template:write': api.templateWrite,
+} as Record<string, boolean>)[perm] ?? true }) }))
 vi.mock('vue-router', () => ({
   useRoute: () => ({ query: api.routeQuery, path: '/cmdb/apps' }),
   useRouter: () => ({ replace: vi.fn() }),
@@ -36,15 +43,84 @@ beforeEach(() => {
   vi.clearAllMocks()
   api.routeQuery = {}
   api.configRead = true
+  api.configWrite = true
+  api.templateRead = true
+  api.templateWrite = true
   api.listApps.mockResolvedValue({ items: [app], total: 1 })
+  api.listHosts.mockResolvedValue({ items: [], total: 0 })
   api.listAppSystems.mockResolvedValue({ items: ['订单系统', '订单系统扩展'] })
+  api.updateApp.mockResolvedValue(null)
+  configApi.listConfigFiles.mockResolvedValue({ items: [
+    { id: 11, name: 'common.yaml', platform_instance_name: '生产 Nacos', status: 'active' },
+    { id: 12, name: 'legacy.yaml', platform_instance_name: '生产 Nacos', status: 'archived' },
+  ], total: 2 })
+  jobApi.listTemplates.mockResolvedValue({ items: [
+    { id: 13, name: '发布入口', status: 'enabled' },
+    { id: 14, name: '停用入口', status: 'disabled' },
+  ], total: 2 })
   api.getApp.mockResolvedValue({ ...app, hosts: [], config_files: [{
     id: 11, name: 'common.yaml', platform_instance_name: '生产 Nacos', provider: 'nacos',
     locator: { namespace: 'prod', group: 'DEFAULT_GROUP', data_id: 'common.yaml' },
     status: 'active', drift_status: 'clean',
-  }] })
+  }], ticket_templates: [{ id: 13, name: '发布入口', status: 'enabled', process_template_id: 23, process_template_name: '发布流程' }] })
 })
 afterEach(() => { document.body.innerHTML = '' })
+
+it('应用编辑回显并保存可新增的配置文件和工单模板关联', async () => {
+  configApi.listConfigFiles.mockImplementation(async ({ page }: { page: number }) => page === 1
+    ? { items: [{ id: 11, name: 'common.yaml', platform_instance_name: '生产 Nacos', status: 'active' },
+      ...Array.from({ length: 99 }, (_, index) => ({ id: index + 100, name: `other-${index}.yaml`, platform_instance_name: '生产 Nacos', status: 'active' }))], total: 101 }
+    : { items: [{ id: 12, name: 'legacy.yaml', platform_instance_name: '生产 Nacos', status: 'archived' }], total: 101 })
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  ;[...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes('编辑'))!.click()
+  await flushPromises()
+  ;[...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes('下一步'))!.click()
+  await flushPromises()
+  const configSelect = document.querySelector<HTMLElement>('[data-testid="app-config-links"]')!
+  const templateSelect = document.querySelector<HTMLElement>('[data-testid="app-template-links"]')!
+  expect(configSelect.textContent).toContain('common.yaml')
+  expect(templateSelect.textContent).toContain('发布入口')
+  configSelect.querySelector<HTMLElement>('.ant-select-selector')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  await flushPromises()
+  const configSearch = configSelect.querySelector<HTMLInputElement>('input')!
+  configSearch.value = 'legacy.yaml'
+  configSearch.dispatchEvent(new Event('input', { bubbles: true }))
+  await flushPromises()
+  ;[...document.querySelectorAll<HTMLElement>('.ant-select-item-option')].find(item => item.textContent?.includes('legacy.yaml'))!.click()
+  await flushPromises()
+  templateSelect.querySelector<HTMLElement>('.ant-select-selector')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  await flushPromises()
+  ;[...document.querySelectorAll<HTMLElement>('.ant-select-item-option')].find(item => item.textContent?.includes('停用入口'))!.click()
+  await flushPromises()
+  document.querySelector<HTMLButtonElement>('.ant-modal-footer .ant-btn-primary')!.click()
+  await flushPromises()
+  expect(api.updateApp).toHaveBeenCalledWith(7, expect.objectContaining({
+    config_file_ids: [11, 12], ticket_template_ids: [13, 14],
+  }))
+  expect(configApi.listConfigFiles).toHaveBeenCalledWith({ page: 2, page_size: 100 })
+  wrapper.unmount()
+})
+
+it('缺少配置和模板写权限时只读回显且保存不覆盖关联', async () => {
+  api.configWrite = false
+  api.templateWrite = false
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  ;[...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes('编辑'))!.click()
+  await flushPromises()
+  ;[...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes('下一步'))!.click()
+  await flushPromises()
+  expect(document.querySelector('[data-testid="app-config-links"]')?.textContent).toContain('common.yaml')
+  expect(document.querySelector('[data-testid="app-template-links"]')?.textContent).toContain('发布入口')
+  expect(document.querySelector('[data-testid="app-config-links"]')?.classList.contains('ant-select-disabled')).toBe(true)
+  expect(document.querySelector('[data-testid="app-template-links"]')?.classList.contains('ant-select-disabled')).toBe(true)
+  document.querySelector<HTMLButtonElement>('.ant-modal-footer .ant-btn-primary')!.click()
+  await flushPromises()
+  expect(api.updateApp).toHaveBeenCalledWith(7, expect.not.objectContaining({ config_file_ids: expect.anything() }))
+  expect(api.updateApp).toHaveBeenCalledWith(7, expect.not.objectContaining({ ticket_template_ids: expect.anything() }))
+  wrapper.unmount()
+})
 
 it('应用详情以三列表格展示关联模板、流程模板和启停状态，并保留详情链接', async () => {
   api.routeQuery = { id: '7' }
