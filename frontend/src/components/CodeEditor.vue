@@ -18,10 +18,12 @@ const props = withDefaults(
     modelValue: string
     lang?: 'shell' | 'yaml' | 'json' | 'text'
     readonly?: boolean
+    // 只读配置仍需可聚焦，才能通过 Ctrl+F 打开 CodeMirror 查找框。
+    focusableReadonly?: boolean
     height?: string
     indentGuides?: boolean
   }>(),
-  { lang: 'shell', readonly: false, height: '320px', indentGuides: false },
+  { lang: 'shell', readonly: false, focusableReadonly: false, height: '320px', indentGuides: false },
 )
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
 const insertText = (text: string) => {
@@ -89,7 +91,7 @@ onMounted(() => {
         basicSetup,
         langComp.of(langExt(props.lang)),
         themeComp.of(themeExt(themeStore.mode)),
-        readonlyComp.of([EditorState.readOnly.of(props.readonly), EditorView.editable.of(!props.readonly)]),
+        readonlyComp.of([EditorState.readOnly.of(props.readonly), EditorView.editable.of(!props.readonly || props.focusableReadonly)]),
         ...(props.indentGuides ? [indentGuides] : []),
         // 编辑内容同步回 v-model
         EditorView.updateListener.of((u) => {
@@ -122,10 +124,10 @@ watch(
   (mode) => view?.dispatch({ effects: themeComp.reconfigure(themeExt(mode)) }),
 )
 watch(
-  () => props.readonly,
-  (ro) =>
+  () => [props.readonly, props.focusableReadonly] as const,
+  ([ro, focusableReadonly]) =>
     view?.dispatch({
-      effects: readonlyComp.reconfigure([EditorState.readOnly.of(ro), EditorView.editable.of(!ro)]),
+      effects: readonlyComp.reconfigure([EditorState.readOnly.of(ro), EditorView.editable.of(!ro || focusableReadonly)]),
     }),
 )
 </script>

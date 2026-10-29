@@ -53,7 +53,7 @@ onBeforeUnmount(stopResize)
       message="原文已隐藏；保存时须完整替换内容" class="config-editor-alert" />
     <div class="config-editor-frame" :style="{ height: `${frameHeight}px` }">
       <CodeEditor v-if="readonly || format !== 'text'"
-        :model-value="props.modelValue" :readonly="readonly" :indent-guides="format !== 'text'"
+        :model-value="props.modelValue" :readonly="readonly" :focusable-readonly="readonly" :indent-guides="format !== 'text'"
         :lang="format === 'yaml' ? 'yaml' : format === 'text' ? 'text' : 'json'" height="100%" @update:model-value="update" />
       <a-textarea v-else :value="props.modelValue" :readonly="readonly" :rows="16"
         :placeholder="format === 'text' && masked && !canReadSecret ? '输入完整替换内容' : '配置内容'"

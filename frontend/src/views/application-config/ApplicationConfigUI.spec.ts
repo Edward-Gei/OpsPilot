@@ -643,8 +643,11 @@ describe('配置编辑器', () => {
   it.each(['yaml', 'json', 'consul_kv', 'text'] as const)('%s 查看时 Ctrl+F 打开 CodeMirror 原生查找框', async (format) => {
     const wrapper = mount(ConfigContentEditor, { props: { format, modelValue: 'key: first\nkey: second', readonly: true }, attachTo: document.body })
     const view = EditorView.findFromDOM(wrapper.find('.cm-editor').element as HTMLElement)!
+    const content = wrapper.find('.cm-content')
+    expect(content.attributes('contenteditable')).toBe('true')
+    expect(view.state.readOnly).toBe(true)
     view.focus()
-    wrapper.find('.cm-content').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true }))
+    content.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true }))
     await flushPromises()
     expect(wrapper.find('.cm-panels-bottom .cm-search').exists()).toBe(true)
     expect(wrapper.find('.config-editor-search').exists()).toBe(false)
