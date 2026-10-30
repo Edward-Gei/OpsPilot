@@ -19,6 +19,7 @@ import {
 import { ApiError } from '@/api/http'
 import * as authApi from '@/api/auth'
 import { useUserStore } from '@/stores/user'
+import { invalidateRouteRecovery, isHandledRouteError } from '@/router/routeLoadRecovery'
 
 const route = useRoute()
 const router = useRouter()
@@ -69,12 +70,16 @@ onMounted(async () => {
 
 /** 统一执行认证动作：成功进系统，三态错误切换对应模式 */
 async function runFlow(action: () => Promise<authApi.TokenPair | null>) {
+  invalidateRouteRecovery()
   loading.value = true
   try {
     const tokens = await action()
     if (tokens) await enterSystem(tokens)
   } catch (e) {
-    if (e instanceof ApiError) {
+    if (isHandledRouteError(e)) {
+      // 导航异常由全局路由处理器恢复或提示，避免同一失败重复弹窗。
+      return
+    } else if (e instanceof ApiError) {
       await onAuthChallenge(e)
     } else if (e instanceof Error) {
       // 非接口异常（二维码渲染等）也要可见，避免静默失败
@@ -118,8 +123,10 @@ async function loadQrCode() {
 async function enterSystem(tokens: authApi.TokenPair) {
   userStore.applyTokens(tokens)
   await userStore.loadUserInfo()
+  // 等待懒加载与守卫完成，导航取消或仍在登录页时不能提前提示成功。
+  const failure = await router.replace((route.query.redirect as string) || '/')
+  if (failure || router.currentRoute.value.name === 'login') throw new Error('进入系统失败，请重试')
   message.success('登录成功')
-  router.push((route.query.redirect as string) || '/')
 }
 
 function onSubmitPassword() {

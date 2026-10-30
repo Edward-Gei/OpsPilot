@@ -1,6 +1,7 @@
 """应用配置持久化远端任务：逐项接入及租约恢复。"""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from uuid import uuid4
 
@@ -30,14 +31,17 @@ from app.models.application_config import (
     ConfigTaskItem,
     ConfigVersion,
 )
+from app.models.auth import User
 from app.schemas.application_config import ConfigFileSelection
 from app.services import application_config_service as config_service
+from app.services import notify_service
 from app.services.application_config_service import ConfigActor
 from app.services.config_content_service import ContentValidationError, redact_content, validate_and_normalize_content
 
 
 _TASK_LEASE = timedelta(minutes=10)
 _PUBLISH_RETRIES = 3
+logger = logging.getLogger("opspilot.config_task")
 
 
 class _LeaseLost(Exception):
@@ -542,6 +546,40 @@ async def _finish_single_task(session: AsyncSession, task: ConfigTask, config_fi
     task.lease_token = None
     task.lease_expires_at = None
     task.finished_at = datetime.now()
+    if task.kind in {ConfigTaskKind.PUBLISH.value, ConfigTaskKind.SYNC.value} and config_file is not None:
+        is_publish = task.kind == ConfigTaskKind.PUBLISH.value
+        action = "发布" if is_publish else "同步"
+        # 保存点只回滚通知，避免通知异常把已完成的远端任务改判为失败。
+        try:
+            async with session.begin_nested():
+                version = (await session.get(ConfigVersion, task.config_version_id)
+                           if is_publish and task.config_version_id else None)
+                receiver_ids = {task.created_by}
+                if version and version.submitted_by:
+                    receiver_ids.add(version.submitted_by)
+                receivers = list((await session.execute(
+                    select(User.username).where(User.id.in_(receiver_ids))
+                )).scalars())
+                succeeded = task.status == ConfigTaskStatus.SUCCESS.value
+                result = action + ("成功" if succeeded else "失败")
+                version_label = f" v{version.version_no}" if version else ""
+                detail = f"原因：{task.last_error}" if not succeeded and task.last_error else ""
+                if not is_publish and succeeded:
+                    # 同步成功表示读取完成，漂移和远端缺失仍需单独说明。
+                    drift_text = {
+                        ConfigDriftStatus.CLEAN.value: "与基线一致",
+                        ConfigDriftStatus.DRIFTED.value: "检测到漂移",
+                        ConfigDriftStatus.REMOTE_MISSING.value: "远端配置不存在",
+                    }[config_file.drift_status]
+                    detail = f"检查结果：{drift_text}。"
+                await notify_service.emit_inapp(
+                    session, f"config.{task.kind}_{'success' if succeeded else 'failed'}",
+                    receiver=",".join(receivers), title=f"配置 {config_file.name}{version_label} {result}",
+                    content=f"配置文件 {config_file.name}{version_label} {result}，任务 #{task.id}。{detail}",
+                    ref_type="config_file", ref_id=config_file.id,
+                )
+        except Exception:  # noqa: BLE001 通知不可反噬任务结果
+            logger.exception("配置%s结果站内信写入失败（任务 %s）", action, task.id)
     await session.commit()
     audit.log(module="config", action=f"task.{task.kind}.complete", actor_id=task.created_by,
               actor_name=task.actor_name, source_ip=task.source_ip, target_type="config_task",

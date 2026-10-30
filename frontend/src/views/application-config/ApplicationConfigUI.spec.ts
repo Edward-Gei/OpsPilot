@@ -1,15 +1,18 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { config, flushPromises, mount } from '@vue/test-utils'
-import Antd from 'ant-design-vue'
+import { config, flushPromises, mount, shallowMount } from '@vue/test-utils'
+import Antd, { message } from 'ant-design-vue'
 import { createPinia } from 'pinia'
 import { reactive } from 'vue'
+import { EditorView } from 'codemirror'
 import ConfigContentEditor from './ConfigContentEditor.vue'
+import CodeEditor from '@/components/CodeEditor.vue'
 import DriftCompareDrawer from './DriftCompareDrawer.vue'
 import ApplicationConfigList from './ApplicationConfigList.vue'
 import NewConfigDrawer from './NewConfigDrawer.vue'
 import ApplicationConfigDetail from './ApplicationConfigDetail.vue'
 import ConfigVersionCompare from './ConfigVersionCompare.vue'
+import ConfigDiscoverPanel from './ConfigDiscoverPanel.vue'
 import TodoList from '@/views/ticket/TodoList.vue'
 
 const api = vi.hoisted(() => ({
@@ -21,11 +24,13 @@ const api = vi.hoisted(() => ({
   getDraft: vi.fn(), saveDraft: vi.fn(), discardDraft: vi.fn(), submitCandidate: vi.fn(),
   listConfigFileTasks: vi.fn(), getVersionContent: vi.fn(), getVersionComparison: vi.fn(),
   listConfigApprovalTodo: vi.fn(), getConfigApprovalContent: vi.fn(), readSecret: false,
+  approveCandidate: vi.fn(), getApprovalPublishResult: vi.fn(),
 }))
 vi.mock('@/api/applicationConfig', () => api)
 vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: (perm: string) => perm === 'config:write' || (perm === 'secret:read' && api.readSecret) }) }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }), useRoute: () => detailRoute }))
-const detailRoute = reactive({ name: 'application-config-edit', params: { id: '2' } })
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }), useRoute: () => detailRoute }))
+const detailRoute = reactive({ name: 'application-config-edit', params: { id: '2' },
+  path: '/application-configs', query: {} as Record<string, string> })
 
 const file = (id: number) => ({
   id, name: `test-${id}.yaml`, description: null, platform_instance_id: 1,
@@ -57,6 +62,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   detailRoute.name = 'application-config-edit'
   detailRoute.params.id = '2'
+  detailRoute.query = {}
   api.readSecret = false
   api.getConfigFile.mockResolvedValue(file(2))
   api.getDriftView.mockResolvedValue(drift)
@@ -90,7 +96,7 @@ beforeEach(() => {
     { locator: { namespace: 'stage-id', group: 'ORDERS', data_id: 'c.yaml' }, display_name: 'c.yaml', revision: null },
   ] })
 })
-afterEach(() => { document.body.innerHTML = '' })
+afterEach(() => { vi.useRealTimers(); document.body.innerHTML = '' })
 
 describe('编辑页草稿恢复', () => {
   function mountDetail() {
@@ -318,6 +324,84 @@ describe('编辑页草稿恢复', () => {
 })
 
 describe('版本差异与审批预览', () => {
+  async function openApproval() {
+    const wrapper = shallowMount(TodoList)
+    await flushPromises()
+    ;(wrapper.vm as unknown as { selectedConfig: { file_id: number; version_id: number } }).selectedConfig = {
+      file_id: 2, version_id: 6,
+    }
+    return wrapper
+  }
+
+  it('审批后等待发布任务完成才提示成功', async () => {
+    const success = vi.spyOn(message, 'success')
+    api.approveCandidate.mockResolvedValue({ id: 6, status: 'approved' })
+    api.getApprovalPublishResult.mockResolvedValueOnce({ status: 'queued', last_error: null })
+      .mockResolvedValueOnce({ status: 'success', last_error: null })
+    const wrapper = await openApproval()
+    vi.useFakeTimers()
+    await (wrapper.vm as unknown as { decideConfig: (approved: boolean) => Promise<void> }).decideConfig(true)
+    await flushPromises()
+    expect(success).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(success).toHaveBeenCalledWith(expect.stringContaining('发布成功'))
+    wrapper.unmount()
+    success.mockRestore()
+  })
+
+  it('审批后的发布任务失败时提示失败原因', async () => {
+    const warning = vi.spyOn(message, 'warning')
+    const success = vi.spyOn(message, 'success')
+    api.approveCandidate.mockResolvedValue({ id: 6, status: 'approved' })
+    api.getApprovalPublishResult.mockResolvedValue({ status: 'failed', last_error: '远端回读不一致' })
+    const wrapper = await openApproval()
+    await (wrapper.vm as unknown as { decideConfig: (approved: boolean) => Promise<void> }).decideConfig(true)
+    await flushPromises()
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('远端回读不一致'))
+    expect(success).not.toHaveBeenCalled()
+    wrapper.unmount()
+    warning.mockRestore()
+    success.mockRestore()
+  })
+
+  it('发布结果请求异常时提示未确认，不误报成功', async () => {
+    const warning = vi.spyOn(message, 'warning')
+    const success = vi.spyOn(message, 'success')
+    api.approveCandidate.mockResolvedValue({ id: 6, status: 'approved' })
+    const wrapper = await openApproval()
+    vi.useFakeTimers()
+    api.getApprovalPublishResult.mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 181_000)
+      throw new Error('offline')
+    })
+    await (wrapper.vm as unknown as { decideConfig: (approved: boolean) => Promise<void> }).decideConfig(true)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('发布结果暂未确认'))
+    expect(success).not.toHaveBeenCalled()
+    wrapper.unmount()
+    warning.mockRestore()
+    success.mockRestore()
+  })
+
+  it('发布任务等待超时后提示未确认，不误报成功', async () => {
+    const warning = vi.spyOn(message, 'warning')
+    const success = vi.spyOn(message, 'success')
+    api.approveCandidate.mockResolvedValue({ id: 6, status: 'approved' })
+    const wrapper = await openApproval()
+    vi.useFakeTimers()
+    api.getApprovalPublishResult.mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 181_000)
+      return { status: 'queued', last_error: null }
+    })
+    await (wrapper.vm as unknown as { decideConfig: (approved: boolean) => Promise<void> }).decideConfig(true)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('发布结果暂未确认'))
+    expect(success).not.toHaveBeenCalled()
+    wrapper.unmount()
+    warning.mockRestore()
+    success.mockRestore()
+  })
+
   it('审批详情直接使用授权响应的双方正文，不借用历史读取权限', async () => {
     const wrapper = mount(TodoList, { attachTo: document.body, global: { stubs: { TicketDetailDrawer: true } } })
     await flushPromises()
@@ -437,6 +521,61 @@ describe('漂移确认', () => {
 })
 
 describe('列表同步', () => {
+  it('关联文件读取期间用户已输入搜索词时保留用户搜索', async () => {
+    detailRoute.query = { file_id: '2', related: 'app' }
+    let resolveFile!: (value: ReturnType<typeof file>) => void
+    api.getConfigFile.mockImplementation(() => new Promise((resolve) => { resolveFile = resolve }))
+    const wrapper = mount(ApplicationConfigList, { attachTo: document.body,
+      global: { stubs: { NewConfigDrawer: true, PlatformInstanceDrawer: true, DriftCompareDrawer: true } },
+    })
+    await wrapper.find('.config-search input').setValue('custom')
+    resolveFile(file(2))
+    await flushPromises()
+    expect(wrapper.find('.config-search input').element).toHaveProperty('value', 'custom')
+    expect(api.listConfigFiles).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: 'custom', file_id: undefined }))
+    wrapper.unmount()
+  })
+
+  it('较早的配置列表响应不能覆盖新搜索结果', async () => {
+    const pending: Array<(value: { items: ReturnType<typeof file>[]; total: number }) => void> = []
+    api.listConfigFiles.mockImplementation(() => new Promise((resolve) => { pending.push(resolve) }))
+    const wrapper = mount(ApplicationConfigList, { attachTo: document.body,
+      global: { stubs: { NewConfigDrawer: true, PlatformInstanceDrawer: true, DriftCompareDrawer: true } },
+    })
+    await flushPromises()
+    await wrapper.find('.config-search input').setValue('new')
+    wrapper.findComponent({ name: 'AInput' }).vm.$emit('pressEnter')
+    await flushPromises()
+    expect(pending).toHaveLength(2)
+    pending[1]!({ items: [file(2)], total: 1 })
+    await flushPromises()
+    pending[0]!({ items: [file(1)], total: 1 })
+    await flushPromises()
+    expect(wrapper.find('.ant-table-tbody').text()).toContain('test-2.yaml')
+    expect(wrapper.find('.ant-table-tbody').text()).not.toContain('test-1.yaml')
+    wrapper.unmount()
+  })
+
+  it('关联配置文件在列表仅显示目标，改搜索词后解除精确筛选', async () => {
+    detailRoute.query = { file_id: '2', related: 'app' }
+    api.listConfigFiles.mockImplementation(async (params: { file_id?: number }) =>
+      params.file_id === 2 ? { items: [file(2)], total: 1 } : { items: [file(1), file(2)], total: 2 })
+    const wrapper = mount(ApplicationConfigList, { attachTo: document.body,
+      global: { stubs: { NewConfigDrawer: true, PlatformInstanceDrawer: true, DriftCompareDrawer: true } },
+    })
+    await flushPromises()
+    expect(wrapper.find('.config-search input').element).toHaveProperty('value', 'test-2.yaml')
+    expect(wrapper.find('.ant-table-tbody').text()).toContain('test-2.yaml')
+    expect(wrapper.find('.ant-table-tbody').text()).not.toContain('test-1.yaml')
+    expect(api.listConfigFiles).toHaveBeenLastCalledWith(expect.objectContaining({ file_id: 2, keyword: 'test-2.yaml' }))
+
+    await wrapper.find('.config-search input').setValue('test')
+    await flushPromises()
+    expect(wrapper.find('.ant-table-tbody').text()).toContain('test-1.yaml')
+    expect(api.listConfigFiles).toHaveBeenLastCalledWith(expect.objectContaining({ file_id: undefined, keyword: 'test' }))
+    wrapper.unmount()
+  })
+
   it('同步时间排序与筛选组合传给后端，改变条件回到第一页', async () => {
     const wrapper = mount(ApplicationConfigList, { attachTo: document.body,
       global: { stubs: { NewConfigDrawer: true, PlatformInstanceDrawer: true, DriftCompareDrawer: true } },
@@ -502,6 +641,43 @@ describe('列表同步', () => {
 
 describe('配置编辑器', () => {
   it.each([
+    ['yaml', true], ['yaml', false], ['json', true], ['json', false],
+    ['consul_kv', true], ['consul_kv', false], ['text', true], ['text', false],
+  ] as const)('%s 只读状态 %s 时 Ctrl+F 在顶部打开 CodeMirror 原生查找框', async (format, readonly) => {
+    const wrapper = mount(ConfigContentEditor, { props: { format, modelValue: 'key: first\nkey: second', readonly }, attachTo: document.body })
+    const view = EditorView.findFromDOM(wrapper.find('.cm-editor').element as HTMLElement)!
+    const content = wrapper.find('.cm-content')
+    expect(content.attributes('contenteditable')).toBe('true')
+    expect(view.state.readOnly).toBe(readonly)
+    view.focus()
+    content.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(wrapper.find('.cm-panels-top .cm-search').exists()).toBe(true)
+    expect(wrapper.find('.cm-panels-bottom .cm-search').exists()).toBe(false)
+    expect(wrapper.find('.config-editor-search').exists()).toBe(false)
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['yaml', true], ['yaml', false], ['text', true], ['text', false],
+  ] as const)('%s 只读状态 %s 可从底边中部拖动整体高度', async (format, readonly) => {
+    const wrapper = mount(ConfigContentEditor, { props: { format, modelValue: 'key: value', readonly } })
+    const handle = wrapper.find('.config-editor-resize-handle')
+    expect(handle.exists()).toBe(true)
+    await handle.trigger('pointerdown', { button: 0, clientY: 400 })
+    window.dispatchEvent(new MouseEvent('pointermove', { clientY: 520 }))
+    await flushPromises()
+    expect(wrapper.find('.config-editor-frame').attributes('style')).toContain('height: 480px')
+    window.dispatchEvent(new MouseEvent('pointermove', { clientY: 0 }))
+    await flushPromises()
+    expect(wrapper.find('.config-editor-frame').attributes('style')).toContain('height: 180px')
+    window.dispatchEvent(new MouseEvent('pointerup'))
+    expect(wrapper.findComponent(CodeEditor).props('height')).toBe('100%')
+    wrapper.unmount()
+  })
+
+  it.each([
     ['yaml', 'app:\n  name: test'],
     ['json', '{\n  "name": "test"\n}'],
     ['consul_kv', '{\n  "key": "value"\n}'],
@@ -512,9 +688,15 @@ describe('配置编辑器', () => {
     structured.unmount()
   })
 
-  it('TEXT 仍使用普通输入框', () => {
-    const plain = mount(ConfigContentEditor, { props: { format: 'text', modelValue: 'plain' } })
-    expect(plain.find('textarea').exists()).toBe(true)
+  it('TEXT 编辑使用 CodeMirror 并保留完整替换提示', () => {
+    const plain = mount(ConfigContentEditor, { props: { format: 'text', modelValue: '', masked: true, canReadSecret: false } })
+    expect(plain.find('textarea').exists()).toBe(false)
+    expect(plain.find('.cm-editor').exists()).toBe(true)
+    expect(plain.find('.config-editor-alert').exists()).toBe(true)
+    expect(plain.find('.cm-placeholder').text()).toBe('输入完整替换内容')
+    const view = EditorView.findFromDOM(plain.find('.cm-editor').element as HTMLElement)!
+    view.dispatch({ changes: { from: 0, insert: '完整替换内容' } })
+    expect(plain.emitted('update:modelValue')?.[0]).toEqual(['完整替换内容'])
     plain.unmount()
   })
 })
@@ -575,6 +757,21 @@ describe('新建配置默认格式与应用搜索', () => {
     expect(mode === 'manual' ? vm.manual.application_ids : vm.discovered[0]!.application_ids).toEqual([101])
     wrapper.unmount()
   })
+})
+
+it('发现结果可按可见定位列筛选', async () => {
+  const wrapper = mount(ConfigDiscoverPanel, { props: { platformInstanceId: 1, provider: 'apollo' } })
+  await wrapper.find('input[placeholder="输入发现范围"]').setValue('test-app')
+  await (wrapper.vm as unknown as { discover: () => Promise<void> }).discover()
+  await flushPromises()
+  const filter = wrapper.find('input[placeholder="筛选发现结果"]')
+  await filter.setValue('ORDERS')
+  await flushPromises()
+  const rows = wrapper.findAll('.ant-table-tbody tr.ant-table-row')
+  expect(rows).toHaveLength(1)
+  expect(rows[0]!.text()).toContain('c.yaml')
+  expect(rows[0]!.text()).not.toContain('a.yaml')
+  wrapper.unmount()
 })
 
 describe('Nacos 手工新建', () => {

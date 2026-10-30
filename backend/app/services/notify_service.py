@@ -348,8 +348,8 @@ async def emit(
     await session.flush()
     # 站内信（NOTIFY-06）：同事务按收件人每人一行，不受渠道启用/事件映射影响；
     # 标题/正文用业务默认文案（不走渠道模板），解析不到的用户名静默跳过
-    await _emit_inapp(
-        session, event, receiver=receiver, title=title, content=content,
+    await emit_inapp(
+        session, event.value, receiver=receiver, title=title, content=content,
         ref_type=ref_type, ref_id=ref_id,
     )
     # 队列提示（加速器）：失败仅告警，可靠性由分发器定时扫描保证
@@ -389,9 +389,9 @@ async def emit_security_email(
         logger.warning("密码重置邮件队列提示失败，等待定时扫描兜底")
 
 
-async def _emit_inapp(
+async def emit_inapp(
     session: AsyncSession,
-    event: NotifyEvent,
+    event: str,
     *,
     receiver: str | None,
     title: str,
@@ -399,7 +399,7 @@ async def _emit_inapp(
     ref_type: str | None,
     ref_id: int | None,
 ) -> None:
-    """落站内信：把逗号分隔的收件人用户名解析为有效用户，每人插一行 user_notification。"""
+    """独立落站内信，供仅需站内通知的业务复用，不触发外部渠道。"""
     names = list(dict.fromkeys(n.strip() for n in (receiver or "").split(",") if n.strip()))
     if not names:
         return
@@ -409,7 +409,7 @@ async def _emit_inapp(
     for uid in user_ids:
         session.add(
             UserNotification(
-                user_id=uid, event=event.value, title=title[:255], content=content,
+                user_id=uid, event=event, title=title[:255], content=content,
                 ref_type=ref_type, ref_id=ref_id,
             )
         )

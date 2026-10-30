@@ -4,7 +4,8 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { basicSetup, EditorView } from 'codemirror'
 import { Compartment, EditorState, RangeSetBuilder, StateField } from '@codemirror/state'
-import { Decoration, type DecorationSet } from '@codemirror/view'
+import { Decoration, placeholder as editorPlaceholder, type DecorationSet } from '@codemirror/view'
+import { search } from '@codemirror/search'
 import { StreamLanguage } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { shell } from '@codemirror/legacy-modes/mode/shell'
@@ -16,12 +17,16 @@ import { useThemeStore } from '@/stores/theme'
 const props = withDefaults(
   defineProps<{
     modelValue: string
-    lang?: 'shell' | 'yaml' | 'json'
+    lang?: 'shell' | 'yaml' | 'json' | 'text'
     readonly?: boolean
+    // 只读配置仍需可聚焦，才能通过 Ctrl+F 打开 CodeMirror 查找框。
+    focusableReadonly?: boolean
+    searchPanelTop?: boolean
+    placeholder?: string
     height?: string
     indentGuides?: boolean
   }>(),
-  { lang: 'shell', readonly: false, height: '320px', indentGuides: false },
+  { lang: 'shell', readonly: false, focusableReadonly: false, searchPanelTop: false, height: '320px', indentGuides: false },
 )
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
 const insertText = (text: string) => {
@@ -40,9 +45,11 @@ let view: EditorView | null = null
 const langComp = new Compartment()
 const themeComp = new Compartment()
 const readonlyComp = new Compartment()
+const placeholderComp = new Compartment()
 
 /** 语言扩展：playbook 用 yaml，shell/adhoc 用 shell 流式高亮 */
-function langExt(lang: 'shell' | 'yaml' | 'json') {
+function langExt(lang: 'shell' | 'yaml' | 'json' | 'text') {
+  if (lang === 'text') return []
   if (lang === 'yaml') return yaml()
   if (lang === 'json') return StreamLanguage.define({ ...jsonParser, tokenTable: { property: tags.propertyName } })
   return StreamLanguage.define(shell)
@@ -86,9 +93,11 @@ onMounted(() => {
       doc: props.modelValue,
       extensions: [
         basicSetup,
+        ...(props.searchPanelTop ? [search({ top: true })] : []),
         langComp.of(langExt(props.lang)),
         themeComp.of(themeExt(themeStore.mode)),
-        readonlyComp.of([EditorState.readOnly.of(props.readonly), EditorView.editable.of(!props.readonly)]),
+        readonlyComp.of([EditorState.readOnly.of(props.readonly), EditorView.editable.of(!props.readonly || props.focusableReadonly)]),
+        placeholderComp.of(props.placeholder ? editorPlaceholder(props.placeholder) : []),
         ...(props.indentGuides ? [indentGuides] : []),
         // 编辑内容同步回 v-model
         EditorView.updateListener.of((u) => {
@@ -117,14 +126,18 @@ watch(
   (lang) => view?.dispatch({ effects: langComp.reconfigure(langExt(lang)) }),
 )
 watch(
+  () => props.placeholder,
+  (value) => view?.dispatch({ effects: placeholderComp.reconfigure(value ? editorPlaceholder(value) : []) }),
+)
+watch(
   () => themeStore.mode,
   (mode) => view?.dispatch({ effects: themeComp.reconfigure(themeExt(mode)) }),
 )
 watch(
-  () => props.readonly,
-  (ro) =>
+  () => [props.readonly, props.focusableReadonly] as const,
+  ([ro, focusableReadonly]) =>
     view?.dispatch({
-      effects: readonlyComp.reconfigure([EditorState.readOnly.of(ro), EditorView.editable.of(!ro)]),
+      effects: readonlyComp.reconfigure([EditorState.readOnly.of(ro), EditorView.editable.of(!ro || focusableReadonly)]),
     }),
 )
 </script>

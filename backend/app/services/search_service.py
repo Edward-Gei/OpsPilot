@@ -25,14 +25,14 @@ async def search(session: AsyncSession, user: User, keyword: str) -> dict:
 
     if "cmdb:read" in perms:
         hosts, host_total = await cmdb_service.list_hosts(
-            session, page=1, page_size=SEGMENT_LIMIT, keyword=keyword
+            session, page=1, page_size=SEGMENT_LIMIT, keyword=keyword, name_only=True
         )
         data["hosts"] = {
             "items": [{"id": h.id, "hostname": h.hostname, "ip": h.ip} for h in hosts],
             "total": host_total,
         }
         apps, app_total, _ = await cmdb_service.list_apps(
-            session, page=1, page_size=SEGMENT_LIMIT, keyword=keyword
+            session, page=1, page_size=SEGMENT_LIMIT, keyword=keyword, name_only=True
         )
         data["apps"] = {
             "items": [{"id": a.id, "name": a.name} for a in apps],
@@ -41,7 +41,7 @@ async def search(session: AsyncSession, user: User, keyword: str) -> dict:
 
     if "ticket:read" in perms:
         tickets, ticket_total = await ticket_service.list_tickets(
-            session, page=1, page_size=SEGMENT_LIMIT, keyword=keyword
+            session, page=1, page_size=SEGMENT_LIMIT, keyword=keyword, legacy_keyword=True
         )
         data["tickets"] = {
             "items": [{"id": t.id, "ticket_no": t.ticket_no, "title": t.title} for t in tickets],
@@ -50,7 +50,7 @@ async def search(session: AsyncSession, user: User, keyword: str) -> dict:
 
     if "template:read" in perms:
         tpls, tpl_total = await template_service.list_templates(
-            session, page=1, page_size=SEGMENT_LIMIT, keyword=keyword
+            session, page=1, page_size=SEGMENT_LIMIT, keyword=keyword, name_only=True
         )
         data["templates"] = {
             "items": [{"id": t.id, "name": t.name, "type": t.type} for t in tpls],

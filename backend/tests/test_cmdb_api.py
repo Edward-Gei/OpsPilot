@@ -56,6 +56,117 @@ def _make_xlsx(rows: list[list]) -> bytes:
 
 
 class TestHostCrud:
+    async def test_host_id_filter_keeps_only_related_host_in_list_and_export(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        first_id = await _create_host(client, headers, hostname="shared-host", ip="10.9.8.1")
+        await _create_host(client, headers, hostname="shared-host", ip="10.9.8.2")
+
+        params = {"host_id": first_id, "keyword": "shared-host"}
+        listed = await client.get("/api/v1/cmdb/hosts", params=params, headers=headers)
+        assert listed.json()["data"]["total"] == 1
+        assert [item["id"] for item in listed.json()["data"]["items"]] == [first_id]
+
+        exported = await client.get("/api/v1/cmdb/hosts/export", params=params, headers=headers)
+        rows = list(load_workbook(BytesIO(exported.content)).active.values)
+        assert len(rows) == 2
+        assert rows[1][1] == "10.9.8.1"
+
+    async def test_host_visible_columns_sort_before_pagination(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        high_id = await _create_host(
+            client, headers, hostname="Z主机", ip="10.9.0.2", public_ip="203.0.113.2",
+            project="tradingkey", ri="ZRI", host_series="Z9", platform="Z平台",
+            region="Z区域", os="Z系统", cpu_cores=16, memory_gb=8, disk_gb=100,
+            environment="prod", status="online", ssh_port=2222,
+        )
+        low_id = await _create_host(
+            client, headers, hostname="A主机", ip="10.9.0.1", public_ip="203.0.113.1",
+            project="mitrade", ri="ARI", host_series="A1", platform="A平台",
+            region="A区域", os="A系统", cpu_cores=4, memory_gb=32, disk_gb=200,
+            environment="demo", status="maintenance", ssh_port=22,
+        )
+        for field in (
+            "hostname", "ip", "public_ip", "project", "ri", "host_series", "platform",
+            "region", "os", "spec", "environment", "status", "ssh_port",
+        ):
+            asc = await client.get("/api/v1/cmdb/hosts", params={
+                "sort_by": field, "sort_order": "asc", "page_size": 1,
+            }, headers=headers)
+            desc = await client.get("/api/v1/cmdb/hosts", params={
+                "sort_by": field, "sort_order": "desc", "page_size": 1,
+            }, headers=headers)
+            assert asc.status_code == 200, field
+            assert asc.json()["data"]["total"] == 2
+            assert asc.json()["data"]["items"][0]["id"] != desc.json()["data"]["items"][0]["id"], field
+        spec = await client.get("/api/v1/cmdb/hosts", params={
+            "sort_by": "spec", "sort_order": "asc", "page_size": 1,
+        }, headers=headers)
+        assert spec.json()["data"]["items"][0]["id"] == low_id
+
+    async def test_host_spec_sort_uses_numeric_tuple_and_places_missing_values_last(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        ids = [
+            await _create_host(client, headers, ip="10.9.1.1", cpu_cores=None, memory_gb=1, disk_gb=1),
+            await _create_host(client, headers, ip="10.9.1.2", cpu_cores=4, memory_gb=16, disk_gb=1),
+            await _create_host(client, headers, ip="10.9.1.3", cpu_cores=4, memory_gb=8, disk_gb=100),
+            await _create_host(client, headers, ip="10.9.1.4", cpu_cores=4, memory_gb=8, disk_gb=10),
+        ]
+        for direction, expected in (("asc", [ids[3], ids[2], ids[1], ids[0]]),
+                                    ("desc", [ids[1], ids[2], ids[3], ids[0]])):
+            result = await client.get("/api/v1/cmdb/hosts", params={
+                "sort_by": "spec", "sort_order": direction,
+            }, headers=headers)
+            assert [item["id"] for item in result.json()["data"]["items"]] == expected
+            exported = await client.get("/api/v1/cmdb/hosts/export", params={
+                "sort_by": "spec", "sort_order": direction,
+            }, headers=headers)
+            rows = list(load_workbook(BytesIO(exported.content)).active.values)[1:]
+            assert [row[1] for row in rows] == [f"10.9.1.{ids.index(host_id) + 1}" for host_id in expected]
+
+    async def test_host_keyword_matches_visible_business_columns_and_export(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        await _create_host(client, headers, ip="10.9.2.1", hostname="target", public_ip="203.0.113.91",
+                           ri="RID-91", host_series="Series-91", platform="Cloud-91", region="Zone-91",
+                           os="Linux-91", cpu_cores=91, memory_gb=92, disk_gb=93,
+                           status="maintenance", ssh_port=2291)
+        await _create_host(client, headers, ip="10.9.2.2", hostname="other", status="online")
+        for keyword in ("203.0.113.91", "RID-91", "Series-91", "Cloud-91", "Zone-91",
+                        "Linux-91", "91", "92", "93", "维护", "2291"):
+            params = {"keyword": keyword}
+            listed = await client.get("/api/v1/cmdb/hosts", params=params, headers=headers)
+            assert listed.json()["data"]["total"] == 1, keyword
+            exported = await client.get("/api/v1/cmdb/hosts/export", params=params, headers=headers)
+            assert len(list(load_workbook(BytesIO(exported.content)).active.values)) == 2, keyword
+
+    async def test_host_keyword_matches_formatted_resource_spec_in_list_and_export(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        await _create_host(client, headers, hostname="alpha", ip="10.9.7.1",
+                           cpu_cores=4, memory_gb=8, disk_gb=100)
+        await _create_host(client, headers, hostname="beta", ip="10.9.7.2",
+                           cpu_cores=6, memory_gb=None, disk_gb=100)
+        for keyword, hostname in (("4C", "alpha"), ("8G", "alpha"),
+                                  ("4C / 8G / 100G", "alpha"), ("6C / ? / 100G", "beta")):
+            listed = await client.get("/api/v1/cmdb/hosts", params={"keyword": keyword}, headers=headers)
+            assert [item["hostname"] for item in listed.json()["data"]["items"]] == [hostname], keyword
+            exported = await client.get("/api/v1/cmdb/hosts/export", params={"keyword": keyword}, headers=headers)
+            rows = list(load_workbook(BytesIO(exported.content)).active.values)
+            assert len(rows) == 2, keyword
+            assert rows[1][0] == hostname, keyword
+
+    async def test_host_name_only_preserves_previous_keyword_scope(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        await _create_host(client, headers, ip="10.9.4.1", hostname="alpha", platform="target")
+        result = await client.get("/api/v1/cmdb/hosts", params={
+            "keyword": "target", "name_only": True,
+        }, headers=headers)
+        assert result.json()["data"]["total"] == 0
+
+    async def test_host_keyword_does_not_match_hidden_status_code(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        await _create_host(client, headers, ip="10.9.5.1", status="maintenance")
+        result = await client.get("/api/v1/cmdb/hosts", params={"keyword": "maintenance"}, headers=headers)
+        assert result.json()["data"]["total"] == 0
+
     async def test_host_list_sorts_by_created_at(self, client, db_factory):
         """主机列表按创建时间正反序排序。"""
         headers = auth_header(await login_for_tokens(client, "ops1"))
@@ -234,6 +345,111 @@ class TestHostCrud:
 
 
 class TestAppCrud:
+    async def test_system_names_and_exact_filter_share_list_export_semantics(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        for name, system in (("订单前端", "订单"), ("订单后端", "订单"),
+                             ("订单扩展", "订单扩展"), ("未分组", None)):
+            await client.post("/api/v1/cmdb/apps", json={
+                "name": name, "deploy_type": "shell", "system_name": system, "host_ids": [],
+            }, headers=headers)
+        systems = await client.get("/api/v1/cmdb/apps/systems", headers=headers)
+        assert systems.json()["data"]["items"] == ["订单", "订单扩展"]
+        params = {"system_name": "订单", "keyword": "后端"}
+        listed = await client.get("/api/v1/cmdb/apps", params=params, headers=headers)
+        assert [item["name"] for item in listed.json()["data"]["items"]] == ["订单后端"]
+        exported = await client.get("/api/v1/cmdb/apps/export", params=params, headers=headers)
+        rows = list(load_workbook(BytesIO(exported.content)).active.values)
+        assert len(rows) == 2
+        assert rows[1][0] == "订单后端"
+
+    async def test_app_keyword_matches_visible_business_columns_and_export(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        host_id = await _create_host(client, headers, ip="10.9.3.1")
+        await client.post("/api/v1/cmdb/apps", json={
+            "name": "目标应用", "language": "Rust-91", "deploy_type": "docker", "project_type": "backend",
+            "business_line": "tradingkey", "system_name": "系统-91", "service_level": "一般服务",
+            "ops_owner": "运维-91", "dev_owner": "开发-91", "service_port": "2291",
+            "cpu_quota": "CPU-91", "mem_quota": "MEM-91", "description": "说明-91",
+            "host_ids": [host_id],
+        }, headers=headers)
+        await client.post("/api/v1/cmdb/apps", json={
+            "name": "其他应用", "deploy_type": "shell", "host_ids": [],
+        }, headers=headers)
+        for keyword in ("Rust-91", "Docker", "后端", "tradingkey", "系统-91",
+                        "一般服务", "运维-91", "开发-91", "2291", "CPU-91", "MEM-91",
+                        "说明-91", "1"):
+            listed = await client.get("/api/v1/cmdb/apps", params={"keyword": keyword}, headers=headers)
+            assert listed.json()["data"]["total"] == 1, keyword
+            exported = await client.get("/api/v1/cmdb/apps/export", params={"keyword": keyword}, headers=headers)
+            assert len(list(load_workbook(BytesIO(exported.content)).active.values)) == 2, keyword
+
+    async def test_app_name_only_preserves_previous_keyword_scope(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        await client.post("/api/v1/cmdb/apps", json={
+            "name": "alpha", "language": "target", "deploy_type": "shell", "host_ids": [],
+        }, headers=headers)
+        result = await client.get("/api/v1/cmdb/apps", params={
+            "keyword": "target", "name_only": True,
+        }, headers=headers)
+        assert result.json()["data"]["total"] == 0
+
+    async def test_app_keyword_does_not_match_hidden_project_type_code(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        await client.post("/api/v1/cmdb/apps", json={
+            "name": "alpha", "deploy_type": "shell", "project_type": "backend", "host_ids": [],
+        }, headers=headers)
+        result = await client.get("/api/v1/cmdb/apps", params={"keyword": "backend"}, headers=headers)
+        assert result.json()["data"]["total"] == 0
+
+    async def test_app_keyword_matches_visible_host_count(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        host_ids = [await _create_host(client, headers, ip=f"10.9.6.{i}") for i in (1, 2)]
+        await client.post("/api/v1/cmdb/apps", json={
+            "name": "alpha", "deploy_type": "shell", "host_ids": host_ids,
+        }, headers=headers)
+        await client.post("/api/v1/cmdb/apps", json={
+            "name": "beta", "deploy_type": "shell", "host_ids": [],
+        }, headers=headers)
+        result = await client.get("/api/v1/cmdb/apps", params={"keyword": "2"}, headers=headers)
+        assert [item["name"] for item in result.json()["data"]["items"]] == ["alpha"]
+
+    async def test_app_keyword_matches_formatted_host_count_in_list_and_export(self, client):
+        headers = auth_header(await login_for_tokens(client, "ops1"))
+        host_id = await _create_host(client, headers, ip="10.9.8.1")
+        await client.post("/api/v1/cmdb/apps", json={
+            "name": "alpha", "deploy_type": "shell", "host_ids": [host_id],
+        }, headers=headers)
+        await client.post("/api/v1/cmdb/apps", json={
+            "name": "beta", "deploy_type": "shell", "host_ids": [],
+        }, headers=headers)
+        params = {"keyword": "1 台"}
+        listed = await client.get("/api/v1/cmdb/apps", params=params, headers=headers)
+        assert [item["name"] for item in listed.json()["data"]["items"]] == ["alpha"]
+        exported = await client.get("/api/v1/cmdb/apps/export", params=params, headers=headers)
+        rows = list(load_workbook(BytesIO(exported.content)).active.values)
+        assert len(rows) == 2
+        assert rows[1][0] == "alpha"
+
+    async def test_app_id_filters_list_and_export_exactly(self, client):
+        headers = auth_header(await login_for_tokens(client, "admin"))
+        ids = []
+        for name in ("关联筛选目标", "关联筛选目标扩展"):
+            created = await client.post(
+                "/api/v1/cmdb/apps",
+                json={"name": name, "deploy_type": "shell", "host_ids": []}, headers=headers,
+            )
+            ids.append(created.json()["data"]["id"])
+
+        params = {"keyword": "关联筛选目标", "app_id": ids[0]}
+        result = await client.get("/api/v1/cmdb/apps", params=params, headers=headers)
+        assert result.json()["data"]["total"] == 1
+        assert [item["id"] for item in result.json()["data"]["items"]] == [ids[0]]
+
+        exported = await client.get("/api/v1/cmdb/apps/export", params=params, headers=headers)
+        rows = list(load_workbook(BytesIO(exported.content)).active.values)
+        assert any("关联筛选目标" in row for row in rows)
+        assert not any("关联筛选目标扩展" in row for row in rows)
+
     async def test_app_keyword_matches_service_port_in_list_and_export(self, client):
         headers = auth_header(await login_for_tokens(client, "ops1"))
         created = await client.post(

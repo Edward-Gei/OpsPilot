@@ -18,11 +18,17 @@ const templates = ref<ticketApi.UsableTemplate[]>([])
 const keyword = ref('')
 const selectedId = ref<number | null>(null)
 
-const filteredTemplates = computed(() =>
-  keyword.value
-    ? templates.value.filter((t) => t.name.includes(keyword.value))
-    : templates.value,
-)
+const filteredTemplates = computed(() => {
+  const term = keyword.value.trim().toLowerCase()
+  if (!term) return templates.value
+  return templates.value.filter((t) => [
+    t.name,
+    typeText[t.type as TemplateType]?.text || t.type,
+    t.description || '',
+    t.process_name || '',
+    t.job_host_name || `作业主机 #${t.job_host_id}`,
+  ].some((value) => value.toLowerCase().includes(term)))
+})
 
 async function loadTemplates() {
   tplLoading.value = true
@@ -153,7 +159,7 @@ const jobHostText = computed(() => {
     <template v-if="step === 0">
       <a-input
         v-model:value="keyword"
-        placeholder="搜索模板名"
+        placeholder="搜索模板"
         allow-clear
         class="w-kw"
       />

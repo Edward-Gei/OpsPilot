@@ -13,6 +13,8 @@ import {
   SearchOutlined,
 } from '@ant-design/icons-vue'
 import * as cmdbApi from '@/api/cmdb'
+import * as configApi from '@/api/applicationConfig'
+import * as jobApi from '@/api/job'
 import { makeResizable, onResizeColumn } from '@/utils/table'
 import { useUserStore } from '@/stores/user'
 
@@ -21,6 +23,8 @@ const canWrite = userStore.hasPerm('cmdb:write')
 const canDelete = userStore.hasPerm('cmdb:delete')
 const canReadConfigs = userStore.hasPerm('config:read')
 const canReadTemplates = userStore.hasPerm('template:read')
+const canManageConfigs = canWrite && canReadConfigs && userStore.hasPerm('config:write')
+const canManageTemplates = canWrite && canReadTemplates && userStore.hasPerm('template:write')
 
 // 部署方式彩色标签（与 M1 列表标签风格一致）
 const deployText: Record<string, { text: string; color: string }> = {
@@ -39,6 +43,7 @@ const businessLineText: Record<string, { text: string; color: string }> = {
   tradingkey: { text: 'tradingkey', color: 'green' },
 }
 const businessLineOptions = Object.entries(businessLineText).map(([value, v]) => ({ label: v.text, value }))
+const systemOptions = ref<{ label: string; value: string }[]>([])
 const serviceLevelText: Record<string, { text: string; color: string }> = {
   核心服务: { text: '核心服务', color: 'red' },
   一般服务: { text: '一般服务', color: 'default' },
@@ -51,6 +56,8 @@ const items = ref<cmdbApi.AppItem[]>([])
 const total = ref(0)
 const route = useRoute()
 const router = useRouter()
+const focusedAppId = ref<number | undefined>()
+let listRequestId = 0
 
 const query = reactive({
   page: 1,
@@ -59,6 +66,7 @@ const query = reactive({
   deploy_type: undefined as string | undefined,
   project_type: undefined as cmdbApi.AppProjectType | undefined,
   business_line: undefined as cmdbApi.AppBusinessLine | undefined,
+  system_name: undefined as string | undefined,
   service_level: undefined as cmdbApi.AppServiceLevel | undefined,
   sort_by: undefined as cmdbApi.AppQuery['sort_by'],
   sort_order: undefined as 'asc' | 'desc' | undefined,
@@ -86,24 +94,29 @@ const columns = ref(makeResizable([
 
 /** 拉取应用列表（items 含关联主机数） */
 async function loadList() {
+  const requestId = ++listRequestId
   loading.value = true
   try {
     const data = await cmdbApi.listApps({
       page: query.page,
       page_size: query.page_size,
       keyword: query.keyword || undefined,
+      app_id: focusedAppId.value,
       deploy_type: query.deploy_type,
       project_type: query.project_type,
       business_line: query.business_line,
+      system_name: query.system_name,
       service_level: query.service_level,
       sort_by: query.sort_by,
       sort_order: query.sort_order,
     })
-    items.value = data.items
-    total.value = data.total
-    selectedKeys.value = []
+    if (requestId === listRequestId) {
+      items.value = data.items
+      total.value = data.total
+      selectedKeys.value = []
+    }
   } finally {
-    loading.value = false
+    if (requestId === listRequestId) loading.value = false
   }
 }
 
@@ -151,15 +164,29 @@ async function loadStats() {
   stats.k8s = k8s.total
 }
 
+async function loadSystems() {
+  const data = await cmdbApi.listAppSystems()
+  systemOptions.value = data.items.map((name) => ({ label: name, value: name }))
+}
+
 /** 列表 + 统计一起刷新（变更操作后调用） */
 function refreshAll() {
   loadList()
   loadStats()
+  loadSystems()
 }
 
 function onSearch() {
+  if (focusedAppId.value !== undefined && query.keyword !== detail.value?.name) {
+    focusedAppId.value = undefined
+    void router.replace({ path: route.path })
+  }
   query.page = 1
   loadList()
+}
+
+function onKeywordChange() {
+  if (focusedAppId.value !== undefined && query.keyword !== detail.value?.name) onSearch()
 }
 
 function onTableChange(
@@ -182,9 +209,11 @@ async function onExport() {
   try {
     await cmdbApi.exportApps({
       keyword: query.keyword || undefined,
+      app_id: focusedAppId.value,
       deploy_type: query.deploy_type,
       project_type: query.project_type,
       business_line: query.business_line,
+      system_name: query.system_name,
       service_level: query.service_level,
     })
   } catch {
@@ -263,8 +292,44 @@ const editForm = reactive<{
 })
 // a-transfer 的 targetKeys 为字符串，提交时转回 number[]
 const targetKeys = ref<string[]>([])
+const configFileIds = ref<number[]>([])
+const ticketTemplateIds = ref<number[]>([])
+const configOptions = ref<{ label: string; value: number }[]>([])
+const templateOptions = ref<{ label: string; value: number }[]>([])
+let editRequestId = 0
+
+/** 关联候选按页加载，包含归档配置文件和停用模板。 */
+async function loadConfigOptions() {
+  if (!canManageConfigs) return []
+  const options: { label: string; value: number }[] = []
+  for (let page = 1; ; page += 1) {
+    const data = await configApi.listConfigFiles({ page, page_size: 100 })
+    options.push(...data.items.map((file) => ({
+      label: `${file.name}（${file.platform_instance_name || '未知实例'}${file.status === 'archived' ? '，已归档' : ''}）`,
+      value: file.id,
+    })))
+    if (!data.items.length || options.length >= data.total) break
+  }
+  return options
+}
+
+async function loadTemplateOptions() {
+  if (!canManageTemplates) return []
+  const options: { label: string; value: number }[] = []
+  for (let page = 1; ; page += 1) {
+    const data = await jobApi.listTemplates({ page, page_size: 100 })
+    options.push(...data.items.map((template) => ({
+      label: `${template.name}${template.status === 'disabled' ? '（已停用）' : ''}`,
+      value: template.id,
+    })))
+    if (!data.items.length || options.length >= data.total) break
+  }
+  return options
+}
 
 function openCreate() {
+  editRequestId += 1
+  editLoading.value = false
   editing.value = null
   Object.assign(editForm, {
     name: '', language: '', deploy_type: 'shell', project_type: 'frontend', business_line: 'mitrade',
@@ -272,13 +337,16 @@ function openCreate() {
     service_port: '', cpu_quota: '', mem_quota: '', description: '',
   })
   targetKeys.value = []
+  configFileIds.value = []
+  ticketTemplateIds.value = []
   formStep.value = 1
   editVisible.value = true
   loadAllHosts()
 }
 
-/** 编辑：先查详情回填已关联主机（穿梭框右侧） */
+/** 编辑：详情与完整候选加载完成后才允许保存，避免未回显时清空关联。 */
 async function openEdit(row: cmdbApi.AppItem) {
+  const requestId = ++editRequestId
   editing.value = row
   Object.assign(editForm, {
     name: row.name,
@@ -298,9 +366,25 @@ async function openEdit(row: cmdbApi.AppItem) {
   })
   formStep.value = 1
   editVisible.value = true
-  loadAllHosts()
-  const detail = await cmdbApi.getApp(row.id)
-  targetKeys.value = detail.hosts.map((h) => String(h.id))
+  editLoading.value = true
+  targetKeys.value = []
+  configFileIds.value = []
+  ticketTemplateIds.value = []
+  try {
+    const [appDetail, , configs, templates] = await Promise.all([
+      cmdbApi.getApp(row.id), loadAllHosts(), loadConfigOptions(), loadTemplateOptions(),
+    ])
+    if (requestId !== editRequestId || !editVisible.value) return
+    targetKeys.value = appDetail.hosts.map((host) => String(host.id))
+    configFileIds.value = appDetail.config_files.map((file) => file.id)
+    ticketTemplateIds.value = appDetail.ticket_templates.map((template) => template.id)
+    configOptions.value = canManageConfigs ? configs : appDetail.config_files.map((file) => ({ label: file.name, value: file.id }))
+    templateOptions.value = canManageTemplates ? templates : appDetail.ticket_templates.map((template) => ({ label: template.name, value: template.id }))
+  } catch {
+    if (requestId === editRequestId) editVisible.value = false
+  } finally {
+    if (requestId === editRequestId) editLoading.value = false
+  }
 }
 
 function nextFormStep() {
@@ -317,6 +401,7 @@ function previousFormStep() {
 
 /** 提交创建/编辑（host_ids 全量替换关联；名称冲突 40901 由拦截器提示） */
 async function onSubmitEdit() {
+  if (editLoading.value) return
   if (!editForm.name) {
     message.warning('请填写应用名')
     return
@@ -339,6 +424,8 @@ async function onSubmitEdit() {
       mem_quota: editForm.mem_quota || undefined,
       description: editForm.description || undefined,
       host_ids: targetKeys.value.map(Number),
+      ...(editing.value && canManageConfigs ? { config_file_ids: configFileIds.value } : {}),
+      ...(editing.value && canManageTemplates ? { ticket_template_ids: ticketTemplateIds.value } : {}),
     }
     if (editing.value) {
       await cmdbApi.updateApp(editing.value.id, payload)
@@ -396,7 +483,9 @@ async function openDetail(row: Pick<cmdbApi.AppItem, 'id'>) {
   detailVisible.value = true
   detailLoading.value = true
   try {
-    detail.value = await cmdbApi.getApp(row.id)
+    const app = await cmdbApi.getApp(row.id)
+    detail.value = app
+    return app
   } finally {
     detailLoading.value = false
   }
@@ -412,7 +501,19 @@ function onNameClick(event: MouseEvent, row: cmdbApi.AppItem) {
 onMounted(() => {
   // 详情链接按 ID 查询，不依赖分页列表中是否包含目标应用。
   const qid = typeof route.query.id === 'string' ? Number(route.query.id) : NaN
-  if (Number.isSafeInteger(qid) && qid > 0) void openDetail({ id: qid }).catch(() => { detailVisible.value = false })
+  if (Number.isSafeInteger(qid) && qid > 0) {
+    if (['host', 'ticket', 'config'].includes(String(route.query.related))) focusedAppId.value = qid
+    void openDetail({ id: qid }).then((app) => {
+      if (focusedAppId.value === qid) query.keyword = app.name
+    }).catch(() => {
+      detailVisible.value = false
+      if (focusedAppId.value === qid) {
+        focusedAppId.value = undefined
+        void router.replace({ path: route.path })
+        loadList()
+      }
+    })
+  }
   // 全局搜索跳转：?keyword= 带入搜索框自动过滤，随后清掉 query 避免刷新残留（SEARCH-04）
   const qkw = route.query.keyword
   if (typeof qkw === 'string' && qkw) {
@@ -443,10 +544,11 @@ onMounted(() => {
     <div class="toolbar">
       <a-input
         v-model:value="query.keyword"
-        placeholder="应用/系统/负责人/端口"
+        placeholder="搜索应用信息"
         class="kw"
         allow-clear
         @press-enter="onSearch"
+        @change="onKeywordChange"
       >
         <template #prefix><SearchOutlined /></template>
       </a-input>
@@ -472,6 +574,16 @@ onMounted(() => {
         class="deploy-sel"
         allow-clear
         :options="businessLineOptions"
+        @change="onSearch"
+      />
+      <a-select
+        v-model:value="query.system_name"
+        placeholder="所属系统"
+        class="deploy-sel"
+        allow-clear
+        show-search
+        option-filter-prop="label"
+        :options="systemOptions"
         @change="onSearch"
       />
       <a-select
@@ -649,6 +761,18 @@ onMounted(() => {
               />
             </a-spin>
           </a-form-item>
+          <template v-if="editing">
+            <a-form-item label="关联配置文件">
+              <a-select v-model:value="configFileIds" data-testid="app-config-links" mode="multiple"
+                show-search allow-clear option-filter-prop="label" :options="configOptions"
+                :loading="editLoading" :disabled="!canManageConfigs" placeholder="搜索并选择配置文件" />
+            </a-form-item>
+            <a-form-item label="关联工单模板">
+              <a-select v-model:value="ticketTemplateIds" data-testid="app-template-links" mode="multiple"
+                show-search allow-clear option-filter-prop="label" :options="templateOptions"
+                :loading="editLoading" :disabled="!canManageTemplates" placeholder="搜索并选择工单模板" />
+            </a-form-item>
+          </template>
         </template>
       </a-form>
       <template #footer>
@@ -726,7 +850,7 @@ onMounted(() => {
             :pagination="false"
           >
             <template #bodyCell="{ column, record }">
-              <a v-if="column.key === 'hostname'" :href="`/cmdb/hosts?id=${record.id}`">{{ record.hostname }}</a>
+              <a v-if="column.key === 'hostname'" :href="`/cmdb/hosts?id=${record.id}&related=app`">{{ record.hostname }}</a>
             </template>
           </a-table>
 
@@ -747,11 +871,11 @@ onMounted(() => {
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'name'">
-                <a v-if="canReadTemplates" :href="`/job/templates/tickets?id=${record.id}`">{{ record.name }}</a>
+                <a v-if="canReadTemplates" :href="`/job/templates/tickets?id=${record.id}&related=app`">{{ record.name }}</a>
                 <span v-else>{{ record.name }}</span>
               </template>
               <template v-else-if="column.key === 'process'">
-                <a v-if="canReadTemplates && record.process_template_name" :href="`/job/templates/processes?id=${record.process_template_id}`">{{ record.process_template_name }}</a>
+                <a v-if="canReadTemplates && record.process_template_name" :href="`/job/templates/processes?id=${record.process_template_id}&related=app`">{{ record.process_template_name }}</a>
                 <span v-else>{{ record.process_template_name || '—' }}</span>
               </template>
               <a-tag v-else-if="column.key === 'status'" :color="record.status === 'enabled' ? 'success' : 'default'">
@@ -779,7 +903,7 @@ onMounted(() => {
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'name'">
-                <a v-if="canReadConfigs" :href="`/application-configs/${record.id}`">{{ record.name }}</a>
+                <a v-if="canReadConfigs" :href="`/application-configs?file_id=${record.id}&related=app`">{{ record.name }}</a>
                 <span v-else>{{ record.name }}</span>
               </template>
               <span v-else-if="column.key === 'locator'" class="config-locator">{{ configLocatorText(record as cmdbApi.AppConfigFile) }}</span>

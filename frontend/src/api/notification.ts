@@ -2,13 +2,13 @@
 import { request } from './http'
 import type { PageResult } from './system'
 
-/** 站内信条目：ref_type/ref_id 供点击跳转（ticket → 工单中心，execution → 执行详情） */
+/** 站内信条目：ref_type/ref_id 关联工单、执行、配置审批或配置文件。 */
 export interface NotificationItem {
   id: number
   event: string
   title: string
   content: string | null
-  ref_type: 'ticket' | 'execution' | null
+  ref_type: 'ticket' | 'execution' | 'config_approval' | 'config_file' | null
   ref_id: number | null
   is_read: boolean
   created_at: string | null

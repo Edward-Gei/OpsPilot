@@ -127,6 +127,22 @@ async def test_file_list_filters_display_status_and_sorts_before_pagination(clie
         assert rejected.json()["code"] != 0
 
 
+async def test_file_list_filters_related_file_by_id_even_when_names_match(client, db_factory, seed):
+    async with db_factory() as session:
+        files = [ConfigFile(name="shared.yaml", platform_instance_id=1, locator={},
+                            locator_key=f"shared-{index}", content_format="yaml",
+                            approval_role_id=seed["roles"]["ops"]) for index in range(2)]
+        session.add_all(files)
+        await session.commit()
+        target_id = files[1].id
+
+    headers = auth_header(await login_for_tokens(client, "ops1"))
+    response = await client.get("/api/v1/application-configs/files", headers=headers,
+                                params={"keyword": "shared.yaml", "file_id": target_id})
+    assert response.json()["data"]["total"] == 1
+    assert [item["id"] for item in response.json()["data"]["items"]] == [target_id]
+
+
 async def test_cmdb_application_options_include_apps_beyond_first_hundred(client, db_factory, seed):
     """关联选项必须包含全部应用，不能使第 101 个应用无法搜索或显示名称。"""
     async with db_factory() as session:

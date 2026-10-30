@@ -12,7 +12,7 @@ _issue_or_challenge，避免三态判定逻辑重复。
 import logging
 import hashlib
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -123,22 +123,18 @@ async def _issue_or_challenge(
     return await _issue_tokens(session, user, ip)
 
 
-async def _create_token_pair(session: AsyncSession, user: User) -> dict:
-    """按 system_config `token.policy` 签发 access/refresh 令牌对。
-
-    系统设置页可运行时调整有效期；未配置时回退环境变量默认值
-    （ACCESS_TOKEN_MINUTES / REFRESH_TOKEN_DAYS）。
-    """
-    policy = await config_service.get_config(session, "token.policy") or {}
-    access_ttl = timedelta(minutes=int(policy.get("access_minutes") or settings.access_token_minutes))
-    refresh_ttl = timedelta(days=int(policy.get("refresh_days") or settings.refresh_token_days))
+async def _create_token_pair(session: AsyncSession, user: User, session_exp: int | None = None) -> dict:
+    """Access 固定 15 分钟，刷新只沿用首次登录确定的会话截止时间。"""
+    if session_exp is None:
+        policy = await config_service.get_config(session, "token.policy") or {}
+        session_exp = int(datetime.now(timezone.utc).timestamp()) + int(policy.get("session_hours", 8)) * 3600
     access, _, expires_in = security.create_token(
-        user.id, user.username, security.SCOPE_ACCESS, ttl=access_ttl)
+        user.id, user.username, security.SCOPE_ACCESS, session_exp=session_exp)
     refresh, refresh_jti, _ = security.create_token(
-        user.id, user.username, security.SCOPE_REFRESH, ttl=refresh_ttl)
+        user.id, user.username, security.SCOPE_REFRESH, session_exp=session_exp)
     refresh_key = redis_mod.KEY_USER_REFRESH.format(user_id=user.id)
     await redis_mod.redis_client.sadd(refresh_key, refresh_jti)
-    await redis_mod.redis_client.expire(refresh_key, int(refresh_ttl.total_seconds()))
+    await redis_mod.redis_client.expire(refresh_key, 7 * 86400)
     return {
         "access_token": access,
         "refresh_token": refresh,
@@ -162,12 +158,13 @@ async def _issue_tokens(session: AsyncSession, user: User, ip: str | None) -> di
 async def refresh_tokens(session: AsyncSession, refresh_token: str) -> dict:
     """刷新令牌（旋转策略）：校验+吊销旧 refresh，签发新令牌对。"""
     payload = security.decode_token(refresh_token, security.SCOPE_REFRESH)
+    session_exp = payload["session_exp"]
     await _ensure_not_revoked(payload["jti"])
     user = await session.get(User, int(payload["sub"]))
     if user is None or user.status != "active":
         raise BizError(Errors.UNAUTHORIZED, "账号不可用", 401)
     await _revoke_jti(payload)
-    return await _create_token_pair(session, user)
+    return await _create_token_pair(session, user, session_exp)
 
 
 async def logout(user: User, refresh_token: str | None, ip: str | None) -> None:
@@ -205,7 +202,7 @@ async def _revoke_all_user_refresh(user: User) -> None:
     jtis = await redis_mod.redis_client.smembers(key)
     for jti in jtis:
         await redis_mod.redis_client.set(
-            redis_mod.KEY_TOKEN_REVOKED.format(jti=jti), "1", ex=settings.refresh_token_days * 86400
+            redis_mod.KEY_TOKEN_REVOKED.format(jti=jti), "1", ex=7 * 86400
         )
     await redis_mod.redis_client.delete(key)
 

@@ -101,7 +101,9 @@ export interface TicketTemplateForm {
   type: TemplateType
   description?: string
   job_host_id: number
+  job_host_name?: string | null
   process_template_id: number
+  process_template_name?: string | null
   app_ids?: number[]
   params_schema: TicketParam[]
   generator_script?: string | null
@@ -124,7 +126,7 @@ export function defaultExecStrategy(): ExecStrategy {
   return { timeout: 600, fail_fast: true, kill_on_stop: false }
 }
 
-export function listProcessTemplates(params: { page?: number; page_size?: number; keyword?: string; status?: string } = {}) {
+export function listProcessTemplates(params: { page?: number; page_size?: number; keyword?: string; status?: string; name_only?: boolean; process_id?: number } = {}) {
   return request<PageResult<ProcessTemplateItem>>({ url: '/process-templates', method: 'get', params })
 }
 
@@ -162,7 +164,9 @@ export interface TemplateItem {
   type: TemplateType
   description: string | null
   job_host_id: number
+  job_host_name: string | null
   process_template_id: number
+  process_template_name: string | null
   params_schema: TicketParam[]
   generator_script?: string | null
   generator_timeout?: number | null
@@ -187,9 +191,11 @@ export function listTemplates(params: {
   page?: number
   page_size?: number
   keyword?: string
+  name_only?: boolean
   type?: string
   status?: string
   process_template_id?: number
+  template_id?: number
 }) {
   return request<PageResult<TemplateItem>>({ url: '/templates', method: 'get', params })
 }

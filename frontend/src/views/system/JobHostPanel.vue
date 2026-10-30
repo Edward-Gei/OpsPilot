@@ -219,7 +219,7 @@ onMounted(loadList)
     <div class="toolbar">
       <a-input
         v-model:value="query.keyword"
-        placeholder="搜索名称 / IP"
+        placeholder="搜索作业主机"
         class="kw"
         allow-clear
         @press-enter="onSearch"

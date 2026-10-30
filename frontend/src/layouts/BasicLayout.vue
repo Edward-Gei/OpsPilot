@@ -224,7 +224,7 @@ const notifOpen = ref(false)
 const notifLoading = ref(false)
 const notifItems = ref<NotificationItem[]>([])
 
-// 事件标签：与通知中心六事件一致的中文短名
+// 事件标签：工单执行与配置修改共用铃铛列表。
 const EVENT_LABELS: Record<string, string> = {
   'ticket.pending_approval': '待审批',
   'ticket.approved': '审批通过',
@@ -232,6 +232,13 @@ const EVENT_LABELS: Record<string, string> = {
   'execution.success': '执行成功',
   'execution.failed': '执行失败',
   'execution.interrupted': '执行中断',
+  'config.pending_approval': '配置待审批',
+  'config.approved': '配置审批通过',
+  'config.rejected': '配置审批驳回',
+  'config.publish_success': '配置发布成功',
+  'config.publish_failed': '配置发布失败',
+  'config.sync_success': '配置同步成功',
+  'config.sync_failed': '配置同步失败',
 }
 
 /** 相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前（超 7 天显日期） */
@@ -272,7 +279,7 @@ async function onNotifOpenChange(open: boolean) {
   }
 }
 
-/** 单条点击：置已读后按 ref_type 跳转（ticket → 工单中心自动开详情，execution → 执行详情） */
+/** 单条点击：先标记已读，再按关联对象进入对应详情或配置审批页签。 */
 async function onNotifClick(item: NotificationItem) {
   if (!item.is_read) {
     try {
@@ -288,6 +295,10 @@ async function onNotifClick(item: NotificationItem) {
     await router.push(`/executions/${item.ref_id}`)
   } else if (item.ref_type === 'ticket' && item.ref_id) {
     await router.push({ path: '/ticket/list', query: { id: String(item.ref_id) } })
+  } else if (item.ref_type === 'config_approval' && item.ref_id) {
+    await router.push({ path: '/ticket/todo', query: { tab: 'config' } })
+  } else if (item.ref_type === 'config_file' && item.ref_id) {
+    await router.push(`/application-configs/${item.ref_id}`)
   } else {
     return
   }
@@ -637,22 +648,38 @@ async function onLogout() {
                   暂无通知
                 </div>
                 <div v-else class="notif-list">
-                  <div
+                  <a-tooltip
                     v-for="item in notifItems"
                     :key="item.id"
-                    class="notif-item"
-                    :class="{ unread: !item.is_read }"
-                    @click="onNotifClick(item)"
+                    placement="leftTop"
+                    :arrow="false"
+                    :mouse-enter-delay="1.5"
+                    color="#ffffff"
+                    overlay-class-name="notif-preview-popup"
+                    :overlay-style="{ maxWidth: 'min(460px, calc(100vw - 32px))' }"
+                    :overlay-inner-style="{ maxHeight: 'calc(100vh - 48px)', overflowY: 'auto' }"
                   >
-                    <span class="notif-dot" :class="{ show: !item.is_read }"></span>
-                    <div class="notif-body">
-                      <div class="notif-title">
-                        <span class="notif-tag">{{ EVENT_LABELS[item.event] || item.event }}</span>
-                        {{ item.title }}
+                    <template #title>
+                      <div class="notif-preview">
+                        <div class="notif-preview-title">{{ item.title }}</div>
+                        <div v-if="item.content" class="notif-preview-content">{{ item.content }}</div>
                       </div>
-                      <div class="notif-time">{{ relativeTime(item.created_at) }}</div>
+                    </template>
+                    <div
+                      class="notif-item"
+                      :class="{ unread: !item.is_read }"
+                      @click="onNotifClick(item)"
+                    >
+                      <span class="notif-dot" :class="{ show: !item.is_read }"></span>
+                      <div class="notif-body">
+                        <div class="notif-title">
+                          <span class="notif-tag">{{ EVENT_LABELS[item.event] || item.event }}</span>
+                          {{ item.title }}
+                        </div>
+                        <div class="notif-time">{{ relativeTime(item.created_at) }}</div>
+                      </div>
                     </div>
-                  </div>
+                  </a-tooltip>
                 </div>
               </a-spin>
             </div>
@@ -1139,6 +1166,35 @@ async function onLogout() {
 }
 .notif-item + .notif-item {
   border-top: 1px solid var(--border);
+}
+/* 独立浅色通知卡片，暗主题下也不退回默认黑色 Tooltip。 */
+:global(.notif-preview-popup.ant-tooltip .ant-tooltip-inner) {
+  padding: 16px 18px;
+  color: #475569;
+  border: 1px solid #dbe5f0;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(30, 58, 95, 0.12), 0 2px 8px rgba(30, 58, 95, 0.05);
+  font-family: 'OpsPilot Varela Round', 'OpsPilot Noto Sans SC', sans-serif;
+  font-size: 14px;
+  line-height: 1.7;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+/* 完整预览独立排版，不继承列表标题的单行省略。 */
+.notif-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.notif-preview-title {
+  color: #1e293b;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.notif-preview-content {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #edf2f7;
 }
 /* 未读蓝点：已读预留占位保持对齐 */
 .notif-dot {

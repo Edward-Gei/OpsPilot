@@ -6,10 +6,17 @@ import { createPinia } from 'pinia'
 import AppList from './AppList.vue'
 import HostList from './HostList.vue'
 
-const api = vi.hoisted(() => ({ listApps: vi.fn(), getApp: vi.fn(), listHosts: vi.fn(), getHost: vi.fn(),
-  routeQuery: {} as Record<string, string>, configRead: true }))
+const api = vi.hoisted(() => ({ listApps: vi.fn(), getApp: vi.fn(), updateApp: vi.fn(), listHosts: vi.fn(), getHost: vi.fn(), listAppSystems: vi.fn(), exportApps: vi.fn(),
+  routeQuery: {} as Record<string, string>, configRead: true, configWrite: true, templateRead: true, templateWrite: true }))
+const configApi = vi.hoisted(() => ({ listConfigFiles: vi.fn() }))
+const jobApi = vi.hoisted(() => ({ listTemplates: vi.fn() }))
 vi.mock('@/api/cmdb', () => api)
-vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: (perm: string) => perm !== 'config:read' || api.configRead }) }))
+vi.mock('@/api/applicationConfig', () => configApi)
+vi.mock('@/api/job', () => jobApi)
+vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: (perm: string) => ({
+  'config:read': api.configRead, 'config:write': api.configWrite,
+  'template:read': api.templateRead, 'template:write': api.templateWrite,
+} as Record<string, boolean>)[perm] ?? true }) }))
 vi.mock('vue-router', () => ({
   useRoute: () => ({ query: api.routeQuery, path: '/cmdb/apps' }),
   useRouter: () => ({ replace: vi.fn() }),
@@ -36,14 +43,84 @@ beforeEach(() => {
   vi.clearAllMocks()
   api.routeQuery = {}
   api.configRead = true
+  api.configWrite = true
+  api.templateRead = true
+  api.templateWrite = true
   api.listApps.mockResolvedValue({ items: [app], total: 1 })
+  api.listHosts.mockResolvedValue({ items: [], total: 0 })
+  api.listAppSystems.mockResolvedValue({ items: ['订单系统', '订单系统扩展'] })
+  api.updateApp.mockResolvedValue(null)
+  configApi.listConfigFiles.mockResolvedValue({ items: [
+    { id: 11, name: 'common.yaml', platform_instance_name: '生产 Nacos', status: 'active' },
+    { id: 12, name: 'legacy.yaml', platform_instance_name: '生产 Nacos', status: 'archived' },
+  ], total: 2 })
+  jobApi.listTemplates.mockResolvedValue({ items: [
+    { id: 13, name: '发布入口', status: 'enabled' },
+    { id: 14, name: '停用入口', status: 'disabled' },
+  ], total: 2 })
   api.getApp.mockResolvedValue({ ...app, hosts: [], config_files: [{
     id: 11, name: 'common.yaml', platform_instance_name: '生产 Nacos', provider: 'nacos',
     locator: { namespace: 'prod', group: 'DEFAULT_GROUP', data_id: 'common.yaml' },
     status: 'active', drift_status: 'clean',
-  }] })
+  }], ticket_templates: [{ id: 13, name: '发布入口', status: 'enabled', process_template_id: 23, process_template_name: '发布流程' }] })
 })
 afterEach(() => { document.body.innerHTML = '' })
+
+it('应用编辑回显并保存可新增的配置文件和工单模板关联', async () => {
+  configApi.listConfigFiles.mockImplementation(async ({ page }: { page: number }) => page === 1
+    ? { items: [{ id: 11, name: 'common.yaml', platform_instance_name: '生产 Nacos', status: 'active' },
+      ...Array.from({ length: 99 }, (_, index) => ({ id: index + 100, name: `other-${index}.yaml`, platform_instance_name: '生产 Nacos', status: 'active' }))], total: 101 }
+    : { items: [{ id: 12, name: 'legacy.yaml', platform_instance_name: '生产 Nacos', status: 'archived' }], total: 101 })
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  ;[...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes('编辑'))!.click()
+  await flushPromises()
+  ;[...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes('下一步'))!.click()
+  await flushPromises()
+  const configSelect = document.querySelector<HTMLElement>('[data-testid="app-config-links"]')!
+  const templateSelect = document.querySelector<HTMLElement>('[data-testid="app-template-links"]')!
+  expect(configSelect.textContent).toContain('common.yaml')
+  expect(templateSelect.textContent).toContain('发布入口')
+  configSelect.querySelector<HTMLElement>('.ant-select-selector')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  await flushPromises()
+  const configSearch = configSelect.querySelector<HTMLInputElement>('input')!
+  configSearch.value = 'legacy.yaml'
+  configSearch.dispatchEvent(new Event('input', { bubbles: true }))
+  await flushPromises()
+  ;[...document.querySelectorAll<HTMLElement>('.ant-select-item-option')].find(item => item.textContent?.includes('legacy.yaml'))!.click()
+  await flushPromises()
+  templateSelect.querySelector<HTMLElement>('.ant-select-selector')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  await flushPromises()
+  ;[...document.querySelectorAll<HTMLElement>('.ant-select-item-option')].find(item => item.textContent?.includes('停用入口'))!.click()
+  await flushPromises()
+  document.querySelector<HTMLButtonElement>('.ant-modal-footer .ant-btn-primary')!.click()
+  await flushPromises()
+  expect(api.updateApp).toHaveBeenCalledWith(7, expect.objectContaining({
+    config_file_ids: [11, 12], ticket_template_ids: [13, 14],
+  }))
+  expect(configApi.listConfigFiles).toHaveBeenCalledWith({ page: 2, page_size: 100 })
+  wrapper.unmount()
+})
+
+it('缺少配置和模板写权限时只读回显且保存不覆盖关联', async () => {
+  api.configWrite = false
+  api.templateWrite = false
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  ;[...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes('编辑'))!.click()
+  await flushPromises()
+  ;[...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes('下一步'))!.click()
+  await flushPromises()
+  expect(document.querySelector('[data-testid="app-config-links"]')?.textContent).toContain('common.yaml')
+  expect(document.querySelector('[data-testid="app-template-links"]')?.textContent).toContain('发布入口')
+  expect(document.querySelector('[data-testid="app-config-links"]')?.classList.contains('ant-select-disabled')).toBe(true)
+  expect(document.querySelector('[data-testid="app-template-links"]')?.classList.contains('ant-select-disabled')).toBe(true)
+  document.querySelector<HTMLButtonElement>('.ant-modal-footer .ant-btn-primary')!.click()
+  await flushPromises()
+  expect(api.updateApp).toHaveBeenCalledWith(7, expect.not.objectContaining({ config_file_ids: expect.anything() }))
+  expect(api.updateApp).toHaveBeenCalledWith(7, expect.not.objectContaining({ ticket_template_ids: expect.anything() }))
+  wrapper.unmount()
+})
 
 it('应用详情以三列表格展示关联模板、流程模板和启停状态，并保留详情链接', async () => {
   api.routeQuery = { id: '7' }
@@ -55,12 +132,12 @@ it('应用详情以三列表格展示关联模板、流程模板和启停状态�
   const wrapper = mount(AppList, { attachTo: document.body })
   await flushPromises()
   expect(document.body.textContent).toContain('关联工单模板（2）')
-  const table = document.querySelector('a[href="/job/templates/tickets?id=13"]')?.closest('table')
+  const table = document.querySelector('a[href="/job/templates/tickets?id=13&related=app"]')?.closest('table')
   expect(table).not.toBeNull()
   expect([...table!.querySelectorAll('thead th')].map(item => item.textContent)).toEqual(['模板名称', '流程模板', '状态'])
-  expect(document.querySelector('a[href="/job/templates/processes?id=23"]')?.textContent).toBe('订单发布流程')
+  expect(document.querySelector('a[href="/job/templates/processes?id=23&related=app"]')?.textContent).toBe('订单发布流程')
   expect([...table!.querySelectorAll('tbody tr')].map(item => item.lastElementChild?.textContent)).toEqual(['启用', '停用'])
-  expect(document.querySelector('a[href="/job/templates/tickets?id=13"]')?.textContent).toBe('订单发布入口')
+  expect(document.querySelector('a[href="/job/templates/tickets?id=13&related=app"]')?.textContent).toBe('订单发布入口')
   wrapper.unmount()
 })
 
@@ -75,8 +152,8 @@ it('点击应用名打开该应用详情，关联主机和配置提供对应详�
   await nameLink.trigger('click')
   await flushPromises()
   expect(document.querySelector('.ant-drawer-title')?.textContent).toBe('订单应用')
-  expect(document.querySelector('a[href="/cmdb/hosts?id=21"]')?.textContent).toBe('demo-host')
-  expect(document.querySelector('a[href="/application-configs/11"]')?.textContent).toBe('common.yaml')
+  expect(document.querySelector('a[href="/cmdb/hosts?id=21&related=app"]')?.textContent).toBe('demo-host')
+  expect(document.querySelector('a[href="/application-configs?file_id=11&related=app"]')?.textContent).toBe('common.yaml')
   wrapper.unmount()
 })
 
@@ -89,7 +166,7 @@ it('没有配置读取权限时仍展示关联配置名称，但不提供详情�
   detailButton.click()
   await flushPromises()
   expect(document.body.textContent).toContain('common.yaml')
-  expect(document.querySelector('a[href="/application-configs/11"]')).toBeNull()
+  expect(document.querySelector('a[href="/application-configs?file_id=11&related=app"]')).toBeNull()
   wrapper.unmount()
 })
 
@@ -99,6 +176,7 @@ it('应用详情链接按 ID 直达，不依赖当前分页是否包含该应用
   const wrapper = mount(AppList, { attachTo: document.body })
   await flushPromises()
   expect(document.querySelector('.ant-drawer-title')?.textContent).toBe('订单应用')
+  expect(api.listApps.mock.calls.every(([params]) => params.app_id === undefined)).toBe(true)
   wrapper.unmount()
 })
 
@@ -111,7 +189,98 @@ it('主机详情链接按 ID 直达，不依赖当前列表记录', async () => 
   await flushPromises()
   expect(document.querySelector('.ant-drawer-title')?.textContent).toBe('demo-host')
   expect(document.body.textContent).toContain('192.0.2.1')
-  expect(document.querySelector('a[href="/cmdb/apps?id=7"]')?.textContent).toBe('订单应用')
+  expect(document.querySelector('a[href="/cmdb/apps?id=7&related=host"]')?.textContent).toBe('订单应用')
+  wrapper.unmount()
+})
+
+it('从主机关联应用跳转时打开详情并只列出该应用', async () => {
+  api.routeQuery = { id: '7', related: 'host' }
+  api.listApps.mockImplementation(async (params: { app_id?: number }) =>
+    params.app_id === 7 ? { items: [app], total: 1 } : { items: [app, { ...app, id: 8, name: '订单应用扩展' }], total: 2 })
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  expect(document.querySelector('.ant-drawer-title')?.textContent).toBe('订单应用')
+  expect(wrapper.find<HTMLInputElement>('input[placeholder="搜索应用信息"]').element.value).toBe('订单应用')
+  expect(api.listApps).toHaveBeenCalledWith(expect.objectContaining({ app_id: 7 }))
+  expect(wrapper.findAll('.ant-table-tbody tr[data-row-key]')).toHaveLength(1)
+  wrapper.unmount()
+})
+
+it.each(['ticket', 'config'])('从 %s 关联应用跳转时搜索框回填并只列出目标应用', async (related) => {
+  api.routeQuery = { id: '7', related }
+  api.listApps.mockImplementation(async (params: { app_id?: number }) =>
+    params.app_id === 7 ? { items: [app], total: 1 } : { items: [app, { ...app, id: 8, name: '订单应用扩展' }], total: 2 })
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  expect(document.querySelector('.ant-drawer-title')?.textContent).toBe('订单应用')
+  expect(wrapper.find<HTMLInputElement>('input[placeholder="搜索应用信息"]').element.value).toBe('订单应用')
+  expect(api.listApps).toHaveBeenCalledWith(expect.objectContaining({ app_id: 7 }))
+  expect(wrapper.findAll('.ant-table-tbody tr[data-row-key]')).toHaveLength(1)
+  wrapper.unmount()
+})
+
+it('关联应用搜索词未修改时按回车仍保留精确结果', async () => {
+  api.routeQuery = { id: '7', related: 'host' }
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  await wrapper.find('input[placeholder="搜索应用信息"]').trigger('keydown.enter')
+  await flushPromises()
+  expect(api.listApps.mock.lastCall?.[0].app_id).toBe(7)
+  wrapper.unmount()
+})
+
+it('修改关联应用搜索词后恢复普通搜索', async () => {
+  api.routeQuery = { id: '7', related: 'host' }
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  await wrapper.find('input[placeholder="搜索应用信息"]').setValue('其他应用')
+  await flushPromises()
+  const params = api.listApps.mock.lastCall?.[0]
+  expect(params.keyword).toBe('其他应用')
+  expect(params.app_id).toBeUndefined()
+  wrapper.unmount()
+})
+
+it('清空关联应用搜索词后恢复完整列表', async () => {
+  api.routeQuery = { id: '7', related: 'host' }
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  await wrapper.find('input[placeholder="搜索应用信息"]').setValue('')
+  await flushPromises()
+  const params = api.listApps.mock.lastCall?.[0]
+  expect(params.keyword).toBeUndefined()
+  expect(params.app_id).toBeUndefined()
+  wrapper.unmount()
+})
+
+it('旧的关联应用列表响应不会覆盖修改后的搜索结果', async () => {
+  api.routeQuery = { id: '7', related: 'host' }
+  const other = { ...app, id: 8, name: '其他应用' }
+  let finishFocused!: (value: { items: typeof app[]; total: number }) => void
+  api.listApps.mockImplementation(async (params: { app_id?: number; keyword?: string }) => {
+    if (params.app_id === 7) return new Promise((resolve) => { finishFocused = resolve })
+    if (params.keyword === '其他应用') return { items: [other], total: 1 }
+    return { items: [app], total: 1 }
+  })
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  await wrapper.find('input[placeholder="搜索应用信息"]').setValue('其他应用')
+  await flushPromises()
+  finishFocused({ items: [app], total: 1 })
+  await flushPromises()
+  expect(wrapper.find('.ant-table-tbody tr[data-row-key]').text()).toContain('其他应用')
+  wrapper.unmount()
+})
+
+it('关联应用详情不存在时恢复普通列表', async () => {
+  api.routeQuery = { id: '7', related: 'host' }
+  api.getApp.mockRejectedValue(new Error('应用不存在'))
+  api.listApps.mockImplementation(async (params: { app_id?: number }) =>
+    params.app_id === 7 ? { items: [], total: 0 } : { items: [app], total: 1 })
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  expect(wrapper.find('.ant-table-tbody tr[data-row-key]').exists()).toBe(true)
+  expect(wrapper.find('.ant-table-tbody tr[data-row-key]').text()).toContain('订单应用')
   wrapper.unmount()
 })
 
@@ -133,7 +302,7 @@ it('每个非操作列表头均有排序入口，服务端口排序传给后端'
   const wrapper = mount(AppList, { attachTo: document.body })
   await flushPromises()
   const headers = [...document.querySelectorAll<HTMLElement>('.ant-table-thead th')]
-    .filter((header) => header.textContent?.trim() && !header.textContent.includes('操作'))
+    .filter((header) => header.textContent?.trim() && header.textContent.trim() !== '操作')
   expect(headers).toHaveLength(15)
   expect(headers.every((header) => !!header.querySelector('.ant-table-column-sorter'))).toBe(true)
   headers.find((header) => header.textContent?.includes('服务端口'))!
@@ -142,5 +311,46 @@ it('每个非操作列表头均有排序入口，服务端口排序传给后端'
   expect(api.listApps).toHaveBeenLastCalledWith(expect.objectContaining({
     sort_by: 'service_port', sort_order: 'asc', page: 1,
   }))
+  wrapper.unmount()
+})
+
+it('主机每个非操作列表头均有排序入口，资源配置排序传给后端', async () => {
+  api.listHosts.mockResolvedValue({ items: [], total: 0 })
+  const wrapper = mount(HostList, { attachTo: document.body })
+  await flushPromises()
+  const headers = [...document.querySelectorAll<HTMLElement>('.ant-table-thead th')]
+    .filter((header) => header.textContent?.trim() && header.textContent.trim() !== '操作')
+  expect(headers).toHaveLength(14)
+  expect(headers.every((header) => !!header.querySelector('.ant-table-column-sorter'))).toBe(true)
+  headers.find((header) => header.textContent?.includes('资源配置'))!
+    .querySelector<HTMLElement>('.ant-table-column-sorters')!.click()
+  await flushPromises()
+  expect(api.listHosts).toHaveBeenLastCalledWith(expect.objectContaining({
+    sort_by: 'spec', sort_order: 'asc', page: 1,
+  }))
+  wrapper.unmount()
+})
+
+it('所属系统下拉展示已有名称，并精确筛选应用', async () => {
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  expect(api.listAppSystems).toHaveBeenCalled()
+  const select = [...document.querySelectorAll<HTMLElement>('.ant-select')]
+    .find((item) => item.querySelector('.ant-select-selection-placeholder')?.textContent === '所属系统')!
+  select.querySelector('.ant-select-selector')!
+    .dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  await flushPromises()
+  const option = [...document.querySelectorAll<HTMLElement>('.ant-select-item-option')]
+    .find((item) => item.textContent?.includes('订单系统'))!
+  option.click()
+  await flushPromises()
+  expect(api.listApps).toHaveBeenLastCalledWith(expect.objectContaining({
+    system_name: '订单系统', page: 1,
+  }))
+  const exportButton = [...document.querySelectorAll<HTMLButtonElement>('button')]
+    .find((button) => button.textContent?.includes('导出'))!
+  exportButton.click()
+  await flushPromises()
+  expect(api.exportApps).toHaveBeenCalledWith(expect.objectContaining({ system_name: '订单系统' }))
   wrapper.unmount()
 })

@@ -286,8 +286,7 @@ BUILTIN_ROLES: dict[str, dict] = {
 # ---------- system_config 默认值（03-数据库设计 §9.1） ----------
 SYSTEM_CONFIG_DEFAULTS: dict[str, dict] = {
     "mfa.policy": {"value": "off"},  # off / optional / required
-    # 登录令牌有效期（分钟/天）；字段为空时回退环境变量默认值
-    "token.policy": {"value": {"access_minutes": None, "refresh_days": None}},
+    "token.policy": {"value": {"session_hours": 8}},
     "password.policy": {
         "value": {"min_length": 8, "require_complex": True, "max_fail": 5, "lock_minutes": 15}
     },

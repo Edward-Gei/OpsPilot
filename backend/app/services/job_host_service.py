@@ -8,7 +8,7 @@ import asyncio
 from datetime import datetime
 
 import asyncssh
-from sqlalchemy import func, select
+from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.response import Errors
@@ -16,6 +16,7 @@ from app.engine.ssh_runner import open_connection
 from app.models.cmdb import JobHost
 from app.models.job import Credential, TicketTemplate
 from app.services.credential_service import SSH_CREDENTIAL_TYPES
+from app.services.list_search import label_matches
 
 # 连通性测试整体超时（秒）：建连 + 执行 echo ok
 _TEST_TIMEOUT = 10
@@ -37,11 +38,22 @@ async def list_job_hosts(
     page: int,
     page_size: int,
 ) -> tuple[list[JobHost], int]:
-    """分页查作业主机；keyword 模糊匹配名称/IP，enabled 筛选启用状态。"""
+    """分页查作业主机；keyword 覆盖可见业务列，最近测试只匹配结果。"""
     query = select(JobHost)
     if keyword:
         like = f"%{keyword}%"
-        query = query.where(JobHost.name.like(like) | JobHost.ip.like(like))
+        credential_match = select(Credential.id).where(
+            Credential.id == JobHost.credential_id, Credential.name.like(like)
+        ).correlate(JobHost).exists()
+        query = query.where(or_(
+            JobHost.name.like(like), JobHost.ip.like(like),
+            cast(JobHost.ssh_port, String).like(like), JobHost.workdir.like(like),
+            credential_match,
+            label_matches(JobHost.enabled, keyword, {True: "启用", False: "禁用"}),
+            and_(JobHost.last_check_at.is_not(None),
+                 label_matches(JobHost.last_check_ok, keyword, {True: "成功", False: "失败"})),
+            JobHost.credential_id.is_(None) if keyword in "未关联凭据" else False,
+        ))
     if enabled is not None:
         query = query.where(JobHost.enabled == enabled)
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()

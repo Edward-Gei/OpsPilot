@@ -164,6 +164,7 @@ export interface ConfigFileQuery {
   page: number
   page_size: number
   keyword?: string
+  file_id?: number
   platform_instance_id?: number
   status?: ConfigListStatus
   sort_by?: 'last_synced_at'
@@ -241,6 +242,12 @@ export function listConfigApprovalTodo(params: { page: number; page_size: number
 
 export function getConfigApprovalContent(versionId: number) {
   return request<ConfigApprovalContent>({ url: `${prefix}/approval-todo/${versionId}/content`, method: 'get' })
+}
+
+export function getApprovalPublishResult(versionId: number) {
+  return request<Pick<ConfigTask, 'status' | 'last_error'>>({
+    url: `${prefix}/approval-results/${versionId}/publish`, method: 'get', silentTransportError: true,
+  })
 }
 
 export function listCmdbApplications(keyword?: string) {

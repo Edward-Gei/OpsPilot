@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 工单模板列表：只维护业务入口，流程步骤和参数统一从流程模板引用，避免重复配置。
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
 import { CodeOutlined, CopyOutlined, DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons-vue'
 import * as api from '@/api/job'
@@ -22,6 +22,7 @@ interface Row extends api.TemplateItem {
 
 const userStore = useUserStore()
 const route = useRoute()
+const router = useRouter()
 const canReadApps = userStore.hasPerm('cmdb:read')
 const canWrite = userStore.hasPerm('template:write')
 const canDelete = userStore.hasPerm('template:delete')
@@ -39,6 +40,8 @@ const copyFromId = ref<number | null>(null)
 const detail = ref<api.TemplateDetail | null>(null)
 const detailOpen = ref(false)
 const query = reactive({ page: 1, page_size: 20, keyword: '', type: undefined as string | undefined, process_template_id: undefined as number | undefined, status: undefined as string | undefined })
+const focusedTemplateId = ref<number | undefined>()
+let listRequestId = 0
 const hostMap = computed(() => Object.fromEntries(hosts.value.map((h) => [h.id, h.name])))
 const processMap = computed(() => Object.fromEntries(processes.value.map((p) => [p.id, p.name])))
 const processOptions = computed(() => processes.value.map((process) => ({ label: process.name, value: process.id })))
@@ -64,14 +67,16 @@ const columns = ref(makeResizable([
 ]))
 
 async function load() {
+  const requestId = ++listRequestId
   loading.value = true
   try {
     const [data, processData, hostData, roleData] = await Promise.all([
-      api.listTemplates(query),
+      api.listTemplates({ ...query, template_id: focusedTemplateId.value }),
       api.listProcessTemplates({ page: 1, page_size: 100 }),
       listJobHosts({ page: 1, page_size: 100 }),
       listRoleOptions(),
     ])
+    if (requestId !== listRequestId) return
     rows.value = data.items as Row[]
     total.value = data.total
     processes.value = processData.items
@@ -84,9 +89,19 @@ async function load() {
       api.listTemplates({ page: 1, page_size: 1, status: 'disabled' }),
     ])
     stats.all = all.total; stats.enabled = enabled.total; stats.disabled = disabled.total
-  } finally { loading.value = false }
+  } finally { if (requestId === listRequestId) loading.value = false }
 }
-function search() { query.page = 1; load() }
+function search() {
+  if (focusedTemplateId.value !== undefined && query.keyword !== detail.value?.name) {
+    focusedTemplateId.value = undefined
+    void router.replace({ path: route.path })
+  }
+  query.page = 1
+  void load()
+}
+function onKeywordChange() {
+  if (focusedTemplateId.value !== undefined && query.keyword !== detail.value?.name) search()
+}
 function pageChange(page: number, pageSize: number) { query.page = page; query.page_size = pageSize; load() }
 function startCreate() { editing.value = null; copyFromId.value = null; open.value = true }
 function startEdit(row: Row) {
@@ -112,7 +127,7 @@ function onCopySearch(keyword: string): void {
 async function searchCopyOptions(keyword: string): Promise<void> {
   copySearching.value = true
   try {
-    const data = await api.listTemplates({ page: 1, page_size: 100, keyword: keyword || undefined })
+    const data = await api.listTemplates({ page: 1, page_size: 100, keyword: keyword || undefined, name_only: true })
     copyOptions.value = data.items.map((item) => ({ label: `${item.name}${item.status === 'disabled' ? '（已停用）' : ''}`, value: item.id }))
   } finally {
     copySearching.value = false
@@ -156,12 +171,33 @@ function formatReceiver(value: string): string {
 function formatValues(values: string[] | undefined, map: Record<string, string>): string {
   return values?.length ? values.map((value) => map[value] || value).join('、') : '-'
 }
-async function openDetail(row: Pick<Row, 'id'>) { detail.value = null; detailOpen.value = true; detail.value = await api.getTemplate(row.id) }
+async function openDetail(row: Pick<Row, 'id'>) {
+  detail.value = null
+  detailOpen.value = true
+  const template = await api.getTemplate(row.id)
+  detail.value = template
+  return template
+}
 const rowSelection = computed(() => ({ selectedRowKeys: selectedKeys.value, onChange: (keys: (string | number)[]) => (selectedKeys.value = keys as number[]) }))
 onMounted(() => {
-  // 应用关联链接按 ID 直达只读详情，不依赖当前列表分页。
+  // 关联入口按 ID 限定列表，详情返回后回填搜索框。
   const qid = typeof route.query.id === 'string' ? Number(route.query.id) : NaN
-  if (Number.isSafeInteger(qid) && qid > 0) void openDetail({ id: qid }).catch(() => { detailOpen.value = false })
+  if (Number.isSafeInteger(qid) && qid > 0) {
+    if (route.query.related === 'app') focusedTemplateId.value = qid
+    void openDetail({ id: qid }).then((template) => {
+      if (focusedTemplateId.value === qid && !query.keyword) {
+        query.keyword = template.name
+        void load()
+      }
+    }).catch(() => {
+      detailOpen.value = false
+      if (focusedTemplateId.value === qid) {
+        focusedTemplateId.value = undefined
+        void router.replace({ path: route.path })
+        void load()
+      }
+    })
+  }
   void load()
 })
 </script>
@@ -174,7 +210,7 @@ onMounted(() => {
       <div class="op-hero-extra"><div class="op-hero-stat"><b>{{ stats.all }}</b><span>全部</span></div><div class="op-hero-stat"><b>{{ stats.enabled }}</b><span>启用</span></div><div class="op-hero-stat"><b>{{ stats.disabled }}</b><span>停用</span></div></div>
     </div>
     <div class="toolbar">
-      <a-input v-model:value="query.keyword" class="kw" allow-clear placeholder="搜索工单模板" @press-enter="search"><template #prefix><SearchOutlined /></template></a-input>
+      <a-input v-model:value="query.keyword" class="kw" allow-clear placeholder="搜索工单模板" @press-enter="search" @change="onKeywordChange"><template #prefix><SearchOutlined /></template></a-input>
       <a-select v-model:value="query.type" class="type-sel" allow-clear placeholder="模板类型" :options="typeOptions" @change="search" />
       <a-select v-model:value="query.process_template_id" class="process-sel" allow-clear show-search option-filter-prop="label" placeholder="流程模板" :options="processOptions" @change="search" />
       <a-select v-model:value="query.status" class="status-sel" allow-clear placeholder="状态" :options="[{ label: '启用', value: 'enabled' }, { label: '停用', value: 'disabled' }]" @change="search" />
@@ -187,8 +223,8 @@ onMounted(() => {
     <a-table :columns="columns" :data-source="rows" :loading="loading" bordered row-key="id" :scroll="{ x: 1060 }" :row-selection="rowSelection" @resize-column="onResizeColumn" :pagination="{ current: query.page, pageSize: query.page_size, total, showSizeChanger: true, showQuickJumper: true, showTotal: (t: number) => `共 ${t} 个模板`, onChange: pageChange }">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'type'"><a-tag :color="typeText[record.type as api.TemplateType]?.color">{{ typeText[record.type as api.TemplateType]?.text || record.type }}</a-tag></template>
-        <template v-else-if="column.key === 'host'">{{ hostMap[record.job_host_id] || `#${record.job_host_id}` }}</template>
-        <template v-else-if="column.key === 'process'"><a-tag color="cyan"><a :href="`/job/templates/processes?id=${record.process_template_id}`">{{ processMap[record.process_template_id] || `#${record.process_template_id}` }}</a></a-tag></template>
+        <template v-else-if="column.key === 'host'">{{ record.job_host_name || hostMap[record.job_host_id] || `#${record.job_host_id}` }}</template>
+        <template v-else-if="column.key === 'process'"><a-tag color="cyan"><a :href="`/job/templates/processes?id=${record.process_template_id}&related=ticket`">{{ record.process_template_name || processMap[record.process_template_id] || `#${record.process_template_id}` }}</a></a-tag></template>
         <template v-else-if="column.key === 'visible_roles'">
           <template v-if="record.visible_role_ids?.length">
             <a-tag v-for="roleId in record.visible_role_ids" :key="roleId" color="blue">{{ roleMap[roleId] || roleId }}</a-tag>
@@ -218,7 +254,7 @@ onMounted(() => {
             <a-descriptions-item label="适用应用">
               <a-space v-if="detail.apps?.length" wrap>
                 <a-tag v-for="app in detail.apps" :key="app.id" color="blue">
-                  <a v-if="canReadApps" :href="`/cmdb/apps?id=${app.id}`">{{ app.name }}</a>
+                  <a v-if="canReadApps" :href="`/cmdb/apps?id=${app.id}&related=ticket`">{{ app.name }}</a>
                   <span v-else>{{ app.name }}</span>
                 </a-tag>
               </a-space>

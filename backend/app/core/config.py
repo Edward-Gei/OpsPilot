@@ -29,9 +29,7 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "change-me-in-env"          # JWT 签名密钥
     secret_encrypt_key: str = ""                       # AES-256-GCM 主密钥（32字节 base64，M1 起用于 MFA secret 加密；留空则从 JWT_SECRET_KEY 派生并告警）
 
-    # 令牌时效（02-技术架构 §3.1：Access 15min / Refresh 7d / mfa_token 短时）
-    access_token_minutes: int = 15                     # Access Token 有效期（分钟）
-    refresh_token_days: int = 7                        # Refresh Token 有效期（天）
+    # 临时令牌时效（正式 Access 固定 15 分钟，Refresh 受登录时长限制）
     mfa_token_minutes: int = 5                         # MFA 挑战令牌有效期（分钟，仅限 /auth/mfa/*）
     pwd_change_token_minutes: int = 10                 # 强制改密令牌有效期（分钟，仅限 PUT /auth/password）
     reset_token_ttl_minutes: int = 30                   # 忘记密码令牌有效期（分钟）

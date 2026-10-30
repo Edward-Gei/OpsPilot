@@ -222,7 +222,7 @@ onMounted(refreshAll)
       />
       <a-input v-model:value="query.actor" placeholder="操作人" class="ipt" allow-clear @press-enter="onSearch" />
       <a-input v-model:value="query.action" placeholder="动作（如 login）" class="ipt" allow-clear @press-enter="onSearch" />
-      <a-input v-model:value="query.keyword" placeholder="对象名称" class="ipt" allow-clear @press-enter="onSearch">
+      <a-input v-model:value="query.keyword" placeholder="搜索审计日志" class="ipt" allow-clear @press-enter="onSearch">
         <template #prefix><SearchOutlined /></template>
       </a-input>
       <a-button type="primary" @click="onSearch"><SearchOutlined />查询</a-button>

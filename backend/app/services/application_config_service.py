@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import urlsplit
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import String, and_, case, cast, delete, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +34,7 @@ from app.models.application_config import (
 from app.models.auth import Role, User, UserRole
 from app.models.cmdb import Application
 from app.models.job import Credential
+from app.services import notify_service
 from app.services.config_content_service import (
     merge_redacted_update,
     redact_content,
@@ -237,14 +238,68 @@ async def list_config_files(
     page: int,
     page_size: int,
     keyword: str | None = None,
+    file_id: int | None = None,
     platform_instance_id: int | None = None,
     status: str | None = None,
     sort_by: str | None = None,
     sort_order: str = "desc",
 ) -> tuple[list[ConfigFile], int]:
     query = select(ConfigFile)
+    if file_id is not None:
+        query = query.where(ConfigFile.id == file_id)
     if keyword:
-        query = query.where(ConfigFile.name.like(f"%{keyword}%"))
+        like = f"%{keyword}%"
+        instance_match = select(ConfigPlatformInstance.id).where(
+            ConfigPlatformInstance.id == ConfigFile.platform_instance_id,
+            ConfigPlatformInstance.name.like(like),
+        ).correlate(ConfigFile).exists()
+        role_match = select(Role.id).where(
+            Role.id == ConfigFile.approval_role_id, Role.name.like(like)
+        ).correlate(ConfigFile).exists()
+        provider = (
+            select(ConfigPlatformInstance.provider)
+            .where(ConfigPlatformInstance.id == ConfigFile.platform_instance_id)
+            .correlate(ConfigFile).scalar_subquery()
+        )
+        locator = ConfigFile.locator
+        def part(key: str):
+            return func.coalesce(locator[key].as_string(), literal(""))
+        namespace = locator["namespace"].as_string()
+        locator_text = case(
+            (provider == "apollo", part("app_id") + literal(" / ") + part("cluster")
+             + literal(" / ") + part("namespace")),
+            (provider == "nacos", case(
+                (or_(namespace.is_(None), namespace == ""), "public"), else_=namespace,
+            ) + literal(" / ") + part("group") + literal(" / ") + part("data_id")),
+            (provider == "consul", part("datacenter") + literal(" / ") + part("kv_prefix")),
+            else_="",
+        )
+        app_count = (
+            select(func.count(ConfigFileApplication.id))
+            .where(ConfigFileApplication.config_file_id == ConfigFile.id)
+            .correlate(ConfigFile).scalar_subquery()
+        )
+        version_no = (
+            select(ConfigVersion.version_no)
+            .where(ConfigVersion.id == ConfigFile.current_version_id)
+            .correlate(ConfigFile).scalar_subquery()
+        )
+        status_text = case(
+            (ConfigFile.status == "archived", "已归档"),
+            (ConfigFile.drift_status == "drifted", "存在漂移"),
+            (ConfigFile.drift_status == "remote_missing", "远端缺失"),
+            (ConfigFile.drift_status == "sync_failed", "同步失败"),
+            (ConfigFile.current_version_id.is_(None), "待首次发布"),
+            else_="一致",
+        )
+        query = query.where(or_(
+            ConfigFile.name.like(like), instance_match, role_match,
+            locator_text.like(like),
+            ConfigFile.content_format.like(like), cast(app_count, String).like(like),
+            (literal("v") + cast(version_no, String)).like(like),
+            ConfigFile.current_version_id.is_(None) if keyword in "未发布" else False,
+            status_text.like(like),
+        ))
     if platform_instance_id is not None:
         query = query.where(ConfigFile.platform_instance_id == platform_instance_id)
     # 筛选沿用列表状态标签的优先级：归档、漂移异常、未发布、一致。
@@ -561,6 +616,18 @@ async def submit_candidate(session: AsyncSession, file_id: int, actor_id: int) -
     await session.delete(draft)
     await session.flush()
     await session.refresh(version)
+    receivers = list((await session.execute(
+        select(User.username).join(UserRole, UserRole.user_id == User.id).where(
+            UserRole.role_id == version.approval_role_id, User.status == "active",
+        )
+    )).scalars())
+    # 按候选冻结的审批角色通知当前成员，消息与提交事务一起生效。
+    await notify_service.emit_inapp(
+        session, "config.pending_approval", receiver=",".join(receivers),
+        title=f"配置 {config_file.name} v{version.version_no} 待审批",
+        content=f"配置文件 {config_file.name} 的版本 v{version.version_no} 已提交，请前往配置审批处理。",
+        ref_type="config_approval", ref_id=version.id,
+    )
     return version
 
 
@@ -672,6 +739,18 @@ async def decide_candidate(
         version.rejected_at = datetime.now()
         version.reject_reason = reason
     await session.flush()
+    submitter = await session.get(User, version.submitted_by) if version.submitted_by else None
+    if submitter:
+        config_file = await get_config_file(session, file_id)
+        result = "审批通过" if approved else "审批驳回"
+        # 审批结果随请求事务提交，自动发布入队失败时也会一起回滚。
+        await notify_service.emit_inapp(
+            session, "config.approved" if approved else "config.rejected", receiver=submitter.username,
+            title=f"配置 {config_file.name} v{version.version_no} {result}",
+            content=f"配置文件 {config_file.name} 的版本 v{version.version_no} {result}。"
+                    + (f"驳回原因：{reason}" if not approved and reason else ""),
+            ref_type="config_file", ref_id=file_id,
+        )
     return version
 
 

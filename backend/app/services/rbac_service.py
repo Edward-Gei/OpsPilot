@@ -5,7 +5,7 @@
 """
 import json
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import redis as redis_mod
@@ -13,6 +13,7 @@ from app.core.response import Errors
 from app.core.security import hash_password
 from app.models.auth import Permission, Role, RolePermission, User, UserRole
 from app.models.application_config import ConfigFile
+from app.services.list_search import label_matches
 
 _PERM_CACHE_TTL = 3600  # 权限缓存 1 小时，变更时主动失效
 
@@ -70,11 +71,23 @@ async def list_users(
     status: str | None = None,
     source: str | None = None,
 ) -> tuple[list[User], int]:
-    """分页查用户，返回 (列表, 总数)；keyword 模糊匹配用户名/显示名。"""
+    """分页查用户，关键词只覆盖列表可见信息，不检索 MFA 密钥。"""
     query = select(User)
     if keyword:
         like = f"%{keyword}%"
-        query = query.where(User.username.like(like) | User.display_name.like(like))
+        role_match = (
+            select(UserRole.id).join(Role, Role.id == UserRole.role_id)
+            .where(UserRole.user_id == User.id, Role.name.like(like))
+            .correlate(User).exists()
+        )
+        query = query.where(or_(
+            User.username.like(like), User.display_name.like(like), role_match,
+            label_matches(User.source, keyword, {"local": "本地", "ldap": "LDAP", "oidc": "OIDC"}),
+            label_matches(User.status, keyword, {"active": "正常", "disabled": "禁用"}),
+            User.mfa_enabled.is_(True) if keyword in "已开启" else False,
+            and_(User.mfa_enabled.is_(False), User.mfa_secret_enc.is_not(None)) if keyword in "已暂停" else False,
+            and_(User.mfa_enabled.is_(False), User.mfa_secret_enc.is_(None)) if keyword in "未绑定" else False,
+        ))
     if status:
         query = query.where(User.status == status)
     if source:

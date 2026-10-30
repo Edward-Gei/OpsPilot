@@ -1,9 +1,9 @@
 """安全基础设施：JWT 签发/校验、bcrypt 密码哈希、TOTP、AES-256-GCM 字段加密。
 
 设计要点（02-技术架构 §3）：
-- JWT HS256，claims: sub/username/scope/jti/exp；scope 四类：
+- JWT HS256，claims: sub/username/scope/jti/exp；正式令牌另含 session_exp；scope 四类：
     access      正式访问令牌（15min）
-    refresh     刷新令牌（7d，登出/改密时按 jti 吊销）
+    refresh     刷新令牌（最长 7d，受登录会话截止时间约束）
     mfa         MFA 挑战令牌（5min，仅限 /auth/mfa/*）
     pwd_change  强制改密令牌（10min，仅限 PUT /auth/password）
 - MFA secret 用 AES-256-GCM 字段级加密；SECRET_ENCRYPT_KEY 留空时从
@@ -71,10 +71,10 @@ def validate_password_strength(password: str, policy: dict) -> None:
 # ---------- JWT 签发与校验 ----------
 
 def _scope_ttl(scope: str) -> timedelta:
-    """各 scope 的有效期（集中配置于 Settings）。"""
+    """固定正式令牌时长；MFA/强制改密时长由部署配置控制。"""
     mapping = {
-        SCOPE_ACCESS: timedelta(minutes=settings.access_token_minutes),
-        SCOPE_REFRESH: timedelta(days=settings.refresh_token_days),
+        SCOPE_ACCESS: timedelta(minutes=15),
+        SCOPE_REFRESH: timedelta(days=7),
         SCOPE_MFA: timedelta(minutes=settings.mfa_token_minutes),
         SCOPE_PWD_CHANGE: timedelta(minutes=settings.pwd_change_token_minutes),
     }
@@ -82,26 +82,34 @@ def _scope_ttl(scope: str) -> timedelta:
 
 
 def create_token(
-    user_id: int, username: str, scope: str, ttl: timedelta | None = None
+    user_id: int, username: str, scope: str, ttl: timedelta | None = None,
+    *, session_exp: int | None = None,
 ) -> tuple[str, str, int]:
     """签发指定 scope 的 JWT，返回 (token, jti, 有效秒数)。
 
-    ttl 可覆盖默认有效期（access/refresh 支持 system_config `token.policy` 运行时调整）；
+    ttl 可覆盖默认有效期；正式令牌另外受 session_exp 截止时间约束。
     jti 用于 refresh 吊销（登出/改密时写 Redis auth:revoked:{jti}）。
     """
     ttl = ttl or _scope_ttl(scope)
     jti = uuid.uuid4().hex
     now = datetime.now(timezone.utc)
+    expires_at = now + ttl
+    if session_exp is not None:
+        expires_at = min(expires_at, datetime.fromtimestamp(session_exp, timezone.utc))
+    if session_exp is not None and expires_at <= now:
+        raise BizError(Errors.TOKEN_EXPIRED, "登录已过期", 401)
     payload = {
         "sub": str(user_id),
         "username": username,
         "scope": scope,
         "jti": jti,
         "iat": now,
-        "exp": now + ttl,
+        "exp": expires_at,
     }
+    if scope in (SCOPE_ACCESS, SCOPE_REFRESH) and session_exp is not None:
+        payload["session_exp"] = session_exp
     token = jwt.encode(payload, settings.jwt_secret_key, algorithm="HS256")
-    return token, jti, int(ttl.total_seconds())
+    return token, jti, int((expires_at - now).total_seconds())
 
 
 def decode_token(token: str, expect_scope: str) -> dict[str, Any]:
@@ -117,6 +125,10 @@ def decode_token(token: str, expect_scope: str) -> dict[str, Any]:
         raise BizError(Errors.UNAUTHORIZED, "无效的令牌", 401) from None
     if payload.get("scope") != expect_scope:
         raise BizError(Errors.UNAUTHORIZED, "令牌类型不匹配", 401)
+    if expect_scope in (SCOPE_ACCESS, SCOPE_REFRESH):
+        session_exp = payload.get("session_exp")
+        if type(session_exp) is not int or payload["exp"] > session_exp or datetime.now(timezone.utc).timestamp() >= session_exp:
+            raise BizError(Errors.TOKEN_EXPIRED, "登录已过期", 401)
     return payload
 
 

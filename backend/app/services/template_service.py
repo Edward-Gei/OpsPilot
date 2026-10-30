@@ -2,7 +2,7 @@
 
 import re
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import JSON, String, case, cast, delete, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.response import Errors
@@ -11,6 +11,7 @@ from app.models.cmdb import Application, JobHost
 from app.models.job import Credential, ProcessStep, ProcessTemplate, TicketTemplate, TicketTemplateApplication
 from app.models.ticket import Ticket
 from app.services.credential_service import is_script_secret
+from app.services.list_search import label_matches
 
 ACTIVE_TICKET_STATUSES = ("approving", "queued", "running", "paused")
 _CREDENTIAL_ALIAS_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,31}$")
@@ -75,10 +76,42 @@ def _process_snapshot(process: ProcessTemplate, steps: list[ProcessStep]) -> dic
 
 
 async def list_process_templates(session: AsyncSession, *, page: int, page_size: int,
-                                 keyword: str | None = None, status: str | None = None):
+                                 keyword: str | None = None, status: str | None = None,
+                                 name_only: bool = False, process_id: int | None = None):
     query = select(ProcessTemplate)
+    if process_id is not None:
+        query = query.where(ProcessTemplate.id == process_id)
     if keyword:
-        query = query.where(ProcessTemplate.name.like(f"%{keyword}%"))
+        like = f"%{keyword}%"
+        if name_only:
+            query = query.where(ProcessTemplate.name.like(like))
+        else:
+            steps_count = (
+                select(func.count(ProcessStep.id))
+                .where(ProcessStep.process_template_id == ProcessTemplate.id)
+                .correlate(ProcessTemplate).scalar_subquery()
+            )
+            refs_count = (
+                select(func.count(TicketTemplate.id))
+                .where(TicketTemplate.process_template_id == ProcessTemplate.id)
+                .correlate(ProcessTemplate).scalar_subquery()
+            )
+            strategy = ProcessTemplate.exec_strategy
+            fail_fast = strategy["fail_fast"].as_boolean()
+            kill_on_stop = strategy["kill_on_stop"].as_boolean()
+            strategy_text = (
+                func.coalesce(cast(strategy["timeout"].as_integer(), String), literal("-"))
+                + literal("秒 / ")
+                + case((fail_fast == True, "失败即停"), (fail_fast == False, "失败继续"), else_="-")
+                + literal(" / ")
+                + case((kill_on_stop == True, "终止停止"), (kill_on_stop == False, "终止继续"), else_="-")
+            )
+            query = query.where(or_(
+                ProcessTemplate.name.like(like), cast(steps_count, String).like(like),
+                cast(refs_count, String).like(like),
+                strategy_text.like(like),
+                label_matches(ProcessTemplate.status, keyword, {"enabled": "启用", "disabled": "停用"}),
+            ))
     if status:
         query = query.where(ProcessTemplate.status == status)
     total = (await session.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
@@ -140,10 +173,46 @@ async def delete_process_template(session: AsyncSession, process_id: int) -> Pro
 
 async def list_templates(session: AsyncSession, *, page: int, page_size: int, keyword: str | None = None,
                          type_: str | None = None, status: str | None = None,
-                         process_template_id: int | None = None):
+                         process_template_id: int | None = None, name_only: bool = False,
+                         template_id: int | None = None):
     query = select(TicketTemplate)
+    if template_id is not None:
+        query = query.where(TicketTemplate.id == template_id)
     if keyword:
-        query = query.where(TicketTemplate.name.like(f"%{keyword}%"))
+        like = f"%{keyword}%"
+        if name_only:
+            query = query.where(TicketTemplate.name.like(like))
+        else:
+            host_match = select(JobHost.id).where(
+                JobHost.id == TicketTemplate.job_host_id, JobHost.name.like(like)
+            ).correlate(TicketTemplate).exists()
+            process_match = select(ProcessTemplate.id).where(
+                ProcessTemplate.id == TicketTemplate.process_template_id,
+                ProcessTemplate.name.like(like),
+            ).correlate(TicketTemplate).exists()
+            if session.bind.dialect.name == "sqlite":
+                visible_role = func.json_each(TicketTemplate.visible_role_ids).table_valued("value")
+                role_match = (
+                    select(Role.id).select_from(visible_role).join(Role, Role.id == visible_role.c.value)
+                    .where(Role.name.like(like)).correlate(TicketTemplate).exists()
+                )
+            else:
+                role_match = (
+                    select(Role.id).where(
+                        Role.name.like(like),
+                        func.json_contains(TicketTemplate.visible_role_ids, cast(Role.id, String)) == 1,
+                    ).correlate(TicketTemplate).exists()
+                )
+            query = query.where(or_(
+                TicketTemplate.name.like(like), host_match, process_match, role_match,
+                label_matches(TicketTemplate.type, keyword, {
+                    "release": "发布", "daily_ops": "日常运维", "other": "其他",
+                }),
+                label_matches(TicketTemplate.status, keyword, {"enabled": "启用", "disabled": "停用"}),
+                or_(TicketTemplate.visible_role_ids.is_(None), TicketTemplate.visible_role_ids == JSON.NULL,
+                    TicketTemplate.visible_role_ids == [])
+                if keyword in "全部角色" else False,
+            ))
     if type_:
         query = query.where(TicketTemplate.type == type_)
     if status:
