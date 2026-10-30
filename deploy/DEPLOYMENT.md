@@ -1,4 +1,4 @@
-﻿# OpsPilot V1 部署手册
+﻿# OpsPilot 部署手册
 
 适用形态：单机 Docker Compose，在线或纯内网部署。本文只描述当前 `deploy/` 文件可执行的方式；部署变量以 [`.env.example`](.env.example) 为准。
 
