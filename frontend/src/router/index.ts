@@ -1,9 +1,10 @@
 // 路由：/login 独立页，其余挂 BasicLayout；守卫做登录校验与权限过滤
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, type RouteLocationNormalized } from 'vue-router'
 
 import BasicLayout from '@/layouts/BasicLayout.vue'
 import { expireIfNeeded, restoreTokensFromPeer } from '@/api/token'
 import { useUserStore } from '@/stores/user'
+import { handleRouteError } from './routeLoadRecovery'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -170,8 +171,13 @@ const router = createRouter({
   ],
 })
 
+// 长期打开的窗口可能引用发布前的懒加载资源，由统一处理器确认换版后恢复。
+let currentNavigation: RouteLocationNormalized | undefined
+router.onError((error, to) => { void handleRouteError(error, to.fullPath, () => currentNavigation === to) })
+
 // 登录守卫：未登录回登录页；已登录补拉用户信息；meta.perm 权限过滤
 router.beforeEach(async (to) => {
+  currentNavigation = to
   const userStore = useUserStore()
   expireIfNeeded()
   if (to.name === 'login' || to.name === 'forgot-password' || to.name === 'reset-password') {

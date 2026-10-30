@@ -10,7 +10,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock('vue-router', () => ({
   createWebHistory: () => ({}),
-  createRouter: () => ({ beforeEach: (guard: typeof state.guard) => { state.guard = guard }, afterEach: () => {} }),
+  createRouter: () => ({ beforeEach: (guard: typeof state.guard) => { state.guard = guard }, afterEach: () => {}, onError: () => {} }),
 }))
 vi.mock('@/layouts/BasicLayout.vue', () => ({ default: {} }))
 vi.mock('@/stores/user', () => ({ useUserStore: () => ({
