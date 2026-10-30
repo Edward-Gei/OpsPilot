@@ -1,4 +1,4 @@
-"""配置审批与发布站内信：接收人、事务和最终结果边界。"""
+"""配置审批、发布和同步站内信：接收人、事务和最终结果边界。"""
 from datetime import datetime
 
 import pytest
@@ -203,15 +203,92 @@ async def test_publish_notice_db_failure_preserves_success(client, db_factory, s
         assert "站内信写入失败" in caplog.text
 
 
-async def test_sync_does_not_emit_publish_notice(client, db_factory, seed, config_file_id, monkeypatch):
-    monkeypatch.setattr(application_config_task_service, "get_config_adapter", lambda _: MemoryAdapter())
+@pytest.mark.parametrize(("baseline", "remote", "drift", "description"), [
+    (None, None, "clean", "与基线一致"),
+    ("password: private-config-value\n", "password: private-config-value\n", "clean", "与基线一致"),
+    (None, "password: private-config-value\n", "drifted", "检测到漂移"),
+    ("password: private-config-value\n", None, "remote_missing", "远端配置不存在"),
+])
+async def test_sync_result_notifies_only_actor_once(
+    client, db_factory, seed, config_file_id, monkeypatch, baseline, remote, drift, description,
+):
+    adapter = MemoryAdapter()
+    adapter.content = remote
+    monkeypatch.setattr(application_config_task_service, "get_config_adapter", lambda _: adapter)
+    # 文件创建人、候选提交人与同步发起人不同，通知不能扩散给前两者。
+    await _submit(client, config_file_id)
     async with db_factory() as session:
-        await application_config_task_service.create_sync_task(
-            session, config_file_id, application_config_service.ConfigActor(seed["users"]["admin"], "admin"),
+        config_file = await session.get(ConfigFile, config_file_id)
+        config_file.created_by = seed["users"]["admin"]
+        snapshot = await session.get(ConfigRemoteSnapshot, config_file.current_snapshot_id)
+        snapshot.exists = baseline is not None
+        snapshot.content_enc = encrypt_text(baseline) if baseline else None
+        task = await application_config_task_service.create_sync_task(
+            session, config_file_id, application_config_service.ConfigActor(seed["users"]["ops1"], "ops1"),
         )
         await session.commit()
+        assert await _inbox(session, "config.sync_success") == []
         assert await application_config_task_service.process_next_config_task(session)
-        assert list((await session.execute(select(UserNotification))).scalars()) == []
+        rows = await _inbox(session, "config.sync_success")
+        assert [row.user_id for row in rows] == [seed["users"]["ops1"]]
+        assert rows[0].ref_type == "config_file" and rows[0].ref_id == config_file_id
+        assert "payment" in rows[0].title and "同步成功" in rows[0].title
+        assert f"#{task.id}" in rows[0].content and description in rows[0].content
+        assert "private-config-value" not in rows[0].content
+        assert (await session.get(ConfigFile, config_file_id)).drift_status == drift
+        assert (await session.get(ConfigTask, task.id)).status == "success"
+        assert not await application_config_task_service.process_next_config_task(session)
+        assert len(await _inbox(session, "config.sync_success")) == 1
+        assert await _inbox(session, "config.sync_failed") == []
+        assert await _inbox(session, "config.publish_success") == []
+        assert list((await session.execute(select(NotificationRecord))).scalars()) == []
+
+
+async def test_sync_failure_notifies_actor_with_safe_error(client, db_factory, seed, config_file_id, monkeypatch):
+    class UnavailableAdapter(MemoryAdapter):
+        async def read(self, connection, locator):
+            raise ProviderUnavailableError("read", "timeout")
+
+    monkeypatch.setattr(application_config_task_service, "get_config_adapter", lambda _: UnavailableAdapter())
+    async with db_factory() as session:
+        task = await application_config_task_service.create_sync_task(
+            session, config_file_id, application_config_service.ConfigActor(seed["users"]["ops1"], "ops1"),
+        )
+        task_id = task.id
+        await session.commit()
+        assert await application_config_task_service.process_next_config_task(session)
+        rows = await _inbox(session, "config.sync_failed")
+        assert [row.user_id for row in rows] == [seed["users"]["ops1"]]
+        assert rows[0].ref_type == "config_file" and rows[0].ref_id == config_file_id
+        assert "同步失败" in rows[0].title
+        assert f"#{task_id}" in rows[0].content and "平台操作失败: timeout" in rows[0].content
+        assert "private-token" not in rows[0].content and "private-config-value" not in rows[0].content
+        assert await _inbox(session, "config.sync_success") == []
+        assert await _inbox(session, "config.publish_failed") == []
+        assert list((await session.execute(select(NotificationRecord))).scalars()) == []
+
+
+async def test_sync_notice_db_failure_preserves_result(client, db_factory, seed, config_file_id, monkeypatch, caplog):
+    monkeypatch.setattr(application_config_task_service, "get_config_adapter", lambda _: MemoryAdapter())
+
+    async def invalid_notice(session, *args, **kwargs):
+        session.add(UserNotification(user_id=None, event="config.sync_success", title="invalid"))
+        await session.flush()
+
+    monkeypatch.setattr(notify_service, "emit_inapp", invalid_notice)
+    async with db_factory() as session:
+        task = await application_config_task_service.create_sync_task(
+            session, config_file_id, application_config_service.ConfigActor(seed["users"]["ops1"], "ops1"),
+        )
+        task_id = task.id
+        await session.commit()
+        assert await application_config_task_service.process_next_config_task(session)
+    async with db_factory() as session:
+        assert (await session.get(ConfigTask, task_id)).status == "success"
+        assert (await session.get(ConfigFile, config_file_id)).operation_token is None
+        assert await _inbox(session, "config.sync_success") == []
+        assert await _inbox(session, "config.sync_failed") == []
+        assert "站内信写入失败" in caplog.text
 
 
 async def test_removed_approver_cannot_emit_result(client, db_factory, seed, config_file_id):

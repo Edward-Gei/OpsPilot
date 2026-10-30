@@ -269,8 +269,11 @@
 | `config.pending_approval` | 候选提交后，通知冻结审批角色的当前有效成员 | `config_approval` / 候选版本 ID |
 | `config.approved`、`config.rejected` | 审批通过或驳回后，通知修改提交人；驳回通知附带审批原因 | `config_file` / 配置文件 ID |
 | `config.publish_success`、`config.publish_failed` | 发布任务最终成功或失败后，通知修改提交人和本次任务发起人并去重 | `config_file` / 配置文件 ID |
+| `config.sync_success`、`config.sync_failed` | 手动同步任务最终成功或失败后，仅通知本次同步任务发起人 | `config_file` / 配置文件 ID |
 
-`config_approval` 通知点击进入 `/ticket/todo?tab=config`，`config_file` 通知进入 `/application-configs/{file_id}`；目标接口和页面继续校验当前审批身份或 `config:read`。发布结果包括自动发布、人工重试和确认重新发布；排队、执行及自动重试中不产生结果通知，接入和手动同步不产生这些事件。系统不自动附带配置正文或凭据，也不生成外部渠道发送记录。
+`config_approval` 通知点击进入 `/ticket/todo?tab=config`，`config_file` 通知进入 `/application-configs/{file_id}`；目标接口和页面继续校验当前审批身份或 `config:read`。发布结果包括自动发布、人工重试和确认重新发布；排队、执行及自动重试中不产生结果通知，接入不产生这些事件。同步读取成功时，`config.sync_success` 正文说明与基线一致、检测到漂移或远端配置不存在；漂移或远端缺失不改变同步成功的任务结果，`config.sync_failed` 附带安全的失败提示。系统不自动附带配置正文或凭据，也不生成外部渠道发送记录。
+
+铃铛列表悬停消息时展示完整 `title` 和 `content`，正文为空时只展示标题；悬停不调用已读接口或触发导航。
 
 ## 10. 审计
 
