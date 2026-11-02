@@ -379,7 +379,7 @@ onMounted(refreshAll)
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'ttl'">{{ record.ttl ?? '—' }}</template>
         <template v-else-if="column.key === 'values'">
-          <a-tooltip :title="record.values.join('\n')">
+          <a-tooltip :title="record.values.join('\n')" :overlay-inner-style="{ whiteSpace: 'pre-wrap' }">
             <span class="record-values">{{ record.values.join('\n') }}</span>
           </a-tooltip>
         </template>

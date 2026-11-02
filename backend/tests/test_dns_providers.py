@@ -615,6 +615,53 @@ async def test_route53_collects_pages_and_marks_alias_and_advanced_records_read_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("multi_value_answer", [None, False])
+async def test_route53_certificate_and_google_validation_cnames_remain_editable(multi_value_answer):
+    resources = [
+        {
+            "Name": "_certificate.example.com.", "Type": "CNAME", "TTL": 300,
+            "ResourceRecords": [{"Value": "_1021c47919ab05af7ae667431fde484c.sdgjtdhdhz.acm-validations.aws."}],
+        },
+        {
+            "Name": "google-verification.example.com.", "Type": "CNAME", "TTL": 300,
+            "ResourceRecords": [{"Value": "gv-validation.dv.googlehosted.com."}],
+        },
+    ]
+    if multi_value_answer is not None:
+        for resource in resources:
+            resource["MultiValueAnswer"] = multi_value_answer
+    page = {"ResourceRecordSets": resources, "IsTruncated": False}
+    client = FakeRoute53Client(record_pages=[page, page])
+    adapter = AwsRoute53Adapter(client_factory=lambda credential: client)
+
+    records = await adapter.list_record_sets(AWS_ZONE, AWS_CREDENTIAL)
+    found = await adapter.get_record_set(AWS_ZONE, records[0].record_key, AWS_CREDENTIAL)
+
+    assert [record.read_only_reason for record in records] == [None, None]
+    assert records[0].values == ("_1021c47919ab05af7ae667431fde484c.sdgjtdhdhz.acm-validations.aws",)
+    assert records[1].values == ("gv-validation.dv.googlehosted.com",)
+    assert found == records[0]
+    if multi_value_answer is False:
+        assert records[0].provider_meta["locator"]["multi_value_answer"] is False
+
+
+@pytest.mark.asyncio
+async def test_route53_multi_value_answer_routing_remains_read_only():
+    client = FakeRoute53Client(record_pages=[{
+        "ResourceRecordSets": [{
+            "Name": "api.example.com.", "Type": "A", "TTL": 300,
+            "ResourceRecords": [{"Value": "192.0.2.1"}], "MultiValueAnswer": True,
+        }],
+        "IsTruncated": False,
+    }])
+    adapter = AwsRoute53Adapter(client_factory=lambda credential: client)
+
+    records = await adapter.list_record_sets(AWS_ZONE, AWS_CREDENTIAL)
+
+    assert records[0].read_only_reason == "高级路由记录不可编辑或删除"
+
+
+@pytest.mark.asyncio
 async def test_route53_get_record_set_uses_stable_locator():
     page = {
         "ResourceRecordSets": [
@@ -737,6 +784,45 @@ async def test_route53_writes_absolute_cname_mx_and_srv_targets():
         for request in client.change_requests
     ]
     assert values == ["target.example.net.", "10 mail.example.net.", "10 5 443 target.example.net."]
+
+
+@pytest.mark.asyncio
+async def test_route53_validation_cname_round_trip_writes_absolute_targets():
+    before_resource = {
+        "Name": "_certificate.example.com.", "Type": "CNAME", "TTL": 300,
+        "ResourceRecords": [{"Value": "_certificate.acm-validations.aws."}],
+        "MultiValueAnswer": False,
+    }
+    after_resource = {
+        **before_resource,
+        "ResourceRecords": [{"Value": "_replacement.acm-validations.aws."}],
+    }
+    client = FakeRoute53Client(record_pages=[
+        {"ResourceRecordSets": [before_resource], "IsTruncated": False},
+        {"ResourceRecordSets": [before_resource], "IsTruncated": False},
+        {"ResourceRecordSets": [after_resource], "IsTruncated": False},
+        {"ResourceRecordSets": [after_resource], "IsTruncated": False},
+        {"ResourceRecordSets": [], "IsTruncated": False},
+    ])
+    adapter = AwsRoute53Adapter(client_factory=lambda credential: client, poll_attempts=1, poll_interval=0)
+    before = (await adapter.list_record_sets(AWS_ZONE, AWS_CREDENTIAL))[0]
+    created = RecordSetDraft(before.record_name, before.record_type, before.ttl, before.values)
+    after = RecordSetDraft(before.record_name, before.record_type, 300, ("_replacement.acm-validations.aws",))
+
+    assert before.read_only_reason is None
+    await adapter.create_simple_record_set(AWS_ZONE, created, AWS_CREDENTIAL)
+    await adapter.replace_simple_record_set(AWS_ZONE, before, after, AWS_CREDENTIAL)
+    refreshed = (await adapter.list_record_sets(AWS_ZONE, AWS_CREDENTIAL))[0]
+    assert refreshed.read_only_reason is None
+    await adapter.delete_simple_record_set(AWS_ZONE, refreshed, AWS_CREDENTIAL)
+
+    changes = [request["ChangeBatch"]["Changes"][0] for request in client.change_requests]
+    assert [change["Action"] for change in changes] == ["CREATE", "UPSERT", "DELETE"]
+    assert [change["ResourceRecordSet"]["ResourceRecords"] for change in changes] == [
+        [{"Value": "_certificate.acm-validations.aws."}],
+        [{"Value": "_replacement.acm-validations.aws."}],
+        [{"Value": "_replacement.acm-validations.aws."}],
+    ]
 
 
 @pytest.mark.asyncio

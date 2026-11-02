@@ -74,7 +74,7 @@ def test_owner_outside_zone_or_malformed_is_rejected(owner):
         normalize_owner_name(owner, "example.com")
 
 
-@pytest.mark.parametrize("zone", ["", ".", "bad..example.com", "-bad.example", "bad-.example"])
+@pytest.mark.parametrize("zone", ["", ".", "bad..example.com", "-bad.example", "bad-.example", "_zone.example"])
 def test_malformed_zone_is_rejected(zone):
     with pytest.raises(ValueError):
         normalize_zone_name(zone)
@@ -90,15 +90,25 @@ def test_record_value_normalization_supports_all_editable_record_types():
     assert normalize_record_values("CAA", ("0 issue letsencrypt.org",)) == ("0 issue letsencrypt.org",)
 
 
+def test_cname_target_accepts_certificate_validation_labels_with_underscores():
+    assert normalize_record_values("CNAME", (
+        "_1021C47919AB05AF7AE667431FDE484C.sdgjtdhdhz.acm-validations.aws.",
+    )) == ("_1021c47919ab05af7ae667431fde484c.sdgjtdhdhz.acm-validations.aws",)
+
+
 @pytest.mark.parametrize("record_type,values", [
     ("A", ("999.0.0.1",)),
     ("AAAA", ("192.0.2.1",)),
     ("CNAME", ("a.example.com", "b.example.com")),
     ("CNAME", ("bad..example.com",)),
+    ("CNAME", ("*.example.com",)),
+    ("CNAME", (f"_{'a' * 63}.example.com",)),
+    ("MX", ("10 _mail.example.net",)),
     ("MX", ("65536 mail.example.net",)),
     ("MX", ("10",)),
     ("SRV", ("10 5 70000 target.example.com",)),
     ("SRV", ("10 5 443",)),
+    ("SRV", ("10 5 443 _target.example.com",)),
     ("TXT", ("",)),
     ("TXT", ("has\x00nul",)),
     ("CAA", ("256 issue letsencrypt.org",)),

@@ -126,14 +126,15 @@ def decode_record_key(record_key: str) -> dict[str, object]:
     return locator
 
 
-def _normalize_dns_name(value: str, field: str) -> str:
+def _normalize_dns_name(value: str, field: str, *, allow_underscore: bool = False) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field}无效")
     name = value.strip().rstrip(".").lower()
     if not name or len(name) > 253:
         raise ValueError(f"{field}无效")
     labels = name.split(".")
-    if any(not _DNS_LABEL_RE.fullmatch(label) for label in labels):
+    label_pattern = _OWNER_LABEL_RE if allow_underscore else _DNS_LABEL_RE
+    if any(not label_pattern.fullmatch(label) for label in labels):
         raise ValueError(f"{field}无效")
     return name
 
@@ -221,7 +222,8 @@ def normalize_record_values(record_type: str, values: Sequence[str]) -> tuple[st
             except ipaddress.AddressValueError as exc:
                 raise ValueError("AAAA 记录值必须是 IPv6 地址") from exc
         elif normalized_type == "CNAME":
-            canonical = _normalize_target(value)
+            # 证书验证的 CNAME 目标允许下划线，不放宽 Zone、MX 和 SRV 的主机名校验。
+            canonical = _normalize_dns_name(value, "记录目标", allow_underscore=True)
         elif normalized_type == "MX":
             parts = value.strip().split()
             if len(parts) != 2:

@@ -167,8 +167,9 @@ class AwsRoute53Adapter(DnsProviderAdapter):
         if "AliasTarget" in resource:
             provider_meta["alias"] = True
         if any(key in resource for key in (
-            "SetIdentifier", "Failover", "GeoLocation", "Region", "MultiValueAnswer", "CidrRoutingConfig",
-        )):
+            "SetIdentifier", "Failover", "GeoLocation", "Region", "CidrRoutingConfig",
+        )) or resource.get("MultiValueAnswer") is True:
+            # Route 53 可能为简单记录返回 MultiValueAnswer=False，仅启用时视为高级路由。
             provider_meta["advanced_routing"] = True
 
         alias_target = resource.get("AliasTarget")
