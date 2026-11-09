@@ -1,6 +1,6 @@
 """冻结配置版本生成时的正式版本对照基准。"""
 from alembic import op
-from sqlalchemy import Column
+from sqlalchemy import Column, inspect
 
 from app.models.base import UBIGINT
 
@@ -12,7 +12,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("config_version", Column("base_version_id", UBIGINT))
+    # 当前 ORM 已含此列；空库完整迁移和旧结构升级共用同一条链。
+    existing = {column["name"] for column in inspect(op.get_bind()).get_columns("config_version")}
+    if "base_version_id" not in existing:
+        op.add_column("config_version", Column("base_version_id", UBIGINT))
     # 旧记录按现存发布时间回填，跳过生成后才发布和未生效的候选。
     op.execute("""
         UPDATE config_version AS target

@@ -211,7 +211,7 @@ watch(canEdit, (editing) => {
       <a-button class="op-btn-cyan" @click="router.push('/application-configs')"><ArrowLeftOutlined />返回列表</a-button>
       <a-button v-if="canEdit && file.status === 'active'" class="op-btn-green"
         :loading="syncStarting || (task?.kind === 'sync' && ['queued', 'running'].includes(task.status))"
-        :disabled="publishStartingId !== null || task?.status === 'queued' || task?.status === 'running'" @click="start('sync')"><CloudSyncOutlined />手动同步</a-button>
+        :disabled="publishStartingId !== null || task?.status === 'queued' || task?.status === 'running'" @click="start('sync')"><template #icon><CloudSyncOutlined /></template>手动同步</a-button>
       <a-button v-if="file.drift_status === 'drifted' || file.drift_status === 'remote_missing'" class="op-btn-orange" @click="driftOpen = true"><WarningOutlined />查看漂移</a-button>
       <a-button v-if="canEdit" class="op-btn-blue" @click="openMetadata"><EditOutlined />编辑信息</a-button>
       <a-popconfirm v-if="canEdit && canDelete && file.status === 'active'" title="归档后不可编辑或同步，外部内容不变。确认归档？" @confirm="archive"><a-button class="op-btn-purple"><InboxOutlined />归档</a-button></a-popconfirm>
@@ -245,8 +245,8 @@ watch(canEdit, (editing) => {
             :message="draftDirty ? '内容有修改，尚未保存' : '存在已保存草稿，尚未发布到远端'" />
           <ConfigContentEditor :model-value="draftContent" :format="file.content_format" :masked="!canReadSecret" :can-read-secret="canReadSecret"
             @update:model-value="draftContent = $event; draftDirty = true" />
-          <a-space class="draft-actions"><a-button class="op-btn-green" :loading="busy" @click="saveDraft"><SaveOutlined />保存草稿</a-button>
-            <a-button type="primary" :loading="busy" @click="submit"><SendOutlined />提交审批</a-button>
+          <a-space class="draft-actions"><a-button class="op-btn-green" :loading="busy" @click="saveDraft"><template #icon><SaveOutlined /></template>保存草稿</a-button>
+            <a-button type="primary" :loading="busy" @click="submit"><template #icon><SendOutlined /></template>提交审批</a-button>
             <a-popconfirm title="确认丢弃草稿？" @confirm="discard"><a-button class="op-btn-orange"><DeleteOutlined />丢弃草稿</a-button></a-popconfirm></a-space>
         </template>
       </a-tab-pane>
@@ -269,10 +269,10 @@ watch(canEdit, (editing) => {
             <template v-else-if="['submitted_at', 'approved_at', 'completed_at'].includes(column.key)">{{ record[column.key] ? new Date(record[column.key]).toLocaleString('zh-CN', { hour12: false }) : '—' }}</template>
             <template v-else-if="['role', 'submitter', 'approver', 'failure_reason'].includes(column.key)">{{ record[column.dataIndex] || '—' }}</template>
             <template v-else-if="column.key === 'actions'"><a-space size="small">
-              <a-button size="small" class="op-btn-cyan" :loading="viewingVersionId === record.id" @click="viewVersion(record as api.ConfigVersion)"><EyeOutlined />查看</a-button>
+              <a-button size="small" class="op-btn-cyan" :loading="viewingVersionId === record.id" @click="viewVersion(record as api.ConfigVersion)"><template #icon><EyeOutlined /></template>查看</a-button>
               <a-button v-if="canEdit && file?.status === 'active' && file.drift_status === 'clean' && (publishingVersion(record.id) || (record.status === 'approved' && publishTaskFor(record.id)?.status === 'failed'))" size="small" class="op-btn-orange"
                 :loading="publishingVersion(record.id)" :disabled="syncStarting || publishStartingId !== null || task?.status === 'queued' || task?.status === 'running'"
-                @click="start('publish', record.id)"><ReloadOutlined />重试发布</a-button>
+                @click="start('publish', record.id)"><template #icon><ReloadOutlined /></template>重试发布</a-button>
             </a-space></template>
           </template>
         </a-table>

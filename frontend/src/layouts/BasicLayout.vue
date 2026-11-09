@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 基础布局：白/深色侧边栏（药丸高亮 + 里程碑徽标）+ 顶栏（搜索/主题切换/通知）+ 内容区
 // M1：菜单按权限显隐、系统管理子菜单、用户下拉（个人中心/退出登录）
-import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import {
@@ -10,13 +10,16 @@ import {
   AuditOutlined,
   BellOutlined,
   CloudServerOutlined,
+  CloseOutlined,
   CodeOutlined,
+  DatabaseOutlined,
   DownOutlined,
   FileDoneOutlined,
   FileTextOutlined,
   GlobalOutlined,
   KeyOutlined,
   LogoutOutlined,
+  MenuOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
   SearchOutlined,
@@ -114,6 +117,12 @@ const menuGroups = computed(() =>
         { key: 'cmdb-hosts', label: '主机管理', icon: CloudServerOutlined, path: '/cmdb/hosts', perm: 'cmdb:read' },
         { key: 'cmdb-apps', label: '应用管理', icon: AppstoreAddOutlined, path: '/cmdb/apps', perm: 'cmdb:read' },
         { key: 'domains', label: '域名管理', icon: GlobalOutlined, path: '/domains', perm: 'domain:read' },
+        { key: 'database', label: '数据库管理', icon: DatabaseOutlined, children: [
+          { key: 'database-instances', label: '实例台账', icon: DatabaseOutlined, path: '/database/instances', perms: ['database:read','database:write','database:delete','database:grant'] },
+          { key: 'database-workbench', label: 'SQL工作台', icon: CodeOutlined, path: '/database/workbench', perm: 'database:query' },
+          { key: 'database-history', label: '执行历史', icon: FileTextOutlined, path: '/database/history', perms: ['database:query','database:write'] },
+          { key: 'database-audit', label: '执行审计', icon: AuditOutlined, path: '/database/audit', perm: 'database:audit' },
+        ] },
         { key: 'application-configs', label: '应用配置', icon: FileTextOutlined, path: '/application-configs', perm: 'config:read' },
         // M3 已开放：作业中心拆分为模板/凭据两个入口（作业主机配置已入系统设置）
         { key: 'job-templates', label: '模板管理', icon: CodeOutlined, path: '/job/templates', perm: 'template:read' },
@@ -155,7 +164,7 @@ const menuGroups = computed(() =>
   ]
     .map((g) => ({
       ...g,
-      items: g.items.filter((it) => (!it.perm || userStore.hasPerm(it.perm)) && (!it.perms || userStore.hasAnyPerm(it.perms))),
+      items: g.items.map(it => ({...it, children: it.children?.filter(child => (!child.perm || userStore.hasPerm(child.perm)) && (!child.perms || userStore.hasAnyPerm(child.perms)))})).filter((it) => (!it.perm || userStore.hasPerm(it.perm)) && (!it.perms || userStore.hasAnyPerm(it.perms)) && (!it.children || it.children.length > 0)),
     }))
     .filter((g) => g.items.length > 0),
 )
@@ -163,6 +172,71 @@ const menuGroups = computed(() =>
 // 当前高亮菜单：跟随路由（详情页可用 meta.menuKey 指定归属菜单）
 const activeKey = computed(() => (route.meta.menuKey as string) || (route.name as string) || 'dashboard')
 const templateMenuOpen = ref(route.path.startsWith('/job/templates'))
+const databaseMenuOpen = ref(route.path.startsWith('/database'))
+// 窄屏复用同一份导航作为覆盖菜单，关闭后不占用内容宽度。
+const mobileMenuOpen = ref(false)
+const mobileMenuButton = ref<HTMLButtonElement | null>(null)
+const mobileMenuClose = ref<HTMLButtonElement | null>(null)
+const navigation = ref<HTMLElement | null>(null)
+let bodyOverflowBeforeMenu: string | null = null
+let mobileNavigationMedia: MediaQueryList | undefined
+
+/** 覆盖菜单关闭后恢复入口焦点；桌面断点不聚焦已隐藏的按钮。 */
+async function closeMobileMenu(restoreFocus = true) {
+  if (!mobileMenuOpen.value) return
+  mobileMenuOpen.value = false
+  await nextTick()
+  if (restoreFocus) mobileMenuButton.value?.focus()
+}
+
+function restoreMenuScroll() {
+  if (bodyOverflowBeforeMenu === null) return
+  document.body.style.overflow = bodyOverflowBeforeMenu
+  bodyOverflowBeforeMenu = null
+}
+
+/** inert 隔离背景，Tab 循环留在菜单，避免键盘操作落到遮罩后。 */
+function onMobileNavigationKeydown(event: KeyboardEvent) {
+  if (!mobileMenuOpen.value) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    void closeMobileMenu()
+    return
+  }
+  if (event.key !== 'Tab') return
+  const buttons = navigation.value?.querySelectorAll<HTMLButtonElement>('button:not([disabled])')
+  const first = buttons?.[0], last = buttons?.[buttons.length - 1]
+  if (!first || !last) return
+  if (!navigation.value?.contains(document.activeElement) || (event.shiftKey && document.activeElement === first)) {
+    event.preventDefault()
+    ;(event.shiftKey ? last : first).focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+function onMobileBreakpointChange(event: MediaQueryListEvent) {
+  if (!event.matches) void closeMobileMenu(false)
+}
+
+watch(mobileMenuOpen, async (open) => {
+  if (!open) { restoreMenuScroll(); return }
+  bodyOverflowBeforeMenu = document.body.style.overflow
+  document.body.style.overflow = 'hidden'
+  notifOpen.value = false
+  searchOpen.value = false
+  await nextTick()
+  if (mobileMenuOpen.value) mobileMenuClose.value?.focus()
+})
+onMounted(() => {
+  mobileNavigationMedia = window.matchMedia('(max-width: 1024px)')
+  mobileNavigationMedia.addEventListener('change', onMobileBreakpointChange)
+})
+onUnmounted(() => {
+  restoreMenuScroll()
+  mobileNavigationMedia?.removeEventListener('change', onMobileBreakpointChange)
+})
 // 顶栏标题：跟随路由 meta
 const pageTitle = computed(() => (route.meta.title as string) || '工作台')
 const breadcrumbParent = computed(() => {
@@ -170,6 +244,9 @@ const breadcrumbParent = computed(() => {
     .map((record) => record.meta.title as string | undefined)
     .filter((title): title is string => Boolean(title))
   if (matchedTitles.length > 1) return matchedTitles[matchedTitles.length - 2]
+
+  // 数据库子页面归属固定模块，避免受侧栏权限过滤影响而回退到账户。
+  if (route.path.startsWith('/database/')) return '数据库管理'
 
   const activeMenu = menuGroups.value.flatMap((group) => group.items).find((item) => item.key === activeKey.value)
   const group = menuGroups.value.find((menuGroup) => menuGroup.items.some((item) => item.key === activeKey.value))
@@ -190,6 +267,7 @@ const roleNames = computed(() => me.value?.roles.map((r) => r.name).join(' / ') 
 
 // 菜单点击：未开放模块给出里程碑提示，不跳转
 function onMenuClick(item: MenuItem) {
+  if (item.key === 'database') { databaseMenuOpen.value = !databaseMenuOpen.value; return }
   if (item.key === 'job-templates') {
     templateMenuOpen.value = !templateMenuOpen.value
     return
@@ -198,7 +276,14 @@ function onMenuClick(item: MenuItem) {
     message.info(`「${item.label}」将在 ${item.milestone} 里程碑开放`)
     return
   }
-  if (item.path) router.push(item.path)
+  if (item.path) {
+    navigateFromMenu(item.path)
+  }
+}
+
+function navigateFromMenu(path: string) {
+  void closeMobileMenu()
+  router.push(path)
 }
 
 let configTodoTimer: number | undefined
@@ -213,9 +298,11 @@ onUnmounted(() => {
   window.clearInterval(configTodoTimer)
   window.removeEventListener('opspilot:todo-changed', loadTodoCount)
 })
-watch(() => route.path, (path) => {
+watch(() => route.fullPath, () => {
+  void closeMobileMenu()
   loadTodoCount()
-  if (path.startsWith('/job/templates')) templateMenuOpen.value = true
+  if (route.path.startsWith('/job/templates')) templateMenuOpen.value = true
+  if (route.path.startsWith('/database')) databaseMenuOpen.value = true
 })
 
 // ===== 站内通知（NOTIFY-06）：铃铛角标 30s 轮询 + 下拉面板最近 20 条 =====
@@ -437,48 +524,56 @@ async function onLogout() {
 </script>
 
 <template>
-  <div class="layout">
+  <div class="layout" @keydown="onMobileNavigationKeydown">
+    <button v-if="mobileMenuOpen" type="button" tabindex="-1" class="mobile-nav-backdrop" aria-label="关闭导航遮罩" @click="closeMobileMenu()" />
     <!-- 侧边栏 -->
-    <aside class="sider opspilot-chrome">
+    <aside id="main-navigation" ref="navigation" class="sider opspilot-chrome" :class="{'sider--open':mobileMenuOpen}" aria-label="主导航">
       <div class="logo">
         <img class="logo-icon" src="/logo.svg" alt="OpsPilot" />
         <div>
           <div class="logo-name">OpsPilot</div>
           <div class="logo-sub">自动化运维平台</div>
         </div>
+        <button ref="mobileMenuClose" type="button" class="icon-btn mobile-nav-close" aria-label="关闭导航" @click="closeMobileMenu()"><CloseOutlined /></button>
       </div>
       <template v-for="group in menuGroups" :key="group.title">
         <div class="menu-group">{{ group.title }}</div>
         <template v-for="item in group.items" :key="item.key">
-          <div
+          <button
+            type="button"
             class="menu-item"
-            :class="{ active: activeKey === item.key || (item.key === 'job-templates' && route.path.startsWith('/job/templates')), locked: !!item.milestone }"
+            :aria-expanded="item.key === 'database' ? databaseMenuOpen : item.key === 'job-templates' ? templateMenuOpen : undefined"
+            :class="{ active: activeKey === item.key || (item.key === 'job-templates' && route.path.startsWith('/job/templates')) || (item.key === 'database' && route.path.startsWith('/database')), locked: !!item.milestone }"
             @click="onMenuClick(item)"
           >
-            <component :is="item.icon" class="menu-icon" />
+            <component :is="item.icon" class="menu-icon" aria-hidden="true" />
             <span>{{ item.label }}</span>
             <span v-if="item.milestone" class="badge">{{ item.milestone }}</span>
             <span v-else-if="item.count" class="badge badge-count">{{ item.count }}</span>
             <DownOutlined
-              v-if="item.key === 'job-templates'"
+              v-if="item.key === 'job-templates' || item.key === 'database'"
               class="menu-caret"
-              :class="{ expanded: templateMenuOpen }"
+              aria-hidden="true"
+              :class="{ expanded: item.key === 'database' ? databaseMenuOpen : templateMenuOpen }"
             />
+          </button>
+          <div v-if="item.key === 'database' && databaseMenuOpen" class="menu-subitems">
+            <button v-for="child in item.children" :key="child.key" type="button" class="menu-subitem" :class="{active:activeKey===child.key}" @click="onMenuClick(child)"><component :is="child.icon" class="menu-subicon" aria-hidden="true" /><span>{{child.label}}</span></button>
           </div>
           <template v-if="item.key === 'job-templates' && templateMenuOpen">
           <div class="menu-subitems">
-          <FileDoneOutlined class="menu-subicon" />
-          <div
+          <button
+            type="button"
             class="menu-subitem"
             :class="{ active: activeKey === 'job-template-tickets' }"
-            @click.stop="router.push('/job/templates/tickets')"
-          >工单模板</div>
-          <CodeOutlined class="menu-subicon" />
-          <div
+            @click="navigateFromMenu('/job/templates/tickets')"
+          ><FileDoneOutlined class="menu-subicon" aria-hidden="true" /><span>工单模板</span></button>
+          <button
+            type="button"
             class="menu-subitem"
             :class="{ active: activeKey === 'job-template-processes' }"
-            @click.stop="router.push('/job/templates/processes')"
-          >流程模板</div>
+            @click="navigateFromMenu('/job/templates/processes')"
+          ><CodeOutlined class="menu-subicon" aria-hidden="true" /><span>流程模板</span></button>
           </div>
           </template>
         </template>
@@ -493,9 +588,10 @@ async function onLogout() {
     </aside>
 
     <!-- 主区 -->
-    <div class="main">
+    <div class="main" :inert="mobileMenuOpen || undefined">
       <header class="header opspilot-chrome">
         <div class="header-left">
+          <button ref="mobileMenuButton" type="button" class="icon-btn mobile-menu-btn" aria-label="导航菜单" aria-controls="main-navigation" :aria-expanded="mobileMenuOpen" @click="mobileMenuOpen = !mobileMenuOpen"><MenuOutlined /></button>
           <nav class="breadcrumb" aria-label="当前位置">
             <template v-if="hasNestedBreadcrumb">
               <AppstoreOutlined class="breadcrumb-icon" />
@@ -772,6 +868,19 @@ async function onLogout() {
   color: #718095;
   padding: 14px 10px 8px;
 }
+.menu-item,
+.menu-subitem {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+}
+.menu-item:focus-visible,
+.menu-subitem:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: -2px;
+}
 .menu-item {
   display: flex;
   align-items: center;
@@ -826,8 +935,11 @@ async function onLogout() {
   background: rgba(255, 255, 255, 0.25);
 }
 .menu-subitem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   margin: 1px 0;
-  padding: 8px 12px;
+  padding: 8px 0;
   border-radius: 10px;
   color: #a9b5c6;
   font-size: 12px;
@@ -836,15 +948,17 @@ async function onLogout() {
 }
 .menu-subitems {
   display: grid;
-  grid-template-columns: 20px 1fr;
+  grid-template-columns: 1fr;
   align-items: center;
   margin-left: 28px;
 }
 .menu-subicon {
+  width: 20px;
+  flex-shrink: 0;
   color: #718095;
   font-size: 14px;
 }
-.menu-subitem.active + .menu-subicon {
+.menu-subitem.active .menu-subicon {
   color: var(--primary);
 }
 .menu-subitem:hover {
@@ -1241,5 +1355,71 @@ async function onLogout() {
 }
 .content {
   padding: 24px;
+}
+
+.mobile-menu-btn,
+.mobile-nav-close,
+.mobile-nav-backdrop {
+  display: none;
+}
+
+/* 窄屏将导航移出布局流，搜索独占下一行，避免固定宽度挤压业务页面。 */
+@media (max-width: 1024px) {
+  .sider {
+    position: fixed;
+    inset: 0 auto 0 0;
+    height: 100dvh;
+    max-width: calc(100vw - 48px);
+    z-index: 100;
+    visibility: hidden;
+    transform: translateX(-100%);
+    overscroll-behavior: contain;
+  }
+  .sider--open {
+    visibility: visible;
+    transform: translateX(0);
+    box-shadow: 12px 0 28px #0003;
+  }
+  .mobile-nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    border: 0;
+    padding: 0;
+    background: #02061773;
+    touch-action: none;
+  }
+  .mobile-menu-btn,
+  .mobile-nav-close {
+    display: flex;
+    flex-shrink: 0;
+  }
+  .mobile-nav-close {
+    margin-left: auto;
+    border: 0;
+    background: transparent;
+    color: #cbd5e1;
+  }
+  .header {
+    height: auto;
+    min-height: 64px;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px;
+  }
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .header-right { flex: none; gap: 6px; }
+  .header .icon-btn { flex-shrink: 0; }
+  .header-center { order: 1; flex: 0 0 100%; min-width: 0; }
+  .search-wrap { width: 100%; }
+  .breadcrumb { min-width: 0; }
+  .breadcrumb > :not(.breadcrumb-current) { display: none; }
+  .header .breadcrumb-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .content { min-width: 0; padding: 12px; }
 }
 </style>

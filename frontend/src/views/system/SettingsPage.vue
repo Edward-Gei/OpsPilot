@@ -16,8 +16,10 @@ import {
 } from '@ant-design/icons-vue'
 import * as sysApi from '@/api/system'
 import JobHostPanel from './JobHostPanel.vue'
+import DatabaseSettingsPanel from '@/views/database/DatabaseSettingsPanel.vue'
 
 const loading = ref(false)
+const loadedConfigs = ref<Record<string, unknown> | null>(null)
 const collapsedSettings = reactive<Record<string, boolean>>({ security: false, ldap: false, oidc: false, hosts: false })
 function toggleSetting(type: string) {
   collapsedSettings[type] = !collapsedSettings[type]
@@ -71,11 +73,13 @@ const mfaPolicyLabel = computed(
 /** 拉取全部配置并回填表单 */
 async function loadConfigs() {
   loading.value = true
+  loadedConfigs.value = null
   try {
     const [cfg, roleData] = await Promise.all([
       sysApi.getConfigs(),
       sysApi.listRoles(),
     ])
+    loadedConfigs.value = cfg
     roleOptions.value = roleData.items.map((r) => ({ label: `${r.name}（${r.code}）`, value: r.code }))
 
     mfaPolicy.value = (cfg['mfa.policy'] as typeof mfaPolicy.value) || 'off'
@@ -172,6 +176,7 @@ onMounted(loadConfigs)
       </div>
 
       <div class="settings">
+      <DatabaseSettingsPanel :configs="loadedConfigs" @reload="loadConfigs" />
       <!-- 安全策略 -->
       <a-card class="block block--wide collapsible-block security-block">
         <div class="block-head" :class="{ 'is-collapsed': collapsedSettings.security }" @click="toggleSetting('security')">

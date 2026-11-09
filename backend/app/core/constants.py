@@ -248,6 +248,13 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("notify:write", "通知配置", "notify"),
     ("notify:test", "通知测试", "notify"),
     ("system:config", "系统配置", "system"),
+    ("database:read", "数据库台账查看", "database"),
+    ("database:write", "数据库台账维护与测试", "database"),
+    ("database:import", "数据库实例导入", "database"),
+    ("database:delete", "数据库台账删除", "database"),
+    ("database:query", "数据库只读查询", "database"),
+    ("database:grant", "数据库实例授权", "database"),
+    ("database:audit", "数据库执行审计", "database"),
 ]
 
 # ---------- 内置角色与权限矩阵（PRD §2.2 / 04-API设计 §12） ----------
@@ -295,6 +302,38 @@ SYSTEM_CONFIG_DEFAULTS: dict[str, dict] = {
     "ldap.default_role": {"value": "ops"},
     "oidc.default_role": {"value": "ops"},
     "exec.global_concurrency": {"value": 50},
+    "database.execution_timeout_seconds": {"value": 60},
+    "database.max_result_rows": {"value": 1000},
+    "database.max_result_bytes": {"value": 5242880},
+    "database.result_ttl_minutes": {"value": 30},
+    "database.history_retention_days": {"value": 30},
+    "database.audit_retention_days": {"value": 90},
+    "database.global_concurrency": {"value": 20},
+    "database.instance_concurrency_default": {"value": 5},
+    "database.user_concurrency": {"value": 2},
+    "database.queue_max_tasks": {"value": 200},
+    "database.user_queue_max_tasks": {"value": 10},
+    "database.queue_timeout_seconds": {"value": 120},
+    "database.metadata_reserved_concurrency": {"value": 2},
+    "database.result_storage_budget_bytes": {"value": 1073741824},
+}
+
+# 页面策略与工程额度共用严格整数校验；不允许布尔值隐式变成 0/1。
+DATABASE_CONFIG_RANGES: dict[str, tuple[int, int]] = {
+    "database.execution_timeout_seconds": (1, 600),
+    "database.max_result_rows": (1, 10000),
+    "database.max_result_bytes": (65536, 16777216),
+    "database.result_ttl_minutes": (1, 1440),
+    "database.history_retention_days": (1, 365),
+    "database.audit_retention_days": (1, 1095),
+    "database.global_concurrency": (2, 200),
+    "database.instance_concurrency_default": (2, 50),
+    "database.user_concurrency": (1, 20),
+    "database.queue_max_tasks": (1, 10000),
+    "database.user_queue_max_tasks": (1, 1000),
+    "database.queue_timeout_seconds": (1, 3600),
+    "database.metadata_reserved_concurrency": (1, 199),
+    "database.result_storage_budget_bytes": (33554432, 10737418240),
 }
 
 # ---------- 通知事件默认渠道映射（03-数据库设计 §10：全部落地渠道，渠道默认禁用） ----------

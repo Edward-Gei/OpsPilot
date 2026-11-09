@@ -1,0 +1,278 @@
+.db-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.db-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.db-toolbar .db-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+}
+
+.db-card {
+  background: var(--bg-card, var(--bg-elevated, #fff));
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px;
+}
+
+.db-muted {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.db-row-actions {
+  display: flex;
+  gap: 6px 12px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.db-task-state {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.db-task-state pre,
+.db-cell-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 400px;
+  overflow: auto;
+  font: 13px/1.7 Consolas, monospace;
+}
+
+.db-sql-summary {
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--bg-hover);
+}
+
+.db-sql-summary pre {
+  margin: 8px 0 0;
+}
+
+.db-cell {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.db-result .ant-alert {
+  margin-bottom: 14px;
+}
+
+.db-detail-layout {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 16px;
+  height: calc(100vh - 225px);
+  min-height: 680px;
+}
+
+.db-instance-selector {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.db-selector-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  margin-top: 12px;
+}
+
+.db-selector-row {
+  flex: 1 0 64px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 12px;
+  cursor: pointer;
+  color: var(--text-1);
+}
+
+.db-selector-row.selected {
+  background: var(--primary-soft, #eff4ff);
+  color: var(--primary);
+  border-radius: 8px;
+}
+
+.db-detail-frame {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.db-detail-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px;
+}
+
+.db-detail-section {
+  scroll-margin-top: 12px;
+}
+
+.db-detail-section+.db-detail-section {
+  border-top: 1px solid var(--border);
+  margin-top: 24px;
+  padding-top: 20px;
+}
+
+.db-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.db-section-title h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.db-frame-footer {
+  border-top: 1px solid var(--border);
+  padding: 16px 20px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.db-frame-footer .db-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 12px;
+}
+
+.db-form-page {
+  height: calc(100vh - 142px);
+  min-height: 680px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.db-form-head {
+  padding: 22px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+}
+
+.db-form-body {
+  padding: 24px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.db-form-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  margin-top: 30px;
+}
+
+.db-field-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+.db-workbench-grid {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.db-workbench-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.db-structure {
+  max-height: 800px;
+  overflow: auto;
+}
+
+.db-records-layout {
+  display: grid;
+  grid-template-columns: minmax(350px, 1fr) minmax(420px, 1fr);
+  gap: 16px;
+}
+
+.db-section-nav {
+  display: flex;
+  gap: 24px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+@media(max-width:1100px) {
+  .db-detail-layout {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+
+  .db-form-columns,
+  .db-records-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .db-workbench-grid {
+    grid-template-columns: 210px minmax(0, 1fr);
+  }
+}
+
+@media(max-width:800px) {
+
+  .db-detail-layout,
+  .db-workbench-grid {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+  }
+
+  .db-instance-selector {
+    max-height: 320px;
+  }
+
+  .db-detail-frame {
+    min-height: 600px;
+  }
+
+  .db-field-pair {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .db-frame-footer {
+    flex-wrap: wrap;
+  }
+}

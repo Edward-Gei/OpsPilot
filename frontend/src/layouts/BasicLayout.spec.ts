@@ -8,12 +8,15 @@ import BasicLayout from './BasicLayout.vue'
 const api = vi.hoisted(() => ({
   getUnreadCount: vi.fn(), listNotifications: vi.fn(), markRead: vi.fn(), markAllRead: vi.fn(),
 }))
+const permissions = vi.hoisted(() => new Set<string>())
 vi.mock('@/api/notification', () => api)
 vi.mock('@/api/applicationConfig', () => ({
   listConfigApprovalTodo: async () => ({ items: [], total: 0 }),
 }))
 vi.mock('@/stores/user', () => ({ useUserStore: () => ({
-  userInfo: null, hasPerm: () => false, hasAnyPerm: () => false,
+  userInfo: null,
+  hasPerm: (permission: string) => permissions.has(permission),
+  hasAnyPerm: (items: string[]) => items.some(permission => permissions.has(permission)),
 }) }))
 vi.mock('@/stores/theme', () => ({ useThemeStore: () => ({ mode: 'light' }) }))
 
@@ -25,6 +28,7 @@ let wrapper: ReturnType<typeof mount> | undefined
 
 beforeEach(() => {
   vi.clearAllMocks()
+  permissions.clear()
   vi.stubGlobal('matchMedia', (query: string) => ({
     matches: false, media: query, onchange: null,
     addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(),
@@ -37,6 +41,7 @@ afterEach(async () => {
   await flushPromises()
   vi.useRealTimers()
   document.body.innerHTML = ''
+  document.body.removeAttribute('style')
   vi.unstubAllGlobals()
 })
 
@@ -55,6 +60,194 @@ async function openNotifications(item: ReturnType<typeof notification>) {
   await flushPromises()
   return { wrapper, router }
 }
+
+it('数据库管理紧接域名管理，保留原有四个子入口', async () => {
+  for (const permission of ['cmdb:read', 'domain:read', 'config:read', 'database:read', 'database:write', 'database:query', 'database:audit']) permissions.add(permission)
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/database/instances', component: { template: '<div />' } },
+  ] })
+  await router.push('/database/instances')
+  wrapper = mount(BasicLayout, { global: { plugins: [Antd, router], stubs: { RouterView: true } } })
+  await flushPromises()
+  const labels = wrapper.findAll('.menu-item').map(item => item.text())
+  expect(labels.indexOf('数据库管理')).toBe(labels.indexOf('域名管理') + 1)
+  expect(wrapper.findAll('.menu-subitem').map(item => item.text())).toEqual(['实例台账', 'SQL工作台', '执行历史', '执行审计'])
+})
+
+it('仅查询权限保留数据库查询与执行历史入口', async () => {
+  permissions.add('database:query')
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/database/workbench', component: { template: '<div />' } },
+  ] })
+  await router.push('/database/workbench')
+  wrapper = mount(BasicLayout, { global: { plugins: [Antd, router], stubs: { RouterView: true } } })
+  await flushPromises()
+  expect(wrapper.findAll('.menu-subitem').map(item => item.text())).toEqual(['SQL工作台', '执行历史'])
+})
+
+it('移动导航可通过菜单按钮打开，并通过遮罩关闭且保留原导航', async () => {
+  permissions.add('database:query')
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/database/history', component: { template: '<div />' } },
+  ] })
+  await router.push('/database/history')
+  wrapper = mount(BasicLayout, { global: { plugins: [Antd, router], stubs: { RouterView: true } } })
+  await flushPromises()
+  const toggle = wrapper.get('button[aria-label="导航菜单"]')
+  expect(toggle.attributes('aria-expanded')).toBe('false')
+  await toggle.trigger('click')
+  expect(toggle.attributes('aria-expanded')).toBe('true')
+  expect(wrapper.findAll('.menu-subitem').map(item => item.text())).toEqual(['SQL工作台', '执行历史'])
+  await wrapper.get('button[aria-label="关闭导航遮罩"]').trigger('click')
+  expect(toggle.attributes('aria-expanded')).toBe('false')
+})
+
+it('移动导航选择数据库页面后关闭，Escape也能关闭', async () => {
+  permissions.add('database:query')
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/database/history', component: { template: '<div />' } },
+    { path: '/database/workbench', component: { template: '<div />' } },
+  ] })
+  await router.push('/database/history')
+  wrapper = mount(BasicLayout, { global: { plugins: [Antd, router], stubs: { RouterView: true } } })
+  await flushPromises()
+  const toggle = wrapper.get('button[aria-label="导航菜单"]')
+  await toggle.trigger('click')
+  await wrapper.findAll('.menu-subitem').find(item => item.text() === 'SQL工作台')!.trigger('click')
+  await flushPromises()
+  expect(router.currentRoute.value.path).toBe('/database/workbench')
+  expect(toggle.attributes('aria-expanded')).toBe('false')
+  await toggle.trigger('click')
+  await wrapper.get('.layout').trigger('keydown', { key: 'Escape' })
+  expect(toggle.attributes('aria-expanded')).toBe('false')
+})
+
+async function mountNavigation(path = '/database/history') {
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/:pathMatch(.*)*', component: { template: '<div />' } },
+  ] })
+  await router.push(path)
+  wrapper = mount(BasicLayout, { attachTo: document.body, global: {
+    plugins: [Antd, router], stubs: { RouterView: true },
+  } })
+  await flushPromises()
+  return { wrapper, router, toggle: wrapper.get('button[aria-label="导航菜单"]') }
+}
+
+it('移动导航使用整行按钮，展开状态可读，键盘焦点限制在菜单并在关闭后恢复', async () => {
+  permissions.add('database:query')
+  document.body.style.overflow = 'auto'
+  const { wrapper, router, toggle } = await mountNavigation()
+  ;(toggle.element as HTMLButtonElement).focus()
+  await toggle.trigger('click')
+  await flushPromises()
+  const close = wrapper.get('button[aria-label="关闭导航"]')
+  expect(document.activeElement).toBe(close.element)
+  expect(wrapper.get('.main').attributes('inert')).toBeDefined()
+  expect(document.body.style.overflow).toBe('hidden')
+  const database = wrapper.findAll('.menu-item').find(item => item.text() === '数据库管理')!
+  expect(database.element.tagName).toBe('BUTTON')
+  expect(database.attributes('aria-expanded')).toBe('true')
+  await database.trigger('click')
+  expect(database.attributes('aria-expanded')).toBe('false')
+  await database.trigger('click')
+  const menuButtons = wrapper.findAll('.sider button')
+  const last = menuButtons[menuButtons.length - 1]!
+  ;(last.element as HTMLButtonElement).focus()
+  await last.trigger('keydown', { key: 'Tab' })
+  expect(document.activeElement).toBe(close.element)
+  await close.trigger('keydown', { key: 'Tab', shiftKey: true })
+  expect(document.activeElement).toBe(last.element)
+  const workbench = wrapper.findAll('.menu-subitem').find(item => item.text() === 'SQL工作台')!
+  expect(workbench.element.tagName).toBe('BUTTON')
+  await workbench.get('.menu-subicon').trigger('click')
+  await flushPromises()
+  expect(router.currentRoute.value.path).toBe('/database/workbench')
+  expect(wrapper.get('.main').attributes('inert')).toBeUndefined()
+  expect(document.body.style.overflow).toBe('auto')
+  expect(document.activeElement).toBe(toggle.element)
+})
+
+it.each([
+  ['/job/templates/tickets', '工单模板'],
+  ['/job/templates/processes', '流程模板'],
+])('移动导航点击当前模板路由 %s 也关闭菜单并恢复焦点', async (path, label) => {
+  permissions.add('template:read')
+  const { wrapper, toggle } = await mountNavigation(path)
+  await toggle.trigger('click')
+  await wrapper.findAll('.menu-subitem').find(item => item.text() === label)!.trigger('click')
+  await flushPromises()
+  expect(toggle.attributes('aria-expanded')).toBe('false')
+  expect(document.activeElement).toBe(toggle.element)
+})
+
+it('移动导航在同路径query变化后关闭', async () => {
+  permissions.add('database:query')
+  const { router, toggle } = await mountNavigation('/database/history?task_id=31')
+  await toggle.trigger('click')
+  await router.push('/database/history?task_id=30')
+  await flushPromises()
+  expect(toggle.attributes('aria-expanded')).toBe('false')
+})
+
+it('移动导航打开时关闭已有通知和搜索面板', async () => {
+  api.listNotifications.mockResolvedValue({ items: [], total: 0 })
+  const { wrapper, toggle } = await mountNavigation()
+  await wrapper.get('.search-input').trigger('focus')
+  wrapper.findAllComponents({ name: 'ADropdown' })[0]!.vm.$emit('openChange', true)
+  await flushPromises()
+  expect(wrapper.find('.search-panel').exists()).toBe(true)
+  expect(wrapper.findAllComponents({ name: 'ADropdown' })[0]!.props('open')).toBe(true)
+  await toggle.trigger('click')
+  await flushPromises()
+  expect(wrapper.find('.search-panel').exists()).toBe(false)
+  expect(wrapper.findAllComponents({ name: 'ADropdown' })[0]!.props('open')).toBe(false)
+})
+
+it('移动导航在切换桌面断点或卸载时恢复滚动并移除监听', async () => {
+  let mediaChange: ((event: MediaQueryListEvent) => void) | undefined
+  const removeListener = vi.fn()
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: true, media: query, onchange: null, addListener: vi.fn(), removeListener: vi.fn(),
+    addEventListener: (_: string, listener: (event: MediaQueryListEvent) => void) => {
+      if (query === '(max-width: 1024px)') mediaChange = listener
+    },
+    removeEventListener: removeListener,
+  }))
+  const { wrapper, toggle } = await mountNavigation()
+  await toggle.trigger('click')
+  expect(document.body.style.overflow).toBe('hidden')
+  expect(mediaChange).toBeDefined()
+  mediaChange!({ matches: false } as MediaQueryListEvent)
+  await flushPromises()
+  expect(toggle.attributes('aria-expanded')).toBe('false')
+  expect(document.body.style.overflow).toBe('')
+  await toggle.trigger('click')
+  wrapper.unmount()
+  expect(document.body.style.overflow).toBe('')
+  expect(removeListener).toHaveBeenCalledWith('change', mediaChange)
+})
+
+it.each([
+  ['/database/instances', 'database-instances', '数据库实例', undefined],
+  ['/database/instances/new', 'database-instance-new', '新建数据库实例', 'database-instances'],
+  ['/database/instances/23', 'database-instance-detail', '数据库实例详情', 'database-instances'],
+  ['/database/instances/23/edit', 'database-instance-edit', '编辑数据库实例', 'database-instances'],
+  ['/database/workbench', 'database-workbench', 'SQL工作台', undefined],
+  ['/database/history', 'database-history', '执行历史', undefined],
+  ['/database/audit', 'database-audit', '数据库执行审计', undefined],
+])('%s面包屑归属数据库管理，不受当前可见子菜单影响', async (path, name, title, menuKey) => {
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: path!, name, component: { template: '<div />' }, meta: { title, menuKey } },
+  ] })
+  await router.push(path!)
+  wrapper = mount(BasicLayout, { attachTo: document.body, global: {
+    plugins: [Antd, router], stubs: { RouterView: true },
+  } })
+  await flushPromises()
+  expect(wrapper.get('.breadcrumb-label').text()).toBe('数据库管理')
+  expect(wrapper.get('.breadcrumb-current').text()).toBe(title)
+})
 
 it('配置待审批通知进入配置审批页并同步已读和未读数', async () => {
   const { wrapper, router } = await openNotifications(notification('config.pending_approval', 'config_approval', 8))

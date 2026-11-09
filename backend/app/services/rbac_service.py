@@ -5,7 +5,7 @@
 """
 import json
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import redis as redis_mod
@@ -13,7 +13,9 @@ from app.core.response import Errors
 from app.core.security import hash_password
 from app.models.auth import Permission, Role, RolePermission, User, UserRole
 from app.models.application_config import ConfigFile
+from app.models.database_management import DatabaseRoleInstance
 from app.services.list_search import label_matches
+from app.services.database_quota_service import bucket as database_bucket
 
 _PERM_CACHE_TTL = 3600  # 权限缓存 1 小时，变更时主动失效
 
@@ -290,6 +292,7 @@ async def update_role(
 
 async def delete_role(session: AsyncSession, role_id: int) -> Role:
     """删除自定义角色；内置角色与仍有成员的角色拒绝删除。"""
+    await database_bucket(session, "global", "all")
     role = await _get_role_or_404(session, role_id)
     if role.is_builtin:
         raise Errors.rejected("内置角色不允许删除")
@@ -307,6 +310,8 @@ async def delete_role(session: AsyncSession, role_id: int) -> Role:
         await session.execute(select(RolePermission).where(RolePermission.role_id == role_id))
     ).scalars():
         await session.delete(rp)
+    # 删除角色只清显式实例授权，不删除台账或已有执行记录。
+    await session.execute(delete(DatabaseRoleInstance).where(DatabaseRoleInstance.role_id == role_id))
     await session.delete(role)
     await session.flush()
     return role

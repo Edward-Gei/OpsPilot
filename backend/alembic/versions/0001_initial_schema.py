@@ -61,7 +61,9 @@ PARTITION BY RANGE COLUMNS(created_at) (
 def upgrade() -> None:
     """建表：ORM 元数据建普通表，原生 SQL 建分区审计表。"""
     bind = op.get_bind()
-    normal_tables = [t for name, t in Base.metadata.tables.items() if name != AUDIT_TABLE]
+    # 数据库模块由冻结的 0026 建表，不能提前按后续 ORM 的可空草稿字段创建。
+    normal_tables = [t for name, t in Base.metadata.tables.items()
+                     if name != AUDIT_TABLE and not name.startswith("database_")]
     Base.metadata.create_all(bind=bind, tables=normal_tables)
     op.execute(_audit_log_ddl())
 
@@ -69,5 +71,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     """全量回滚：删除所有表（仅供开发环境使用）。"""
     op.execute(f"DROP TABLE IF EXISTS {AUDIT_TABLE}")
-    normal_tables = [t for name, t in Base.metadata.tables.items() if name != AUDIT_TABLE]
+    normal_tables = [t for name, t in Base.metadata.tables.items()
+                     if name != AUDIT_TABLE and not name.startswith("database_")]
     Base.metadata.drop_all(bind=op.get_bind(), tables=normal_tables)

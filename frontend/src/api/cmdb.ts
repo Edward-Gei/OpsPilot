@@ -53,7 +53,10 @@ export interface AppItem {
 /** 主机详情：附反查的关联应用 */
 export interface HostDetail extends HostItem {
   apps: AppItem[]
+  database_instances?: DatabaseInstanceSummary[]
 }
+
+export interface DatabaseInstanceSummary { id: number; name: string; engine: string; enabled: boolean }
 
 export interface AppConfigFile {
   id: number
@@ -69,6 +72,7 @@ export interface AppConfigFile {
 export interface AppDetail extends AppItem {
   hosts: HostItem[]
   config_files: AppConfigFile[]
+  database_instances?: DatabaseInstanceSummary[]
   ticket_templates: {
     id: number
     name: string
@@ -256,6 +260,7 @@ export function updateApp(
     host_ids: number[]
     config_file_ids?: number[]
     ticket_template_ids?: number[]
+    database_instance_ids?: number[]
   },
 ) {
   return request<null>({ url: `/cmdb/apps/${id}`, method: 'put', data })

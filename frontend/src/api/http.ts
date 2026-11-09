@@ -14,6 +14,8 @@ export interface RequestConfig extends AxiosRequestConfig {
   silentCancel?: boolean
   /** 后台轮询的传输错误由调用方退避重试，不显示全局提示。 */
   silentTransportError?: boolean
+  /** 业务提示由调用方统一处理；认证刷新与强制登录仍照常执行。 */
+  silentBusinessError?: boolean
 }
 
 /** 业务错误：携带后端业务码与 data 载荷（三态流程用） */
@@ -84,13 +86,18 @@ function forceLogin(): void {
 // 响应拦截：解包 + 三态透传 + 40102 静默续期
 http.interceptors.response.use(
   (response) => response,
-  async (error: AxiosError<ApiResponse>) => {
-    const body = error.response?.data
+  async (error: AxiosError<ApiResponse | Blob>) => {
+    let body = error.response?.data
     const config = error.config as (InternalAxiosRequestConfig & RequestConfig & { _retried?: boolean }) | undefined
     if (axios.isCancel(error) && config?.silentCancel) {
       return Promise.reject(error)
     }
-    if (!body || typeof body.code !== 'number') {
+    // 下载请求的业务错误也会包装成 Blob，先还原 JSON 再复用认证刷新与权限提示。
+    if (body instanceof Blob && /\bjson\b/i.test(body.type)) {
+      try { body = JSON.parse(await body.text()) as ApiResponse }
+      catch { /* 非法 JSON 仍按原传输错误处理。 */ }
+    }
+    if (!body || body instanceof Blob || typeof body.code !== 'number') {
       if (!config?.silentTransportError) {
         message.error(error.message || '网络异常，请稍后重试')
       }
@@ -109,7 +116,9 @@ http.interceptors.response.use(
     }
     // 登录三态：静默交给调用方（登录页状态机）
     if (!AUTH_FLOW_CODES.has(body.code)) {
-      message.error(body.message || '请求失败')
+      if (!config?.silentBusinessError) {
+        message.error(body.message || '请求失败')
+      }
       // 未认证且非登录类接口：会话已失效，回登录页
       const url = config?.url || ''
       if (

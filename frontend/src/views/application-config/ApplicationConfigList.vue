@@ -308,11 +308,11 @@ onBeforeUnmount(() => {
             <a-button v-if="canWrite && record.status === 'active'" size="small" class="op-btn-blue" @click="router.push(`/application-configs/${record.id}/edit`)"><EditOutlined />编辑</a-button>
             <a-button v-if="canWrite && record.status === 'active'" size="small" class="op-btn-green"
               :loading="syncingIds.has(record.id)"
-              @click="onSync(record as configApi.ConfigFileBrief)"><CloudSyncOutlined />同步</a-button>
+              @click="onSync(record as configApi.ConfigFileBrief)"><template #icon><CloudSyncOutlined /></template>同步</a-button>
             <a-popconfirm v-if="canDelete && record.status === 'archived'"
               title="仅删除 OpsPilot 中的历史和加密内容，不会删除外部配置。确认删除？"
               @confirm="onDelete(record as configApi.ConfigFileBrief)">
-              <a-button size="small" danger :loading="deletingId === record.id"><DeleteOutlined />删除</a-button>
+              <a-button size="small" danger :loading="deletingId === record.id"><template #icon><DeleteOutlined /></template>删除</a-button>
             </a-popconfirm>
           </a-space>
         </template>

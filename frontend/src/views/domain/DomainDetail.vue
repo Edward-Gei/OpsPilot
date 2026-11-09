@@ -307,7 +307,7 @@ onMounted(refreshAll)
 
     <div class="detail-actions">
       <a-button @click="backToList"><ArrowLeftOutlined />返回 Zone 台账</a-button>
-      <a-button v-if="canWrite" :loading="syncLoading" @click="onSync"><CloudSyncOutlined />手动同步</a-button>
+      <a-button v-if="canWrite" :loading="syncLoading" @click="onSync"><template #icon><CloudSyncOutlined /></template>手动同步</a-button>
       <a-button v-if="canWrite" type="primary" @click="openCreateRecord"><PlusOutlined />新增记录集</a-button>
     </div>
 

@@ -118,6 +118,41 @@ const router = createRouter({
           meta: { title: '凭据管理', perms: ['credential:read', 'secret:read'] },
         },
         {
+          path: 'database/instances', name: 'database-instances',
+          component: () => import('@/views/database/InstanceList.vue'),
+          meta: { title: '数据库实例', perms: ['database:read','database:write','database:delete','database:grant'] },
+        },
+        {
+          path: 'database/instances/new', name: 'database-instance-new',
+          component: () => import('@/views/database/InstanceList.vue'),
+          meta: { title: '新建数据库实例', perm: 'database:write', menuKey: 'database-instances' },
+        },
+        {
+          path: 'database/instances/:id/edit', name: 'database-instance-edit',
+          component: () => import('@/views/database/InstanceList.vue'),
+          meta: { title: '编辑数据库实例', perms: ['database:write','database:grant'], menuKey: 'database-instances' },
+        },
+        {
+          path: 'database/instances/:id', name: 'database-instance-detail',
+          component: () => import('@/views/database/InstanceList.vue'),
+          meta: { title: '数据库实例详情', perms: ['database:read','database:write','database:delete','database:grant','database:query'], menuKey: 'database-instances' },
+        },
+        {
+          path: 'database/workbench', name: 'database-workbench',
+          component: () => import('@/views/database/Workbench.vue'),
+          meta: { title: 'SQL工作台', perm: 'database:query' },
+        },
+        {
+          path: 'database/history', name: 'database-history',
+          component: () => import('@/views/database/Records.vue'),
+          meta: { title: '执行历史', perms: ['database:query','database:write'] },
+        },
+        {
+          path: 'database/audit', name: 'database-audit',
+          component: () => import('@/views/database/Records.vue'), props: { audit: true },
+          meta: { title: '数据库执行审计', perm: 'database:audit' },
+        },
+        {
           path: 'ticket/list',
           name: 'ticket-list',
           component: () => import('@/views/ticket/TicketList.vue'),

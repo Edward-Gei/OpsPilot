@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # OpsPilot 镜像离线导出/导入脚本（纯内网部署的镜像搬运通道）。
 # 导出（有外网的构建机）：bash deploy/scripts/export_images.sh export
-#   -> 产物 deploy/offline/opspilot_images.tar.gz（含 5 个镜像）
+#   -> 产物 deploy/offline/opspilot_images.tar.gz（含 6 个镜像）
 # 导入（内网部署机）：bash deploy/scripts/export_images.sh import
 #   -> docker load 后即可 docker compose up -d（无需拉取外网镜像）
 set -euo pipefail
@@ -10,10 +10,11 @@ cd "$(dirname "$0")/.."   # 定位到 deploy/
 OFFLINE_DIR="offline"
 TARBALL="${OFFLINE_DIR}/opspilot_images.tar.gz"
 
-# 五个服务镜像清单：三个业务镜像（Compose 构建产物）和两个官方基础镜像。
+# 六个服务镜像清单：四个业务镜像（Compose 构建产物）和两个官方基础镜像。
 IMAGES=(
   "opspilot-api:latest"
   "opspilot-worker:latest"
+  "opspilot-database-executor:latest"
   "opspilot-nginx:latest"
   "mysql:8.0"
   "redis:7-alpine"

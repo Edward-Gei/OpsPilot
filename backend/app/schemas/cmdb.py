@@ -63,8 +63,9 @@ class AppUpdateRequest(AppUpsertRequest):
 
     config_file_ids: list[Annotated[int, Field(strict=True, gt=0)]] | None = None
     ticket_template_ids: list[Annotated[int, Field(strict=True, gt=0)]] | None = None
+    database_instance_ids: list[Annotated[int, Field(strict=True, gt=0)]] | None = None
 
-    @field_validator("config_file_ids", "ticket_template_ids")
+    @field_validator("config_file_ids", "ticket_template_ids", "database_instance_ids")
     @classmethod
     def validate_association_ids(cls, value: list[int] | None) -> list[int]:
         if value is None or len(value) != len(set(value)):

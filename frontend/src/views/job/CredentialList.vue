@@ -292,7 +292,7 @@ onMounted(() => {
           @confirm="onBatchDelete"
         >
           <a-button danger :disabled="!selectedKeys.length" :loading="batchLoading">
-            <DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
+            <template #icon><DeleteOutlined /></template>批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
           </a-button>
         </a-popconfirm>
         <a-button v-if="canWrite" type="primary" @click="openCreate"><PlusOutlined />新建凭据</a-button>

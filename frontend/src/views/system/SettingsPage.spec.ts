@@ -46,3 +46,17 @@ it('旧令牌策略显示默认 8 小时并保存可配置的会话上限', asyn
   }))
   wrapper.unmount()
 })
+
+it('数据库配置独立展示六项服务端值，不将审计保留期覆盖历史', async () => {
+  api.getConfigs.mockResolvedValue({
+    'database.execution_timeout_seconds': 45, 'database.max_result_rows': 500,
+    'database.max_result_bytes': 1048576, 'database.result_ttl_minutes': 20,
+    'database.history_retention_days': 40, 'database.audit_retention_days': 15,
+  })
+  const wrapper = mount(SettingsPage, { global: { plugins: [Antd], stubs: { JobHostPanel: true } } })
+  await flushPromises()
+  expect(wrapper.find('[data-testid="database-settings"]').exists()).toBe(true)
+  const fields = wrapper.find('[data-testid="database-settings"]').findAll('input')
+  expect(fields.map(field => (field.element as HTMLInputElement).value)).toEqual(['45', '500', '1048576', '20', '40', '15'])
+  wrapper.unmount()
+})

@@ -6,6 +6,8 @@
 | Base URL | `/api/v1` |
 | 最终契约 | 运行中的 OpenAPI：`/api/v1/openapi.json`；交互文档：`/api/v1/docs` |
 
+本文描述当前接口；数据库管理见§14，权限共47项。实际运行契约以当前部署的OpenAPI为准，真实目标兼容性另按验收范围记录。
+
 ## 1. 通用约定
 
 认证请求使用 `Authorization: Bearer <access_token>`。个人访问密钥 `opsp_` 也可作为 Bearer 凭证，但不能访问密钥管理接口。
@@ -68,7 +70,7 @@
 | PUT | `/users/{id}/password` | `user:write` | 管理员重置本地用户密码：写入新哈希、置首登强制改密并解除锁定；SSO 用户返回业务拒绝。不吊销该用户的 Refresh Token |
 | PUT | `/users/{id}/mfa` | `user:mfa` | 管理员启用、禁用或重置 MFA；用户列表同时返回 `mfa_enabled`（是否要求动态码）和 `mfa_bound`（是否已有密钥），禁用只暂停校验并保留密钥 |
 | GET | `/roles` | `role:read` | 角色、权限和成员数 |
-| GET | `/roles/permissions` | `role:read` | 40 个权限点，见 §12 |
+| GET | `/roles/permissions` | `role:read` | 46 个权限点，见 §12 |
 | GET | `/roles/options` | `template:read` | 角色 ID/名称轻量选项 |
 | POST | `/roles` | `role:write` | 创建自定义角色 |
 | PUT | `/roles/{id}` | `role:write` | 更新角色；admin 权限矩阵不可改 |
@@ -82,7 +84,7 @@
 | --- | --- | --- | --- |
 | GET | `/cmdb/hosts` | `cmdb:read` | 分页、可见业务列关键字、`host_id` 精确筛选、平台/区域/环境/状态筛选及列排序 |
 | POST | `/cmdb/hosts` | `cmdb:write` | 新建主机，内网 IP 唯一 |
-| GET | `/cmdb/hosts/{id}` | `cmdb:read` | 主机详情和关联应用 |
+| GET | `/cmdb/hosts/{id}` | `cmdb:read` | 主机详情、关联应用及数据库实例元信息；不含实例连接地址或凭据 |
 | PUT | `/cmdb/hosts/{id}` | `cmdb:write` | 编辑主机 |
 | DELETE | `/cmdb/hosts/{id}` | `cmdb:delete` | 被应用关联时拒绝 |
 | GET | `/cmdb/hosts/suggest` | `cmdb:read` | 平台/区域/主机系列补全 |
@@ -99,12 +101,12 @@
 | GET | `/cmdb/apps` | `cmdb:read` | 应用分页；关键词匹配显示业务列；可用 `app_id` 或已有所属系统名称精确筛选，并支持部署方式、项目类型、所属业务线和服务级别筛选及列排序 |
 | GET | `/cmdb/apps/systems` | `cmdb:read` | 返回去重的已有非空所属系统名称，供应用列表下拉筛选 |
 | POST | `/cmdb/apps` | `cmdb:write` | 创建应用和主机关联 |
-| GET | `/cmdb/apps/{id}` | `cmdb:read` | 应用详情，含关联主机、配置文件元信息及关联工单模板（名称、流程模板、状态）；不含配置正文，无需 `config:read`；模板名称跳转受 `template:read` 控制 |
-| PUT | `/cmdb/apps/{id}` | `cmdb:write`；提交 `config_file_ids` 另需 `config:write`，提交 `ticket_template_ids` 另需 `template:write` | 编辑应用并全量替换主机关联；请求体省略 `host_ids` 时按默认空列表处理，等同解除全部关联，客户端须回读详情后提交完整列表。可选的 `config_file_ids`、`ticket_template_ids` 分别全量替换配置文件和工单模板关联；省略时保留原关联，`[]` 清空，显式 `null`、重复、非正整数及不存在的 ID 拒绝。允许关联已归档配置文件和已停用工单模板；所有校验通过后同事务更新，不修改配置正文或模板字段 |
+| GET | `/cmdb/apps/{id}` | `cmdb:read` | 应用详情，含关联主机、配置文件元信息、关联工单模板（名称、流程模板、状态）及数据库实例（ID、名称、引擎、启用状态）；不含配置正文、数据库地址或凭据；目标页面另检查对应模块权限 |
+| PUT | `/cmdb/apps/{id}` | `cmdb:write`；提交 `config_file_ids`、`ticket_template_ids`、`database_instance_ids` 分别另需 `config:write`、`template:write`、`database:write` | 编辑应用并全量替换主机关联；请求体省略 `host_ids` 时按默认空列表处理，等同解除全部关联，客户端须回读详情后提交完整列表。后三个可选关联字段分别全量替换配置文件、工单模板和数据库实例关联；省略保留，`[]` 清空，显式 `null`、重复、非正整数及不存在的 ID 拒绝。允许关联已归档配置文件和已停用工单模板；所有校验通过后同事务更新，不修改关联目标字段或实例查询授权 |
 | DELETE | `/cmdb/apps/{id}` | `cmdb:delete` | 删除应用 |
 | GET | `/cmdb/apps/export` | `cmdb:read` | 按当前筛选导出完整用户可见应用台账，支持 `app_id`、`system_name` 精确筛选 |
 
-应用编辑页的关联候选分别复用 `GET /application-configs/files` 和 `GET /templates`，因此可编辑下拉还需对应的 `config:read` 或 `template:read`；缺少对应写权限时仅回显已关联名称，不提交该关联字段。
+应用编辑页的关联候选分别复用 `GET /application-configs/files`、`GET /templates` 和 `GET /database/instances?scope=management`，需满足对应候选接口的读取条件；数据库候选可凭 `database:write` 读取。缺少对应写权限时仅回显已关联名称，不提交该关联字段；关联不授予目标查询权。
 
 应用列表的 `sort_by` 可取 `name`、`language`、`deploy_type`、`project_type`、`host_count`、`business_line`、`system_name`、`service_level`、`ops_owner`、`dev_owner`、`service_port`、`cpu_quota`、`mem_quota`、`description`、`created_at`；`sort_order` 为 `asc` 或 `desc`。排序先于分页，关联主机数按数值排序，服务端口和配额作为文本排序；未指定时按应用 ID 倒序。关键词匹配除时间、操作外的显示业务列，包括“1 台”格式的关联主机数及前端/后端等显示文案；列表与导出共用匹配规则。`name_only=true` 保留原应用名、所属系统、运维负责人、开发负责人、服务端口的关键词范围，供全局搜索使用。
 
@@ -117,7 +119,7 @@
 | GET | `/credentials` | `credential:read` 或 `secret:read` | 分页；`keyword` 匹配可见凭据列，另可筛选类型；按权限仅返回 SSH 凭据或脚本密钥，密文既不返回也不参与检索 |
 | POST | `/credentials` | SSH 类型需 `credential:write`；脚本密钥需 `secret:write` | 创建凭据，类型创建后不可修改 |
 | PUT | `/credentials/{id}` | 同创建类型的写权限 | 更新；secret 为空表示保留原密文 |
-| DELETE | `/credentials/{id}` | 同创建类型的删除权限 | SSH 凭据被作业主机引用、脚本密钥被模板或活动工单引用时拒绝 |
+| DELETE | `/credentials/{id}` | 同创建类型的删除权限 | 被作业主机、DNS Zone、配置平台实例、数据库实例或数据库活动/恢复任务引用时拒绝；脚本密钥被模板或活动工单引用时也拒绝 |
 
 ### 5.2 `/job-hosts`
 
@@ -317,7 +319,7 @@
 
 ## 12. 权限点全集
 
-当前共 40 个权限点，事实来源为 `backend/app/core/constants.py` 的 `PERMISSIONS`。
+当前共 46 个权限点，事实来源为 `backend/app/core/constants.py` 的 `PERMISSIONS`。
 
 ```text
 user:read user:write user:mfa role:read role:write
@@ -332,6 +334,7 @@ ticket:read ticket:write ticket:approve
 execution:read execution:control execution:force_control
 audit:read audit:export
 notify:read notify:write notify:test system:config
+database:read database:write database:import database:delete database:query database:grant database:audit
 ```
 
 ## 13. 应用配置 `/application-configs`
@@ -370,3 +373,141 @@ notify:read notify:write notify:test system:config
 版本列表额外返回 `approval_role_name`、`submitter_name`、`approver_name`、`submitted_at`、`approved_at`、`completed_at` 和 `failure_reason`。用户名称优先显示名、其次用户名；角色或用户已不存在时名称为 null。`submitted_at` 为 OpsPilot 候选创建时间，外部导入为空；`completed_at` 优先取最近发布任务结束时间，无任务时回退正式版本发布时间或驳回时间。`failure_reason` 取最近发布失败原因或驳回原因，最近任务正在运行或成功时为空。此接口仍只需 `config:read`，不要求用户或角色管理权限。
 审批通过仅表示发布任务已入队；Worker 写入并回读一致后版本才变为正式版本。远端暂不可用时首次执行后最多自动重试 3 次（间隔 2、4、8 秒）；写入结果不确定时只重试回读，不重复写入，普通人工重试也继承这一限制。明确确认漂移覆盖时，`confirmed_snapshot_id` 必须是当前文件最近一次同步的漂移/远端缺失快照，任务将它持久化为本次写入基线；Worker 执行时再次核对文件仍处于该漂移状态，远端正文在确认后再次变化也停止写入。此确认是新的人工发布操作，不沿用旧任务的不确定写入标记。远端漂移或确定性拒绝不自动重试，最终失败的已批准版本可人工重试。过期任务或丧失配置文件操作锁的 Worker 不得继续写入。
 工作台 `/dashboard/summary` 的 `todo_total` 为工单审批与配置审批待办之和；无工单审批权限的用户只计算其配置待办。前端“待办审批”分为工单审批与配置审批页签；配置文件详情只展示版本记录，审批统一在待办页处理。
+
+## 14. 数据库管理
+
+路径相对于 `/api/v1/database`，成功沿用 code/message/data，分页为 items/total/page/page_size，选项为 items 数组。实现位于 `api/v1/database_management.py` 和 `schemas/database_management.py`；需求、模型与验收见[PRD §8](./01-产品需求文档PRD.md#8-数据库管理)、[数据库 §11](./03-数据库设计.md#11-数据库管理)、[开发验收 §5](./05-开发与验收指南.md#5-数据库管理开发与验收)。
+
+### 14.1 权限与范围
+
+| 场景 | 检查 |
+| --- | --- |
+| management范围 | database:read/write/delete/grant 任一；不自动授予查询 |
+| 台账 Excel | 模板与导入要求 database:import 和 database:write；导出要求 database:read，不包含凭据及结果集 |
+| query范围 | database:query 加多角色显式实例授权并集，管理员同样需要grant；工作台固定scope=query |
+| sql/mongo_read/redis_read/metadata | 提交和访问目标前复查用户有效、实例启用、database:query及实例授权 |
+| probe | database:write，不要求查询grant，仅连接/认证和固定SELECT 1或ping；不设置或校验只读，不执行用户操作或读取业务行 |
+| 本人任务/历史 | owner固定本人；probe需write，其他需query，审计员/admin无跨用户任务后门 |
+| 保存结果 | owner、ready、有效期；数据/metadata还检查当前启用状态和实例grant，probe本人凭write仅读安全摘要 |
+| 独立审计 | database:audit看全员操作，不包含结果集/凭据，不提供他人结果入口 |
+
+平台授权到实例，绑定只读账号限制实例内部范围，应用/主机/负责人关系不推导权限。功能权限不互相继承；取得数据库查询能力不等于取得 secret:read。
+
+### 14.2 路由与关联
+
+| 方法 | 路径 | 合同 |
+| --- | --- | --- |
+| GET | `/instances` | scope=management或query，默认management；page默认1/page_size默认20最大100；keyword、engine、business_line、enabled、cluster_name（最长128字符）、probe_status、instance_id、app_id、host_id可组合，无environment筛选参数；支持sort_by/sort_order，分页响应额外返回cluster_names候选 |
+| GET | `/instances/import-template` | database:import 和 database:write；下载仅含安全台账字段的 Excel 模板 |
+| POST | `/instances/import?upsert=false` | database:import 和 database:write；上传 Excel，按名称创建或在 upsert=true 时更新既有实例，返回逐行结果 |
+| GET | `/instances/export` | database:read；按当前列表筛选导出安全台账字段，不含凭据、授权、关联、检测或查询结果 |
+| POST | `/instances` | database:write；InstanceWrite，返回{id}；不能混入role_ids |
+| GET | `/instances/{id}` | 管理权限或当前显式查询范围，返回安全InstanceDetail；详情可显示停用实例，查询时仍拒绝停用 |
+| PUT | `/instances/{id}` | database:write；完整InstanceWrite，可选app_ids/host_ids省略保持；返回null |
+| DELETE | `/instances/{id}` | database:delete；已停用且无queued/running/stopping/recovering任务，清三关联后删除；返回null |
+| GET/PUT | `/instances/{id}/roles` | database:grant；GET items:[{id,name}]，PUT {role_ids:[...]}全量替换，[]清空 |
+| GET | `/role-options` | database:grant，items:[{id,name}]；不依赖template:read |
+| GET | `/compatible-credentials` | database:write；全部username_password安全候选，items:[{id,name,login_user,auth_type}]，无口令/密文 |
+| GET | `/client-policy` | database:query；四项不带database.前缀的执行/行/字节/TTL运行限制，不读取完整系统设置 |
+| POST | `/tasks` | 严格kind判别请求；202返回task_id/status/executed_statement/operation_summary，不表示已成功 |
+| GET | `/tasks` | 本人历史；page/page_size默认1/20最大100；keyword最长255字符，另有instance_id/engine/status/kind/started_from/started_to；服务端组合筛选、计数后分页，时间按首次提交created_at筛选 |
+| GET | `/tasks/{id}` | 本人TaskView；异步失败仍200，由status/error_code表达 |
+| POST | `/tasks/{id}/cancel` | 本人幂等登记，返回TaskView；不等待目标停止，终态不重复取消 |
+| GET | `/tasks/{id}/result` | 本人、当前权限及TTL；page默认1/page_size默认50最大100，只读保存结果，不连接目标 |
+| GET | `/audit/logs` | database:audit；分页默认1/20最大100；actor_id/keyword/source_ip/instance_id/engine/database/kind/status/started_from/started_to；keyword匹配实例和操作者，时间取首次提交事件 |
+| GET | `/audit/logs/{task_id}` | database:audit；按独立事件组task_id读取详情/events，无结果或导出 |
+
+`GET /instances`的keyword匹配非时间展示列、关联名称、单个状态词及完整状态/检测组合词（如“启用/成功”“停用/失败”），支持成功/失败/未检测并保留连接正常/连接失败旧文案；还包含host、十进制port和组合地址host:port（IPv6为[host]:port），不搜索其余隐藏连接参数或秘密；关联采用EXISTS，筛选计数后分页，不重复实例。cluster_name按完整名称等值匹配；响应cluster_names:string[]为同一授权scope全部可见实例的非空集群名，去重排序，不受搜索、其他筛选、关联ID或分页限制，query范围不得包含未授权集群名。probe_status为untested/succeeded/failed，保留API兼容，台账下拉改用集群名称。批量删除仅前端串行复用1～100个明确ID的单删请求，无batch API；逐项反馈且不自动重试网络未知结果。
+
+Excel 列为实例名称、引擎、连接地址、端口、环境、描述、业务线、集群名称、集群角色、版本。导入结果包含 `success_count`、`created_count`、`updated_count` 和 `failed_rows:[{row,reason}]`；失败行不影响其他有效行。新实例无凭据且默认停用，编辑页补齐凭据后才能启用；已有实例更新要求引擎不变，只修改表内其他字段，保留凭据、查询角色、应用/主机关联、最近检测、连接选项和启停状态。地址或端口变化递增连接版本。导出使用与列表一致的筛选语义，但仅输出上述十项安全字段。实例台账导出不改变工作台查询结果禁止导出的规则。
+
+`GET /tasks`的keyword去除首尾空白后进行字面包含匹配，空白等同未传；百分号、下划线和反斜线不作为通配符。范围为本人列表可见的非时间戳字段：带#前缀的操作编号、实例名、引擎与上下文、操作摘要与类型、中文状态、格式化执行耗时及结果摘要；结果摘要包括当前可见的条数/大小、截断及可用性标签、连接测试安全消息。条数使用en-US千位分隔，大小沿用B/KiB/MiB显示，耗时保留三位小数秒；结果已过期或不可用时不搜索界面已隐藏的数量。提交及到期时间戳、SQL全文、隐藏连接/凭据快照、业务结果块均不参与检索。活动耗时与到期判断在一次请求中使用同一服务端时刻，筛选及total计算后按ID倒序分页，不扩大owner、当前query/write类型权限和历史保留范围。接口保留instance_id筛选；本人历史页面改用keyword和单个时间范围控件，不改变独立审计keyword的匹配范围。
+
+`sort_by` 可取 `name`、`description`、`engine`、`business_line`、`cluster_name`、`cluster_role`、`version`、`address`、`apps`、`hosts`、`status`、`created_at`；`sort_order` 为 `asc` 或 `desc`，默认 `asc`。未指定 `sort_by` 时按实例 ID 倒序。排序在筛选后、分页前完成，同值按 ID 倒序，空值或空关联始终置后；文本按数据库文本顺序，地址依次比较 host 和数值 port，关联应用/主机分别取最小应用名/主机名，状态依次比较 enabled 和 last_probe_status。无效排序键或方向由请求校验拒绝，不接受任意字段。
+
+实例app_ids/host_ids和应用database_instance_ids省略保持、[]清空，null/重复/非正/不存在ID拒绝（最多1000）。实例侧提交关系还需cmdb:read；应用侧修改需cmdb:write+database:write，无权只读回显并省略字段；保留现有host_ids全量替换语义。仅改关系，不改对象本身。
+
+前端已有实例编辑入口及旧 `/database/instances/:id/edit` 路由接受 `database:write` 或 `database:grant` 任一；新建仍需 `database:write`。编辑弹窗使用单个“保存”，按实际改动调用现有实例与角色接口；实例内容保存仍检查 `database:write`，角色读取、候选与保存仍检查 `database:grant`。两个请求不组成原子操作，实例成功而授权失败时保留部分成功状态，重试只提交授权。
+
+角色有变化时，前端在提交前重读当前集合；已等于本次选择则不重复写入，与加载基线及本次选择均不同时要求重新加载确认。该检查不包含服务端版本条件，GET 与 PUT 之间的并发更新仍可能互相覆盖。
+
+创建 POST 已发出但未收到 HTTP 响应时（如网络中断或请求超时），客户端禁止在当前弹窗再次创建，刷新台账并提示人工按名称核对；若已有记录，从其编辑入口继续维护授权。明确返回的 HTTP 或业务错误允许修正后重试；无响应时不自动重发 POST 或恢复创建 ID，现有接口不提供幂等创建保证。
+
+凭据复用username_password；非Redis必须有login_user，Redis区分password_only和acl。删除被实例/活动恢复任务引用的凭据拒绝；删除应用/主机/角色只清关系，不删另一端实例、历史及审计。实例登记信息、说明和业务线变化不递增连接版本；engine/host/port/credential_id/connection_options变化递增config_revision。
+
+### 14.3 严格请求与响应
+
+所有请求extra=forbid，ID严格正整数，bool不冒充整数。地址只允许主机名/IP，禁止URI、认证材料、路径和空白；用户不能透传任意驱动参数或覆盖平台约束。
+
+| DTO | 字段与约束 |
+| --- | --- |
+| InstanceWrite | name1～128、engine五引擎枚举、environment=demo/stage/prod（默认demo）、description≤255、enabled严格bool、host≤255、port1～65535、credential_id可空（仅停用的待配置实例）；business_line=mitrade/tradingkey或null、cluster_name/version≤128、cluster_role≤64；connection_options；concurrency_limit可空2～100；可选app_ids/host_ids。无system_name/ops_owner/dev_owner |
+| connection_options | tls=false、tls_verify=true；SQL可default_database，PG另default_schema；Mongo auth_database默认admin及default_database，固定directConnection不接受发现选项；Redis database0～15默认0、auth_mode=acl/password_only默认acl；不适用的选项拒绝 |
+| InstanceItem/Detail | Item含id/name/description/engine/business_line/cluster_name/cluster_role/version/host/port/enabled/needs_configuration/created_at/updated_at、apps[{id,name}]、hosts[{id,hostname,ip}]、last_probe_*；`needs_configuration` 表示未绑定凭据。Detail追加environment/可空credential_id、credential安全摘要、connection_options/config_revision/concurrency_limit、app_ids/host_ids。详情仅在具备cmdb:read时额外返回apps[].language/deploy_type与hosts[].environment，无权时省略这些键；列表不增加这些CMDB字段 |
+| SqlTaskRequest | kind=sql、instance_id、context:{database?,schema?}、完整sql；schema仅PG适用 |
+| ProbeTaskRequest | kind=probe、instance_id，不接受任意context/命令；仅固定SELECT 1或ping验证连接与认证，不设置或校验只读 |
+| MetadataTaskRequest | kind=metadata、instance_id、context:{database?,schema?,table?,collection?}、operation=databases/schemas/tables/columns/collections/fields，组合按引擎校验 |
+| MongoReadTaskRequest | kind=mongo_read、instance_id、context:{database,collection}、operation对象以type判别find/count_documents/distinct |
+| Mongo operation | find:{type,filter={},projection?,sort:[{field,direction:1或-1}],limit=1000}；count_documents:{type,filter={}}；distinct:{type,field,filter={},limit=1000}；limit1～10000，sort最多16项，投影最多100个包含/排除字段，筛选另受语义深度/字节白名单限制 |
+| RedisReadTaskRequest | kind=redis_read、instance_id、context:{database:0～15}、operation以type判别；scan:{pattern=*,cursor?,count=100}；type/ttl/length:{key}；string_preview:{key,offset=0,length=4096}；hash/set分页用cursor、list/zset用offset；count1～1000，预览length1～65536 |
+| TaskSubmission | task_id、status=queued/rejected、executed_statement或null、operation_summary；拒绝额外reason，服务层http_status/error_code不作为普通成功data字段 |
+| TaskView | task_id/kind/status/instance_id/instance_name/engine/context、submitted_text/executed_statement/operation_summary、created_at/started_at/finished_at/expires_at、stop_reason/error_code/error_message/stop_confirmation、result_summary/policy_snapshot及安全target_snapshot/credential_snapshot |
+| ResultPage | columns[{ordinal,name,type}]、二维rows、returned_rows/returned_bytes/truncated/truncate_reason/expires_at/saved_total/page/page_size；returned_*为整份保存结果，saved_total不是目标表总数 |
+| Audit | 列表按task_id汇总首次身份/提交时间与最新状态/终态摘要；详情另含上限内原文/实际操作、安全快照、submitted_bytes/submitted_sha256和events[{id,event_type,created_at,validation,stop_confirmation,error_code,error_message,result_summary}]，不查结果块 |
+
+新probe的operation_summary为“连接状态检测”，成功更新last_probe_message为“连接检测成功”，适配器probe的summary.message为“连接和认证成功”。这些摘要只描述连接/认证，不声明账号只读；既有历史记录和旧检测摘要不回填或清洗。SQL、metadata和原生数据查询的只读策略保持。
+
+特殊值使用 `{"$type":"int|decimal|datetime|date|time|bytes|float","value":"..."}`；超JS安全整数标int、bytes为base64、非有限float为NaN/Infinity/-Infinity；其余JSON类型保留原值，前端纯文本展示。重名列按ordinal保序，不以列名对象覆盖。
+
+MySQL/PG/ClickHouse结构入口当前提供库/Schema/表/列；Mongo提供库/集合和采样字段，标记推断；不承诺索引、约束、集合校验规则或完整拓扑清单。元数据只取账号可见对象；Redis DB编号不构成平台库级授权边界。
+
+### 14.4 只读输入与拒绝留痕
+
+SQL上限65536 UTF-8字节。按方言解析全部顶层语句，全部通过只读AST/函数白名单后才执行最后完整SELECT；字符串/注释/跨行不错误切分。混合写/SET/DDL、语法破损、未知节点/函数、写CTE/INTO/锁定/文件输出/执行注释/外部源和覆盖资源设置均整段拒绝，不降级执行原文或前一条。
+
+Mongo不提供任意aggregate/runCommand/JavaScript；受控find/count和内部group+limit实现distinct，不先取得完整distinct数组。有效筛选最多16KiB、深度10、数组1000项，操作符采用白名单；写入和代码能力拒绝。Redis固定GETRANGE/SCAN/HSCAN/LRANGE/SSCAN/ZRANGE等路径，RESP2在bulk/array分配前限制字节/项目/深度；禁止任意命令、脚本、KEYS/CONFIG和全量大值再裁剪。游标10分钟HMAC绑定上下文，不授予权限。
+
+认证/对象权限及严格外壳通过后，SQL和原生安全语义拒绝持久化rejected任务及独立审计，且无目标调用；超长SQL只留长度/hash和正文未保存原因。缺少字段、错误类型、未知kind等malformed envelope为普通422参数错误，不能据此假定生成了任务。未知/未授权对象的错误不得泄露目标信息。
+
+### 14.5 状态、响应与错误
+
+状态为queued/running/stopping/recovering/succeeded/failed/cancelled/timed_out/rejected/queue_expired。queued取消、过期或启动前复查失败均未执行；running→rejected仅允许尚未发出任何目标操作。真正访问前复查用户、按kind权限、实例启用及config_revision/credential_id/updated_at/login_user；变化记instance_changed，须人工重提。
+
+取消或执行时限到达进入stopping，可信停止后才cancelled/timed_out；执行器失联、租约过期或停止/清理未确认进入recovering，不重放、不无证据释放目标占用。查询结束与本地句柄关闭是两个事实，close不能充当目标终止证明。成功要求有界结果ready且可信结束。
+
+| 情况 | HTTP / code / data |
+| --- | --- |
+| 受理 | 202 / 0 / task_id、queued、实际操作摘要 |
+| 已授权语义拒绝或队列满 | 422 / 42201 / task_id、rejected、reason；先提交拒绝事实，不能因响应错误回滚 |
+| malformed请求外壳 | 422 / 40001 / null，沿用参数校验响应 |
+| 异步失败详情 | 200 / 0，查看status/error_code/安全原因 |
+| 结果未ready | 409 / 40901，无半成品 |
+| 结果已过期 | 410 / 40901 / reason=result_expired；物理删除后仍按保留摘要识别 |
+| 功能权限/对象范围/不存在 | 40301/40302/40401沿用既有协议；停用实例为422业务拒绝 |
+
+执行总时限从认领开始处理覆盖连接、操作和读取，排队另计；新开始任务快照策略，运行任务不改变既定截止时间。短请求轮询不受单次查询60秒影响，浏览器断开或离页不等于取消。
+
+### 14.6 系统配置合同
+
+数据库配置存储于system_config，经/system/configs和system:config管理；/client-policy只公开execution_timeout_seconds/max_result_rows/max_result_bytes/result_ttl_minutes四键。只接受整数，拒绝bool/浮点；先合并校验整批再同事务写入。
+
+| 键（均以database.为前缀） | 默认 | 范围 |
+| --- | ---: | --- |
+| execution_timeout_seconds | 60 | 1～600秒 |
+| max_result_rows | 1000 | 1～10000条 |
+| max_result_bytes | 5242880 | 65536～16777216字节 |
+| result_ttl_minutes | 30 | 1～1440分钟 |
+| history_retention_days | 30 | 1～365天 |
+| audit_retention_days | 90 | 1～1095天 |
+| global_concurrency | 20 | 2～200 |
+| instance_concurrency_default | 5 | 2～50 |
+| user_concurrency | 2 | 1～20 |
+| queue_max_tasks | 200 | 1～10000 |
+| user_queue_max_tasks | 10 | 1～1000 |
+| queue_timeout_seconds | 120 | 1～3600秒 |
+| metadata_reserved_concurrency | 2 | 1～199 |
+| result_storage_budget_bytes | 1073741824 | 33554432～10737418240字节 |
+
+全局并发必须大于元数据保留值，用户排队不超过平台排队；密文预算至少容纳 `2*max_result_bytes+65536`。实例并发覆盖值2～100。首四业务值在开始时快照，TTL在完成时计算；历史/审计清理读取当前周期，二者不要求大小关系，不改变通用审计365天默认值。
+
+输出计量为加密前canonical UTF-8 `{columns,rows}`（ensure_ascii=False、紧凑分隔、allow_nan=False），摘要不置于包内，避免计量自指。加密manifest/rows-only chunks完整后原子ready，预留上界与1GiB载荷预算不等于MySQL物理磁盘上限。结果/历史/审计独立清理，活动恢复证据不因普通保留期删除；详细生命周期与物理连接计量见[架构 §14](./02-技术架构设计.md#14-数据库管理)。

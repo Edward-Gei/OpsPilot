@@ -37,6 +37,7 @@ const moduleNames: Record<string, string> = {
   ticket: '工单中心',
   audit: '安全审计',
   notify: '通知中心',
+  database: '数据库管理',
 }
 const permGroups = computed(() => {
   const groups: { module: string; title: string; items: sysApi.PermissionItem[] }[] = []
@@ -215,7 +216,9 @@ onMounted(loadAll)
       v-model:open="editVisible"
       :title="editing ? `编辑角色：${editing.name}` : '新建角色'"
       :confirm-loading="editLoading"
-      width="640px"
+      width="min(960px, calc(100vw - 32px))"
+      centered
+      :body-style="{ maxHeight: 'calc(100dvh - 160px)', overflowY: 'auto', overflowX: 'hidden' }"
       @ok="onSubmitEdit"
     >
       <a-form layout="vertical">
@@ -367,27 +370,42 @@ onMounted(loadAll)
 }
 .grow {
   flex: 1;
+  min-width: 0;
 }
 .builtin-alert {
   margin-bottom: 10px;
 }
 .perm-groups {
   display: block;
-  max-height: 300px;
+  width: 100%;
+  max-height: clamp(160px, calc(100dvh - 410px), 520px);
+  overflow-x: hidden;
   overflow-y: auto;
+  white-space: normal;
 }
 .perm-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 16px;
   margin-bottom: 12px;
+  min-width: 0;
+  white-space: normal;
 }
 .pg-title {
+  flex: 0 0 100%;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-2);
-  margin-bottom: 6px;
 }
 .perm-group :deep(.ant-checkbox-wrapper) {
-  margin-right: 16px;
-  margin-bottom: 4px;
+  max-width: 100%;
+  margin: 0;
+  white-space: normal;
+}
+.perm-group :deep(.ant-checkbox-wrapper > span:last-child) {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .pg-title::before {
   content: '';
@@ -435,5 +453,8 @@ onMounted(loadAll)
   .role-page .op-hero { flex-wrap: wrap; padding: 18px; }
   .role-page .op-hero-extra { flex-wrap: wrap; }
   .toolbar { flex-wrap: wrap; }
+}
+@media (max-width: 600px) {
+  .form-row { flex-direction: column; gap: 0; }
 }
 </style>

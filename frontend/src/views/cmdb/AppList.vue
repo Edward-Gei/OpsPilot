@@ -15,6 +15,8 @@ import {
 import * as cmdbApi from '@/api/cmdb'
 import * as configApi from '@/api/applicationConfig'
 import * as jobApi from '@/api/job'
+import * as databaseApi from '@/api/database'
+import { engineNames as databaseEngineNames } from '@/views/database/runtime'
 import { makeResizable, onResizeColumn } from '@/utils/table'
 import { useUserStore } from '@/stores/user'
 
@@ -25,6 +27,8 @@ const canReadConfigs = userStore.hasPerm('config:read')
 const canReadTemplates = userStore.hasPerm('template:read')
 const canManageConfigs = canWrite && canReadConfigs && userStore.hasPerm('config:write')
 const canManageTemplates = canWrite && canReadTemplates && userStore.hasPerm('template:write')
+const canManageDatabases = canWrite && userStore.hasPerm('database:write')
+const canReadDatabases = ['database:read','database:write','database:delete','database:grant'].some(perm => userStore.hasPerm(perm))
 
 // 部署方式彩色标签（与 M1 列表标签风格一致）
 const deployText: Record<string, { text: string; color: string }> = {
@@ -294,6 +298,8 @@ const editForm = reactive<{
 const targetKeys = ref<string[]>([])
 const configFileIds = ref<number[]>([])
 const ticketTemplateIds = ref<number[]>([])
+const databaseInstanceIds = ref<number[]>([])
+const databaseOptions = ref<{label:string;value:number}[]>([])
 const configOptions = ref<{ label: string; value: number }[]>([])
 const templateOptions = ref<{ label: string; value: number }[]>([])
 let editRequestId = 0
@@ -327,6 +333,18 @@ async function loadTemplateOptions() {
   return options
 }
 
+/** 数据库关系候选使用管理范围；无维护权限时只回显现有关联，不请求候选。 */
+async function loadDatabaseOptions() {
+  if (!canManageDatabases) return []
+  const options: {label:string;value:number}[] = []
+  for (let page=1;;page++) {
+    const data=await databaseApi.listInstances({scope:'management',page,page_size:100})
+    options.push(...data.items.map(item=>({label:item.name,value:item.id})))
+    if (!data.items.length || options.length>=data.total) break
+  }
+  return options
+}
+
 function openCreate() {
   editRequestId += 1
   editLoading.value = false
@@ -339,6 +357,8 @@ function openCreate() {
   targetKeys.value = []
   configFileIds.value = []
   ticketTemplateIds.value = []
+  databaseInstanceIds.value = []
+  databaseOptions.value = []
   formStep.value = 1
   editVisible.value = true
   loadAllHosts()
@@ -370,9 +390,10 @@ async function openEdit(row: cmdbApi.AppItem) {
   targetKeys.value = []
   configFileIds.value = []
   ticketTemplateIds.value = []
+  databaseInstanceIds.value = []
   try {
-    const [appDetail, , configs, templates] = await Promise.all([
-      cmdbApi.getApp(row.id), loadAllHosts(), loadConfigOptions(), loadTemplateOptions(),
+    const [appDetail, , configs, templates, databases] = await Promise.all([
+      cmdbApi.getApp(row.id), loadAllHosts(), loadConfigOptions(), loadTemplateOptions(), loadDatabaseOptions(),
     ])
     if (requestId !== editRequestId || !editVisible.value) return
     targetKeys.value = appDetail.hosts.map((host) => String(host.id))
@@ -380,6 +401,8 @@ async function openEdit(row: cmdbApi.AppItem) {
     ticketTemplateIds.value = appDetail.ticket_templates.map((template) => template.id)
     configOptions.value = canManageConfigs ? configs : appDetail.config_files.map((file) => ({ label: file.name, value: file.id }))
     templateOptions.value = canManageTemplates ? templates : appDetail.ticket_templates.map((template) => ({ label: template.name, value: template.id }))
+    databaseInstanceIds.value = (appDetail.database_instances || []).map(item=>item.id)
+    databaseOptions.value = canManageDatabases ? databases : (appDetail.database_instances || []).map(item=>({label:item.name,value:item.id}))
   } catch {
     if (requestId === editRequestId) editVisible.value = false
   } finally {
@@ -426,6 +449,7 @@ async function onSubmitEdit() {
       host_ids: targetKeys.value.map(Number),
       ...(editing.value && canManageConfigs ? { config_file_ids: configFileIds.value } : {}),
       ...(editing.value && canManageTemplates ? { ticket_template_ids: ticketTemplateIds.value } : {}),
+      ...(editing.value && canManageDatabases ? { database_instance_ids: databaseInstanceIds.value } : {}),
     }
     if (editing.value) {
       await cmdbApi.updateApp(editing.value.id, payload)
@@ -502,7 +526,7 @@ onMounted(() => {
   // 详情链接按 ID 查询，不依赖分页列表中是否包含目标应用。
   const qid = typeof route.query.id === 'string' ? Number(route.query.id) : NaN
   if (Number.isSafeInteger(qid) && qid > 0) {
-    if (['host', 'ticket', 'config'].includes(String(route.query.related))) focusedAppId.value = qid
+    if (['host', 'ticket', 'config', 'database'].includes(String(route.query.related))) focusedAppId.value = qid
     void openDetail({ id: qid }).then((app) => {
       if (focusedAppId.value === qid) query.keyword = app.name
     }).catch(() => {
@@ -603,7 +627,7 @@ onMounted(() => {
           @confirm="onBatchDelete"
         >
           <a-button danger :disabled="!selectedKeys.length" :loading="batchLoading">
-            <DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
+            <template #icon><DeleteOutlined /></template>批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
           </a-button>
         </a-popconfirm>
         <a-button @click="onExport"><DownloadOutlined />导出</a-button>
@@ -772,6 +796,11 @@ onMounted(() => {
                 show-search allow-clear option-filter-prop="label" :options="templateOptions"
                 :loading="editLoading" :disabled="!canManageTemplates" placeholder="搜索并选择工单模板" />
             </a-form-item>
+            <a-form-item label="关联数据库实例">
+              <a-select v-model:value="databaseInstanceIds" data-testid="app-database-links" mode="multiple"
+                show-search allow-clear option-filter-prop="label" :options="databaseOptions"
+                :loading="editLoading" :disabled="!canManageDatabases" placeholder="搜索并选择数据库实例" />
+            </a-form-item>
           </template>
         </template>
       </a-form>
@@ -884,6 +913,32 @@ onMounted(() => {
             </template>
           </a-table>
 
+          <div class="detail-hosts-title">关联数据库实例（{{ detail.database_instances?.length || 0 }}）</div>
+          <a-empty v-if="!detail.database_instances?.length" description="暂无关联数据库实例" />
+          <a-table
+            v-else
+            bordered
+            :columns="[
+              { title: '实例名称', dataIndex: 'name', key: 'name' },
+              { title: '引擎', key: 'engine', width: 110 },
+              { title: '状态', key: 'status', width: 80 },
+            ]"
+            :data-source="detail.database_instances"
+            row-key="id"
+            size="small"
+            :pagination="false"
+          >
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'name'">
+                <a v-if="canReadDatabases" :href="`/database/instances?instance_id=${record.id}&related=app`">{{ record.name }}</a>
+                <span v-else>{{ record.name }}</span>
+              </template>
+              <template v-else-if="column.key === 'engine'">{{ databaseEngineNames[record.engine as databaseApi.DatabaseEngine] }}</template>
+              <a-tag v-else-if="column.key === 'status'" :color="record.enabled ? 'success' : 'default'">
+                {{ record.enabled ? '启用' : '停用' }}
+              </a-tag>
+            </template>
+          </a-table>
           <div class="detail-hosts-title">关联配置文件（{{ detail.config_files.length }}）</div>
           <a-empty v-if="!detail.config_files.length" description="暂无关联配置文件" />
           <a-table

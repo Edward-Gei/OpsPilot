@@ -228,7 +228,7 @@ onMounted(refreshAll)
       <a-button type="primary" @click="onSearch"><SearchOutlined />查询</a-button>
       <a-button @click="onReset">重置</a-button>
       <a-dropdown v-if="canExport" class="export-btn">
-        <a-button :loading="exporting"><ExportOutlined />导出<DownOutlined /></a-button>
+        <a-button :loading="exporting"><template #icon><ExportOutlined /></template>导出<DownOutlined v-if="!exporting" /></a-button>
         <template #overlay>
           <a-menu @click="onExportMenu">
             <a-menu-item key="csv">导出 CSV</a-menu-item>

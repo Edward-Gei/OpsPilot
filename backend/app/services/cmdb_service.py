@@ -12,6 +12,8 @@ from app.core.response import Errors
 from app.models.cmdb import AppHost, Application, Host
 from app.models.application_config import ConfigFile, ConfigFileApplication, ConfigPlatformInstance
 from app.models.job import ProcessTemplate, TicketTemplate, TicketTemplateApplication
+from app.models.database_management import DatabaseInstance, DatabaseInstanceApplication, DatabaseInstanceHost
+from app.services.database_quota_service import bucket as database_bucket
 
 
 # ---------- 主机 ----------
@@ -165,6 +167,7 @@ async def delete_host(session: AsyncSession, host_id: int) -> Host:
 
     V2 范式下工单的 job_host_id 引用 job_host 表，与 CMDB host 属不同 ID 空间
     且两者无外键关联，故不再做工单侧删除保护。"""
+    await database_bucket(session, "global", "all")
     host = await get_host_or_404(session, host_id)
     app_names = (
         await session.execute(
@@ -175,6 +178,7 @@ async def delete_host(session: AsyncSession, host_id: int) -> Host:
     ).scalars().all()
     if app_names:
         raise Errors.rejected(f"主机被应用引用，无法删除：{'、'.join(app_names[:5])}")
+    await session.execute(delete(DatabaseInstanceHost).where(DatabaseInstanceHost.host_id == host_id))
     await session.delete(host)
     await session.flush()
     return host
@@ -439,7 +443,8 @@ async def create_app(
 
 async def update_app(
     session: AsyncSession, app_id: int, *, host_ids: list[int],
-    config_file_ids: list[int] | None = None, ticket_template_ids: list[int] | None = None, **fields
+    config_file_ids: list[int] | None = None, ticket_template_ids: list[int] | None = None,
+    database_instance_ids: list[int] | None = None, **fields
 ) -> Application:
     """校验全部目标后，按请求字段替换应用的跨模块关联。"""
     app = await get_app_or_404(session, app_id)
@@ -452,6 +457,9 @@ async def update_app(
             found = set((await session.execute(select(model.id).where(model.id.in_(ids)))).scalars())
             if set(ids) - found:
                 raise Errors.param(f"{label}不存在: {sorted(set(ids) - found)}")
+    if database_instance_ids is not None:
+        from app.services.database_instance_service import replace_application_instances
+        await replace_application_instances(session, app_id, database_instance_ids)
     for key, value in fields.items():
         setattr(app, key, value)
     await _replace_app_hosts(session, app_id, host_ids)
@@ -495,7 +503,9 @@ async def get_app_ticket_templates(session: AsyncSession, app_id: int) -> list[d
 
 async def delete_app(session: AsyncSession, app_id: int) -> Application:
     """删除应用；关联关系级联清理。V2 模型工单不引用应用，无需工单侧删除保护。"""
+    await database_bucket(session, "global", "all")
     app = await get_app_or_404(session, app_id)
+    await session.execute(delete(DatabaseInstanceApplication).where(DatabaseInstanceApplication.app_id == app_id))
     await session.execute(delete(TicketTemplateApplication).where(TicketTemplateApplication.app_id == app_id))
     for link in (
         await session.execute(select(AppHost).where(AppHost.app_id == app_id))
@@ -508,6 +518,20 @@ async def delete_app(session: AsyncSession, app_id: int) -> Application:
     await session.delete(app)
     await session.flush()
     return app
+
+
+async def get_related_database_instances(session: AsyncSession, *, app_id: int | None = None,
+                                         host_id: int | None = None) -> list[dict]:
+    """CMDB 仅展示业务关系定位信息，不泄露地址或凭据，也不授予查询权限。"""
+    query = select(DatabaseInstance)
+    if app_id is not None:
+        query = query.join(DatabaseInstanceApplication, DatabaseInstanceApplication.instance_id == DatabaseInstance.id).where(DatabaseInstanceApplication.app_id == app_id)
+    elif host_id is not None:
+        query = query.join(DatabaseInstanceHost, DatabaseInstanceHost.instance_id == DatabaseInstance.id).where(DatabaseInstanceHost.host_id == host_id)
+    else:
+        return []
+    return [{"id": row.id, "name": row.name, "engine": row.engine, "enabled": row.enabled}
+            for row in (await session.execute(query.order_by(DatabaseInstance.id))).scalars()]
 
 
 async def get_app_hosts(session: AsyncSession, app_id: int) -> list[Host]:

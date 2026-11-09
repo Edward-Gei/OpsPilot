@@ -96,6 +96,8 @@ def test_metadata_contains_all_tables():
         "dns_zone_bind_task", "dns_zone_bind_task_item",
         "config_platform_instance", "config_file", "config_file_application",
         "config_draft", "config_version", "config_remote_snapshot", "config_task", "config_task_item",
+        "database_instance", "database_instance_application", "database_instance_host", "database_role_instance",
+        "database_task", "database_result", "database_result_chunk", "database_audit_event", "database_quota_bucket",
     }
     assert set(Base.metadata.tables.keys()) == expected
 

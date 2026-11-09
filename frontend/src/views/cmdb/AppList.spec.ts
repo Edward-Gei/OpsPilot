@@ -7,15 +7,18 @@ import AppList from './AppList.vue'
 import HostList from './HostList.vue'
 
 const api = vi.hoisted(() => ({ listApps: vi.fn(), getApp: vi.fn(), updateApp: vi.fn(), listHosts: vi.fn(), getHost: vi.fn(), listAppSystems: vi.fn(), exportApps: vi.fn(),
-  routeQuery: {} as Record<string, string>, configRead: true, configWrite: true, templateRead: true, templateWrite: true }))
+  routeQuery: {} as Record<string, string>, configRead: true, configWrite: true, templateRead: true, templateWrite: true, databaseWrite: true, databaseRead: true }))
 const configApi = vi.hoisted(() => ({ listConfigFiles: vi.fn() }))
 const jobApi = vi.hoisted(() => ({ listTemplates: vi.fn() }))
+const databaseApi = vi.hoisted(() => ({ listInstances: vi.fn() }))
 vi.mock('@/api/cmdb', () => api)
 vi.mock('@/api/applicationConfig', () => configApi)
 vi.mock('@/api/job', () => jobApi)
+vi.mock('@/api/database', () => databaseApi)
 vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: (perm: string) => ({
   'config:read': api.configRead, 'config:write': api.configWrite,
   'template:read': api.templateRead, 'template:write': api.templateWrite,
+  'database:read':api.databaseRead,'database:write':api.databaseWrite,'database:delete':api.databaseRead,'database:grant':api.databaseRead,'database:query':api.databaseRead,
 } as Record<string, boolean>)[perm] ?? true }) }))
 vi.mock('vue-router', () => ({
   useRoute: () => ({ query: api.routeQuery, path: '/cmdb/apps' }),
@@ -43,6 +46,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   api.routeQuery = {}
   api.configRead = true
+  api.databaseWrite = true
+  api.databaseRead = true
+  databaseApi.listInstances.mockResolvedValue({items:[{id:31,name:'共享MySQL实例',engine:'mysql',enabled:true}],total:1})
   api.configWrite = true
   api.templateRead = true
   api.templateWrite = true
@@ -65,6 +71,22 @@ beforeEach(() => {
   }], ticket_templates: [{ id: 13, name: '发布入口', status: 'enabled', process_template_id: 23, process_template_name: '发布流程' }] })
 })
 afterEach(() => { document.body.innerHTML = '' })
+
+it('应用数据库关联只读回显，无数据库写权限保存省略关系且保留部署主机',async()=>{
+  api.databaseWrite=false
+  api.getApp.mockResolvedValue({...app,hosts:[{id:21,hostname:'host',ip:'192.0.2.1'}],config_files:[],ticket_templates:[],database_instances:[{id:31,name:'共享MySQL实例',engine:'mysql',enabled:true}]})
+  const wrapper=mount(AppList,{attachTo:document.body});await flushPromises()
+  ;[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent?.includes('编辑'))!.click();await flushPromises()
+  ;[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent?.includes('下一步'))!.click();await flushPromises()
+  const links=document.querySelector('[data-testid="app-database-links"]')
+  expect(links?.textContent).toContain('共享MySQL实例')
+  expect(links?.classList.contains('ant-select-disabled')).toBe(true)
+  document.querySelector<HTMLButtonElement>('.ant-modal-footer .ant-btn-primary')!.click();await flushPromises()
+  expect(api.updateApp).toHaveBeenCalledWith(7,expect.objectContaining({host_ids:[21]}))
+  expect(api.updateApp.mock.calls[0]![1]).not.toHaveProperty('database_instance_ids')
+  expect(databaseApi.listInstances).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
 
 it('应用编辑回显并保存可新增的配置文件和工单模板关联', async () => {
   configApi.listConfigFiles.mockImplementation(async ({ page }: { page: number }) => page === 1
@@ -206,7 +228,7 @@ it('从主机关联应用跳转时打开详情并只列出该应用', async () =
   wrapper.unmount()
 })
 
-it.each(['ticket', 'config'])('从 %s 关联应用跳转时搜索框回填并只列出目标应用', async (related) => {
+it.each(['ticket', 'config', 'database'])('从 %s 关联应用跳转时搜索框回填并只列出目标应用', async (related) => {
   api.routeQuery = { id: '7', related }
   api.listApps.mockImplementation(async (params: { app_id?: number }) =>
     params.app_id === 7 ? { items: [app], total: 1 } : { items: [app, { ...app, id: 8, name: '订单应用扩展' }], total: 2 })
@@ -216,6 +238,30 @@ it.each(['ticket', 'config'])('从 %s 关联应用跳转时搜索框回填并只
   expect(wrapper.find<HTMLInputElement>('input[placeholder="搜索应用信息"]').element.value).toBe('订单应用')
   expect(api.listApps).toHaveBeenCalledWith(expect.objectContaining({ app_id: 7 }))
   expect(wrapper.findAll('.ant-table-tbody tr[data-row-key]')).toHaveLength(1)
+  wrapper.unmount()
+})
+
+it.each([true, false])('关联数据库按三列展示引擎名称和状态，读取权限为%s时链接正确', async (allowed) => {
+  api.databaseRead = allowed
+  api.databaseWrite = allowed
+  api.routeQuery = { id: '7' }
+  api.getApp.mockResolvedValue({ ...app, hosts: [], config_files: [], ticket_templates: [], database_instances: [
+    { id: 31, name: '共享MySQL实例', engine: 'mysql', enabled: true },
+    { id: 32, name: '共享PG实例', engine: 'postgresql', enabled: false },
+    { id: 33, name: '共享Mongo实例', engine: 'mongodb', enabled: true },
+    { id: 34, name: '共享分析实例', engine: 'clickhouse', enabled: true },
+    { id: 35, name: '共享缓存实例', engine: 'redis', enabled: true },
+  ] })
+  const wrapper = mount(AppList, { attachTo: document.body })
+  await flushPromises()
+  const heading = [...document.querySelectorAll('.detail-hosts-title')].find(item => item.textContent?.startsWith('关联数据库实例'))!
+  const table = heading.nextElementSibling?.querySelector('table')
+  expect(table).toBeTruthy()
+  expect([...table!.querySelectorAll('thead th')].map(item => item.textContent)).toEqual(['实例名称', '引擎', '状态'])
+  expect([...table!.querySelectorAll('tbody tr')].map(row => row.children[1]?.textContent)).toEqual(['MySQL', 'PostgreSQL', 'MongoDB', 'ClickHouse', 'Redis'])
+  expect([...table!.querySelectorAll('tbody tr')].map(row => row.children[2]?.textContent)).toEqual(['启用', '停用', '启用', '启用', '启用'])
+  expect(table!.querySelector('a[href="/database/instances?instance_id=31&related=app"]')?.textContent || null).toBe(allowed ? '共享MySQL实例' : null)
+  expect(table!.textContent).toContain('共享MySQL实例')
   wrapper.unmount()
 })
 

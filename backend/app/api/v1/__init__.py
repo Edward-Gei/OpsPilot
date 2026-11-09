@@ -20,6 +20,7 @@ from app.api.v1.tickets import router as tickets_router
 from app.api.v1.tokens import router as tokens_router
 from app.api.v1.users import router as users_router
 from app.api.v1.application_configs import router as application_configs_router
+from app.api.v1.database_management import router as database_management_router
 from app.core.response import ok
 
 api_router = APIRouter()
@@ -30,6 +31,7 @@ api_router.include_router(roles_router)
 api_router.include_router(cmdb_router)
 api_router.include_router(domains_router)
 api_router.include_router(application_configs_router)
+api_router.include_router(database_management_router)
 api_router.include_router(credentials_router)
 api_router.include_router(job_hosts_router)
 api_router.include_router(templates_router)

@@ -15,6 +15,8 @@ import {
   UploadOutlined,
 } from '@ant-design/icons-vue'
 import * as cmdbApi from '@/api/cmdb'
+import type { DatabaseEngine } from '@/api/database'
+import { engineNames as databaseEngineNames } from '@/views/database/runtime'
 import { makeResizable, onResizeColumn } from '@/utils/table'
 import { useUserStore } from '@/stores/user'
 
@@ -22,6 +24,7 @@ const userStore = useUserStore()
 const canWrite = userStore.hasPerm('cmdb:write')
 const canDelete = userStore.hasPerm('cmdb:delete')
 const canImport = userStore.hasPerm('cmdb:import')
+const canReadDatabases = ['database:read','database:write','database:delete','database:grant'].some(perm=>userStore.hasPerm(perm))
 
 // 环境/状态彩色标签（与 M1 列表标签风格一致；环境按产品约定保留英文原值）
 const envText: Record<string, { text: string; color: string }> = {
@@ -394,7 +397,7 @@ onMounted(() => {
   // 应用关联主机链接按 ID 直达详情，不依赖目标是否出现在当前分页。
   const qid = typeof route.query.id === 'string' ? Number(route.query.id) : NaN
   if (Number.isSafeInteger(qid) && qid > 0) {
-    if (route.query.related === 'app') focusedHostId.value = qid
+    if (['app', 'database'].includes(String(route.query.related))) focusedHostId.value = qid
     void openDetail({ id: qid }).then(() => {
       if (focusedHostId.value === qid) query.keyword = detail.value?.hostname || ''
     }).catch(() => {
@@ -489,7 +492,7 @@ onMounted(() => {
           @confirm="onBatchDelete"
         >
           <a-button danger :disabled="!selectedKeys.length" :loading="batchLoading">
-            <DeleteOutlined />批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
+            <template #icon><DeleteOutlined /></template>批量删除{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
           </a-button>
         </a-popconfirm>
         <a-button @click="onExport"><DownloadOutlined />导出</a-button>
@@ -710,6 +713,32 @@ onMounted(() => {
             </a-descriptions-item>
           </a-descriptions>
 
+          <div class="detail-apps-title">承载数据库实例（{{ detail.database_instances?.length || 0 }}）</div>
+          <a-empty v-if="!detail.database_instances?.length" description="暂无承载数据库实例" />
+          <a-table
+            v-else
+            bordered
+            :columns="[
+              { title: '实例名称', dataIndex: 'name', key: 'name' },
+              { title: '引擎', key: 'engine', width: 110 },
+              { title: '状态', key: 'status', width: 80 },
+            ]"
+            :data-source="detail.database_instances"
+            row-key="id"
+            size="small"
+            :pagination="false"
+          >
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'name'">
+                <a v-if="canReadDatabases" :href="`/database/instances?instance_id=${record.id}&related=host`">{{ record.name }}</a>
+                <span v-else>{{ record.name }}</span>
+              </template>
+              <template v-else-if="column.key === 'engine'">{{ databaseEngineNames[record.engine as DatabaseEngine] }}</template>
+              <a-tag v-else-if="column.key === 'status'" :color="record.enabled ? 'success' : 'default'">
+                {{ record.enabled ? '启用' : '停用' }}
+              </a-tag>
+            </template>
+          </a-table>
           <div class="detail-apps-title">关联应用（{{ detail.apps.length }}）</div>
           <a-empty v-if="!detail.apps.length" description="暂无关联应用" />
           <a-table

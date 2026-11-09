@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { message } from 'ant-design-vue'
 
 const state = vi.hoisted(() => ({
   access: '', refresh: '', sessionId: 'session-1', expired: false, clearModes: [] as (boolean | undefined)[],
@@ -38,6 +39,7 @@ function expiredRequest() {
 }
 
 beforeEach(async () => {
+  vi.mocked(message.error).mockClear()
   state.access = 'access-1'
   state.refresh = 'refresh-1'
   state.sessionId = 'session-1'
@@ -114,4 +116,44 @@ it('本窗口刷新失败且没有新令牌时只清本窗口，不广播登出�
   state.post.mockRejectedValue(new Error('Refresh 已失效'))
   await expect(expiredRequest()).rejects.toThrow()
   expect(state.clearModes).toEqual([false])
+})
+
+it.each([40301, 42901])('请求主动接管业务错误%s时不弹全局提示，业务码与任务ID仍透传', async code => {
+  await expect(state.onResponseError!({
+    response: { data: { code, message: '请求被拒绝', data: { task_id: 31 } } },
+    config: { url: '/database/tasks', headers: {}, silentBusinessError: true }
+  })).rejects.toMatchObject({ code, message: '请求被拒绝', data: { task_id: 31 } })
+  expect(message.error).not.toHaveBeenCalled()
+})
+
+it('业务错误静默只对当前请求生效，其他请求仍显示原有全局提示', async () => {
+  const failure = { response: { data: { code: 40301, message: '无权读取' } } }
+  await expect(state.onResponseError!({ ...failure,
+    config: { url: '/database/tasks/31', headers: {}, silentBusinessError: true }
+  })).rejects.toThrow('无权读取')
+  await expect(state.onResponseError!({ ...failure,
+    config: { url: '/database/tasks/32', headers: {} }
+  })).rejects.toThrow('无权读取')
+  expect(message.error).toHaveBeenCalledTimes(1)
+  expect(message.error).toHaveBeenCalledWith('无权读取')
+})
+
+it.each([40101, 40102])('静默业务错误不能跳过%s的会话清理与强制登录', async code => {
+  window.location.pathname = '/database/instances'
+  window.location.href = '/database/instances'
+  state.post.mockRejectedValue(new Error('刷新失效'))
+  await expect(state.onResponseError!({
+    response: { data: { code, message: '登录已失效' } },
+    config: { url: '/database/tasks/31', headers: {}, silentBusinessError: true }
+  })).rejects.toMatchObject({ code })
+  expect(state.clearModes).toEqual([false])
+  expect(window.location.href).toBe('/login')
+})
+
+it('仅静默业务错误时，传输错误继续遵循原有全局提示', async () => {
+  await expect(state.onResponseError!({
+    message: '网络中断', config: { url: '/database/tasks/31', headers: {}, silentBusinessError: true }
+  })).rejects.toMatchObject({ message: '网络中断' })
+  expect(message.error).toHaveBeenCalledTimes(1)
+  expect(message.error).toHaveBeenCalledWith('网络中断')
 })

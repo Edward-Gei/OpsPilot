@@ -54,10 +54,9 @@ async def update_configs(
     session: DbSession,
     actor: User = Depends(require_perm("system:config")),
 ) -> dict:
-    """批量更新配置键；仅允许预置键，逐键写库并审计。"""
-    for key, value in req.configs.items():
-        value = await _unmask(session, key, value)
-        await config_service.set_config(session, key, value, actor.id)
+    """先验证整批策略再保存；敏感字段仍保留脱敏回写保护。"""
+    configs = {key: await _unmask(session, key, value) for key, value in req.configs.items()}
+    await config_service.set_configs(session, configs, actor.id)
     audit.log(module="system", action="config.update", actor_id=actor.id,
               actor_name=actor.username, source_ip=get_client_ip(request),
               detail={"keys": sorted(req.configs.keys())})

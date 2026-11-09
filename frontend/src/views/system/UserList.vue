@@ -50,7 +50,8 @@ const columns = ref(makeResizable([
   { title: '创建时间', key: 'created', width: 165 },
   { title: '最近登录', key: 'last_login', width: 165 },
   ...(canWrite || canMfa
-    ? [{ title: '操作', key: 'action', width: canWrite && canMfa ? 380 : canWrite ? 276 : 110, fixed: 'right' as const }]
+    // 百分比窄列配合自动布局按按钮内容收缩，宽屏剩余空间分配给其他数值宽列。
+    ? [{ title: '操作', key: 'action', width: '1%', fixed: 'right' as const, className: 'user-action-cell' }]
     : []),
 ]))
 
@@ -331,7 +332,7 @@ onMounted(() => {
           @confirm="onBatchDisable"
         >
           <a-button danger :disabled="!selectedKeys.length" :loading="batchLoading" class="batch-btn">
-            <StopOutlined />批量禁用{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
+            <template #icon><StopOutlined /></template>批量禁用{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
           </a-button>
         </a-popconfirm>
         <a-button type="primary" @click="openCreate"><PlusOutlined />新建用户</a-button>
@@ -346,6 +347,7 @@ onMounted(() => {
       :row-selection="rowSelection"
       row-key="id"
       bordered
+      table-layout="auto"
       :scroll="{ x: 1350 }"
       @resize-column="onResizeColumn"
       :pagination="{
@@ -497,5 +499,8 @@ onMounted(() => {
 }
 .batch-btn {
   margin-left: auto;
+}
+:deep(.user-action-cell) {
+  white-space: nowrap;
 }
 </style>

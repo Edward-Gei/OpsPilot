@@ -17,7 +17,9 @@ from app.models.application_config import ConfigPlatformInstance
 from app.models.job import Credential
 from app.models.ticket import Ticket
 from app.models.job import TicketTemplate
+from app.models.database_management import DatabaseInstance, DatabaseTask
 from app.services.list_search import label_matches
+from app.services.database_quota_service import bucket as database_bucket
 
 SCRIPT_SECRET_TYPES = {
     CredentialAuthType.API_TOKEN.value,
@@ -161,7 +163,20 @@ async def update_credential(
 
 async def delete_credential(session: AsyncSession, credential_id: int) -> Credential:
     """删除凭据；被作业主机、Zone 或模板引用时拒绝（42201）。"""
-    cred = await get_credential_or_404(session, credential_id)
+    # 与台账绑定共享短锁，避免检查引用后被另一事务重新绑定。
+    await database_bucket(session, "global", "all")
+    cred = (await session.execute(select(Credential).where(Credential.id == credential_id)
+                                 .with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
+    if cred is None:
+        raise Errors.not_found("凭据不存在")
+    instance_ref = (await session.execute(select(DatabaseInstance.id).where(
+        DatabaseInstance.credential_id == credential_id).limit(1).with_for_update())).scalar_one_or_none()
+    task_ref = (await session.execute(select(DatabaseTask.id).where(
+        DatabaseTask.credential_id == credential_id,
+        DatabaseTask.status.in_(("queued", "running", "stopping", "recovering")))
+        .limit(1).with_for_update())).scalar_one_or_none()
+    if instance_ref is not None or task_ref is not None:
+        raise Errors.rejected("凭据仍被数据库实例或活动/恢复任务引用，无法删除")
     jh_count = (
         await session.execute(
             select(func.count()).select_from(JobHost)

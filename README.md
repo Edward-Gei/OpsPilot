@@ -1,6 +1,6 @@
 # OpsPilot
 
-OpsPilot 是面向企业内网的自动化运维平台：CMDB 资产台账、作业主机、工单模板、可复用流程模板、审批、串行执行、实时日志、通知和审计组成完整闭环。
+OpsPilot 是面向企业内网的自动化运维平台：CMDB 资产台账、数据库只读管理、作业主机、工单模板、可复用流程模板、审批、串行执行、实时日志、通知和审计组成完整闭环。
 
 技术栈：FastAPI + 异步 SQLAlchemy + MySQL 8 + Redis 7 + `asyncssh`；Vue 3 + TypeScript + Ant Design Vue 4；Docker Compose 单机部署。
 
@@ -34,7 +34,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-启动后访问 `http://<部署机IP>:8080`，端口由 `NGINX_HTTP_PORT` 控制。Compose 启动五个服务：`nginx`、`api`、`worker`、`mysql`、`redis`。只有 Nginx 暴露宿主机端口，API、MySQL、Redis 只在 Compose 网络内通信。
+启动后访问 `http://<部署机IP>:8080`，端口由 `NGINX_HTTP_PORT` 控制。Compose 启动六个服务：`nginx`、`api`、`worker`、`database-executor`、`mysql`、`redis`。只有 Nginx 暴露宿主机端口；数据库执行器独立访问登记的目标库，不复用工单 Worker。
 
 API 容器启动时执行 `alembic upgrade head` 并幂等初始化权限、内置角色、初始 admin、系统配置和通知默认映射。`ADMIN_INITIAL_PASSWORD` 为空时随机生成密码并写入 API 日志；首次登录必须修改密码并按策略完成 MFA。
 
@@ -48,6 +48,8 @@ API 容器启动时执行 `alembic upgrade head` 并幂等初始化权限、内�
 6. 配置邮件、Webhook 或 Teams 渠道及事件映射。
 7. 选择启用的工单模板提交，按流程审批，观察执行日志和通知记录。
 
+数据库管理可独立使用：准备受限只读用户名密码凭据，登记 MySQL/PostgreSQL/MongoDB/ClickHouse/Redis 实例并关联应用和承载主机，再显式给角色授权实例。管理员查询也需要实例授权；工作台只读、结果不导出，执行记录进入独立审计。目标连接/取消权限和部署边界见[数据库管理运行说明](deploy/DEPLOYMENT.md#12-数据库管理运行与目标权限)。
+
 ## 常用运维命令
 
 ```bash
@@ -55,6 +57,7 @@ cd deploy
 docker compose ps
 docker logs -f opspilot-api
 docker logs -f opspilot-worker
+docker compose logs -f database-executor
 docker compose down                 # 保留数据卷
 docker compose up -d
 curl -s http://localhost:8080/healthz
@@ -67,7 +70,7 @@ curl -s http://localhost:8080/api/v1/ping
 bash scripts/backup.sh
 ```
 
-备份产物位于 `deploy/backup/<时间戳>/`。Redis 仅保存队列和缓存，不作为业务备份对象。
+备份产物位于 `deploy/backup/<时间戳>/`，MySQL全库包含数据库台账、任务、短期加密结果与独立审计。脚本不包含Redis临时认证/控制状态或加密主密钥，恢复边界见[部署手册](deploy/DEPLOYMENT.md#8-备份与恢复)。
 
 ## 离线部署
 
@@ -92,8 +95,10 @@ docker compose up -d
 
 应用配置通过独立主菜单维护生产配置文件，支持 Apollo、Nacos、Consul 的 HTTP 接入、版本审批、手动同步及漂移处理。配置文件与 CMDB 应用可多对多关联；仅删除本地归档记录，不删除远端配置。平台真实版本联调状态见[兼容性记录](docs/应用配置平台兼容性记录.md)。
 
+数据库管理包含实例台账、只读查询、执行历史和独立审计；启动与验证步骤见[开发验收 §5](docs/05-开发与验收指南.md#5-数据库管理开发与验收)。目标数据库须单独准备受限账号；直连容器验收不代表云代理、TLS或其他版本已经兼容。
+
 ```text
-backend/  FastAPI API、数据库模型、迁移和 Worker
+backend/  FastAPI API、数据库模型、迁移、Worker 和独立数据库执行器
 frontend/ Vue 3 单页应用，构建后由 Nginx 提供静态资源
 deploy/   Compose、Nginx、初始化 SQL、备份和离线镜像脚本
 docs/     产品、架构、数据库、API、功能说明与开发验收指南

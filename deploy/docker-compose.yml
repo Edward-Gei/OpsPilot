@@ -1,4 +1,4 @@
-# OpsPilot 单机部署编排：nginx / api / worker / mysql / redis 五个服务。
+# OpsPilot 单机部署编排：工单 Worker 与数据库执行器独立运行。
 # 使用：cp .env.example .env，修改密钥后执行 docker compose up -d --build。
 name: opspilot
 
@@ -73,6 +73,27 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    restart: unless-stopped
+
+  database-executor:
+    build: ../backend
+    command: ["python", "-m", "app.database_executor_main"]
+    env_file: .env
+    environment:
+      RUN_MIGRATIONS: "0"
+    depends_on:
+      api:
+        condition: service_healthy
+    cpus: 1.0
+    mem_limit: 1g
+    pids_limit: 256
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.database_executor_health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   nginx:

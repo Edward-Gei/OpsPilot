@@ -300,7 +300,7 @@ onMounted(loadList)
               class="op-btn-cyan"
               :loading="testingId === record.id"
               @click="onTest(record as jobHostApi.JobHost)"
-            ><ApiOutlined />测试</a-button>
+            ><template #icon><ApiOutlined /></template>测试</a-button>
             <a-button v-if="canWrite" size="small" class="op-btn-blue" @click="openEdit(record as jobHostApi.JobHost)"><EditOutlined />编辑</a-button>
             <a-popconfirm v-if="canDelete" title="确认删除该作业主机？" @confirm="onDelete(record as jobHostApi.JobHost)">
               <a-button size="small" danger><DeleteOutlined />删除</a-button>

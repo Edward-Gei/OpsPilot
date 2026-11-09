@@ -1,4 +1,4 @@
-"""模型聚合导出：确保 Base.metadata 收录全部 28 张表（Alembic 迁移依赖此处）。"""
+"""模型聚合导出：确保 Base.metadata 收录全部业务表（Alembic 迁移依赖此处）。"""
 from app.models.base import Base
 from app.models.auth import ApiToken, Permission, Role, RolePermission, User, UserRole
 from app.models.cmdb import AppHost, Application, Host, JobHost
@@ -23,6 +23,11 @@ from app.models.ticket import (
 from app.models.execution import Execution, ExecutionStep
 from app.models.notify import NotificationRecord, NotifyChannel, NotifyChannelEvent, UserNotification
 from app.models.audit import AuditLog, SystemConfig
+from app.models.database_management import (
+    DatabaseInstance, DatabaseInstanceApplication, DatabaseInstanceHost,
+    DatabaseRoleInstance, DatabaseTask, DatabaseResult, DatabaseResultChunk,
+    DatabaseAuditEvent, DatabaseQuotaBucket,
+)
 
 __all__ = [
     "Base",
@@ -34,4 +39,7 @@ __all__ = [
     "Execution", "ExecutionStep",
     "NotifyChannel", "NotifyChannelEvent", "NotificationRecord", "UserNotification",
     "AuditLog", "SystemConfig",
+    "DatabaseInstance", "DatabaseInstanceApplication", "DatabaseInstanceHost",
+    "DatabaseRoleInstance", "DatabaseTask", "DatabaseResult", "DatabaseResultChunk",
+    "DatabaseAuditEvent", "DatabaseQuotaBucket",
 ]

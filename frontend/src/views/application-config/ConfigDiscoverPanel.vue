@@ -101,7 +101,7 @@ function onSelectionChange(keys: Array<string | number>) {
           :loading="namespaceLoading" :disabled="!platformInstanceId || namespaceLoading"
           :placeholder="namespaceLoading ? '正在获取命名空间' : '选择远端命名空间'" />
         <a-button type="primary" :loading="loading" :disabled="namespaceId === undefined || namespaceLoading" @click="discover">
-          <SearchOutlined />发现
+          <template #icon><SearchOutlined /></template>发现
         </a-button>
       </div>
       <div v-if="namespaceError" class="namespace-error">

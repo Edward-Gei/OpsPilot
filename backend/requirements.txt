@@ -38,3 +38,8 @@ tencentcloud-sdk-python==3.0.1210
 google-cloud-dns==0.35.0
 PyYAML==6.0.2
 ruamel.yaml==0.18.16               # 配置正文脱敏及占位符合并保留 YAML 注释
+
+# ---- 数据库管理：方言解析与独立执行器驱动 ----
+sqlglot==26.16.4
+asyncpg==0.30.0
+pymongo==4.13.2                   # 正式异步客户端，禁止通过 URI 自动发现未登记节点

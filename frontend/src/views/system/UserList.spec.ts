@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
-import { expect, it, vi } from 'vitest'
+import { beforeEach, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import Antd from 'ant-design-vue'
+import Antd, { Table } from 'ant-design-vue'
 import UserList from './UserList.vue'
 
-const api = vi.hoisted(() => ({ listUsers: vi.fn() }))
+const api = vi.hoisted(() => ({ listUsers: vi.fn(), listRoles: vi.fn() }))
+const permissions = vi.hoisted(() => ({ values: [] as string[] }))
 vi.mock('@/api/system', () => api)
-vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: () => false }) }))
+vi.mock('@/stores/user', () => ({ useUserStore: () => ({ hasPerm: (perm: string) => permissions.values.includes(perm) }) }))
 
 class TestResizeObserver { observe() {} unobserve() {} disconnect() {} }
 vi.stubGlobal('ResizeObserver', TestResizeObserver)
@@ -22,6 +23,12 @@ const auditor = { id: 9, code: 'auditor', name: '审计员' }
 const user = (id: number, roles: typeof operator[]) => ({
   id, username: `user${id}`, display_name: `用户${id}`, status: 'active', source: 'local',
   mfa_enabled: false, mfa_bound: false, roles,
+})
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  permissions.values = []
+  api.listRoles.mockResolvedValue({ items: [] })
 })
 
 it('同一角色在不同行、角色顺序及分页变化后保持相同标签颜色', async () => {
@@ -45,5 +52,31 @@ it('同一角色在不同行、角色顺序及分页变化后保持相同标签�
   await flushPromises()
   expect(operatorTags()).toHaveLength(1)
   expect(operatorTags()[0].className).toBe(initialColor)
+  wrapper.unmount()
+})
+
+it.each([
+  { permissions: ['user:write', 'user:mfa'], buttons: ['编辑', '重置密码', '禁用', 'MFA'] },
+  { permissions: ['user:write'], buttons: ['编辑', '重置密码', '禁用'] },
+  { permissions: ['user:mfa'], buttons: ['MFA'] },
+])('操作列按 $permissions 保留按钮，其他列仍可拖拽调宽', async (scenario) => {
+  permissions.values = scenario.permissions
+  api.listUsers.mockResolvedValue({ items: [user(1, [operator])], total: 1 })
+  const wrapper = mount(UserList, { global: { plugins: [Antd] } })
+  await flushPromises()
+
+  const row = wrapper.get('.ant-table-tbody tr.ant-table-row')
+  expect(row.findAll('button').map(button => button.text().replace(/\s/g, ''))).toEqual(scenario.buttons)
+  const table = wrapper.findComponent(Table)
+  const columns = table.props('columns')!
+  const action = columns.find(column => column.key === 'action')!
+  expect(action.fixed).toBe('right')
+  const username = columns.find(column => column.key === 'username')!
+  expect(username.resizable).toBe(true)
+  expect(typeof username.width).toBe('number')
+  table.vm.$emit('resizeColumn', 192, username)
+  await flushPromises()
+  expect(table.props('columns')!.find(column => column.key === 'username')!.width).toBe(192)
+  expect(action.fixed).toBe('right')
   wrapper.unmount()
 })

@@ -9,6 +9,7 @@ import { search } from '@codemirror/search'
 import { StreamLanguage } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { shell } from '@codemirror/legacy-modes/mode/shell'
+import { standardSQL } from '@codemirror/legacy-modes/mode/sql'
 import { yaml } from '@codemirror/lang-yaml'
 import { json as jsonParser } from '@codemirror/legacy-modes/mode/javascript'
 import { oneDark } from '@codemirror/theme-one-dark'
@@ -17,7 +18,7 @@ import { useThemeStore } from '@/stores/theme'
 const props = withDefaults(
   defineProps<{
     modelValue: string
-    lang?: 'shell' | 'yaml' | 'json' | 'text'
+    lang?: 'shell' | 'yaml' | 'json' | 'sql' | 'text'
     readonly?: boolean
     // 只读配置仍需可聚焦，才能通过 Ctrl+F 打开 CodeMirror 查找框。
     focusableReadonly?: boolean
@@ -48,9 +49,10 @@ const readonlyComp = new Compartment()
 const placeholderComp = new Compartment()
 
 /** 语言扩展：playbook 用 yaml，shell/adhoc 用 shell 流式高亮 */
-function langExt(lang: 'shell' | 'yaml' | 'json' | 'text') {
+function langExt(lang: 'shell' | 'yaml' | 'json' | 'sql' | 'text') {
   if (lang === 'text') return []
   if (lang === 'yaml') return yaml()
+  if (lang === 'sql') return StreamLanguage.define(standardSQL)
   if (lang === 'json') return StreamLanguage.define({ ...jsonParser, tokenTable: { property: tags.propertyName } })
   return StreamLanguage.define(shell)
 }

@@ -214,6 +214,7 @@ async def get_host(
     apps = await cmdb_service.get_host_apps(session, host_id)
     data = _host_brief(host)
     data["apps"] = [_app_brief(a) for a in apps]
+    data["database_instances"] = await cmdb_service.get_related_database_instances(session, host_id=host_id)
     return ok(data)
 
 
@@ -353,6 +354,7 @@ async def get_app(
     data["hosts"] = [_host_brief(h) for h in hosts]
     data["config_files"] = await cmdb_service.get_app_config_files(session, app_id)
     data["ticket_templates"] = await cmdb_service.get_app_ticket_templates(session, app_id)
+    data["database_instances"] = await cmdb_service.get_related_database_instances(session, app_id=app_id)
     return ok(data)
 
 
@@ -365,15 +367,17 @@ async def update_app(
     actor: User = Depends(require_perm("cmdb:write")),
 ) -> dict:
     """编辑应用；变更跨模块关联时检查对应写权限。"""
-    association_fields = {"config_file_ids", "ticket_template_ids"} & req.model_fields_set
+    association_fields = {"config_file_ids", "ticket_template_ids", "database_instance_ids"} & req.model_fields_set
     if association_fields:
         perms = await rbac_service.get_user_perms(session, actor.id)
-        for field, perm in (("config_file_ids", "config:write"), ("ticket_template_ids", "template:write")):
+        for field, perm in (("config_file_ids", "config:write"), ("ticket_template_ids", "template:write"),
+                            ("database_instance_ids", "database:write")):
             if field in association_fields and perm not in perms:
                 raise BizError(Errors.NO_PERM, f"缺少权限: {perm}", 403)
     app = await cmdb_service.update_app(session, app_id, host_ids=req.host_ids,
         config_file_ids=req.config_file_ids, ticket_template_ids=req.ticket_template_ids,
-        **req.model_dump(exclude={"host_ids", "config_file_ids", "ticket_template_ids"}))
+        database_instance_ids=req.database_instance_ids,
+        **req.model_dump(exclude={"host_ids", "config_file_ids", "ticket_template_ids", "database_instance_ids"}))
     association_detail = {field: getattr(req, field) for field in association_fields}
     audit.log(module="cmdb", action="app.update", actor_id=actor.id, actor_name=actor.username,
               source_ip=get_client_ip(request), target_type="app",

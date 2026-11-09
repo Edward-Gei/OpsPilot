@@ -538,7 +538,7 @@ onBeforeUnmount(stopBindPolling)
           @confirm="onBatchUnbind"
         >
           <a-button danger :disabled="!selectedKeys.length" :loading="batchLoading">
-            <DeleteOutlined />批量解绑{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
+            <template #icon><DeleteOutlined /></template>批量解绑{{ selectedKeys.length ? `（${selectedKeys.length}）` : '' }}
           </a-button>
         </a-popconfirm>
         <a-button @click="onExport"><DownloadOutlined />导出</a-button>
@@ -597,7 +597,7 @@ onBeforeUnmount(stopBindPolling)
               :loading="syncLoadingId === record.id"
               @click="onSync(record as domainApi.DomainItem)"
             >
-              <CloudSyncOutlined />同步
+              <template #icon><CloudSyncOutlined /></template>同步
             </a-button>
             <a-button v-if="canWrite" size="small" class="op-btn-blue" @click="openDescriptionEdit(record as domainApi.DomainItem)">
               <EditOutlined />说明
@@ -702,7 +702,7 @@ onBeforeUnmount(stopBindPolling)
             </a-form-item>
             <a-form-item label=" " class="discover-action">
               <a-button :loading="discoverLoading" :disabled="!bindForm.credential_id" @click="onDiscover">
-                <SearchOutlined />发现 Zone
+                <template #icon><SearchOutlined /></template>发现 Zone
               </a-button>
             </a-form-item>
           </div>
@@ -736,7 +736,7 @@ onBeforeUnmount(stopBindPolling)
         <div class="modal-actions">
           <span>已选择 {{ selectedRemoteZoneIds.length }} 个 Zone</span>
           <a-button type="primary" :loading="bindLoading" :disabled="!selectedRemoteZoneIds.length" @click="onBind">
-            <LinkOutlined />绑定所选 Zone
+            <template #icon><LinkOutlined /></template>绑定所选 Zone
           </a-button>
         </div>
       </template>
