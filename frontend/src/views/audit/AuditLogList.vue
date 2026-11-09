@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // 安全审计：组合检索 + 详情抽屉 + CSV/Excel 导出（audit:read / audit:export，AUDIT-02/03）
-import { onMounted, reactive, ref } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
+import dayjs, { type Dayjs } from 'dayjs'
 import {
   DownOutlined,
   ExportOutlined,
@@ -47,10 +48,23 @@ const moduleColors: Record<string, string> = {
 const loading = ref(false)
 const items = ref<auditApi.AuditLogItem[]>([])
 const total = ref(0)
+const rangeEnd = dayjs()
+const range = ref<[string, string] | null>([
+  rangeEnd.subtract(30, 'day').format('YYYY-MM-DD HH:mm:ss'),
+  rangeEnd.format('YYYY-MM-DD HH:mm:ss'),
+])
+const rangePresets: { label: string; value: [Dayjs, Dayjs] }[] = [
+  { label: '最近 7 天', value: [dayjs().subtract(7, 'day'), dayjs()] },
+  { label: '最近 30 天', value: [dayjs().subtract(30, 'day'), dayjs()] },
+  { label: '最近 90 天', value: [dayjs().subtract(90, 'day'), dayjs()] },
+]
+const moreOpen = ref(false)
+const draft = reactive({ keyword: '', actor: '', action: '' })
+let generation = 0
 const query = reactive({
   page: 1,
   page_size: 20,
-  range: [] as string[], // [start, end]（value-format 字符串，后端 datetime 解析）
+  range: [...range.value!] as string[],
   module: undefined as string | undefined,
   result: undefined as string | undefined,
   actor: '',
@@ -61,8 +75,9 @@ const query = reactive({
 /** 组装组合筛选参数（列表与导出共用，保证「导出内容与筛选一致」） */
 function buildFilters(): auditApi.AuditQuery {
   return {
-    start: query.range?.[0] || undefined,
-    end: query.range?.[1] || undefined,
+    // 通用审计存储本地 DATETIME，保持选择器本地时间并覆盖结束秒的闭区间。
+    start: query.range[0] || undefined,
+    end: query.range[1] ? `${query.range[1]}.999999` : undefined,
     module: query.module,
     result: query.result,
     actor: query.actor || undefined,
@@ -73,6 +88,7 @@ function buildFilters(): auditApi.AuditQuery {
 
 /** 拉取审计日志列表 */
 async function loadList() {
+  const current = ++generation
   loading.value = true
   try {
     const data = await auditApi.listAuditLogs({
@@ -80,10 +96,14 @@ async function loadList() {
       page_size: query.page_size,
       ...buildFilters(),
     })
-    items.value = data.items
-    total.value = data.total
+    if (current === generation) {
+      items.value = data.items
+      total.value = data.total
+    }
+  } catch {
+    /* 错误提示由拦截器统一弹出，旧请求不得影响当前筛选。 */
   } finally {
-    loading.value = false
+    if (current === generation) loading.value = false
   }
 }
 
@@ -114,13 +134,24 @@ function onSearch() {
   loadList()
 }
 
-/** 重置全部筛选条件并重查 */
-function onReset() {
-  Object.assign(query, {
-    page: 1, range: [], module: undefined, result: undefined,
-    actor: '', action: '', keyword: '',
-  })
-  loadList()
+/** 各输入独立提交，分页、下拉和导出始终使用已提交条件。 */
+function submitDraft(key: keyof typeof draft) {
+  query[key] = draft[key].trim()
+  onSearch()
+}
+
+function changeDraft(key: keyof typeof draft, event: Event) {
+  if (event.type === 'click' && !(event.target as HTMLInputElement).value) {
+    query[key] = ''
+    onSearch()
+  }
+}
+
+/** 仅完整选择或清空时提交时间条件，日历中的半段选择仍是草稿。 */
+function changeRange(value: string[] | null) {
+  if (value && (!value[0] || !value[1])) return
+  query.range = value ? [...value] : []
+  onSearch()
 }
 
 function onPageChange(page: number, pageSize: number) {
@@ -161,6 +192,7 @@ function onExportMenu(info: { key: string | number }) {
 
 /** 触发导出下载：与列表共用 buildFilters，后端上限 10 万行 */
 async function onExport(format: 'csv' | 'xlsx') {
+  if (exporting.value) return
   exporting.value = true
   try {
     await auditApi.exportAuditLogs(format, buildFilters())
@@ -173,6 +205,7 @@ async function onExport(format: 'csv' | 'xlsx') {
 }
 
 onMounted(refreshAll)
+onBeforeUnmount(() => { generation++ })
 </script>
 
 <template>
@@ -193,14 +226,10 @@ onMounted(refreshAll)
 
     <!-- 组合筛选工具栏 -->
     <div class="toolbar">
-      <a-range-picker
-        v-model:value="query.range"
-        show-time
-        value-format="YYYY-MM-DD HH:mm:ss"
-        class="range"
-        :placeholder="['开始时间', '结束时间']"
-        @change="onSearch"
-      />
+      <a-input v-model:value="draft.keyword" placeholder="搜索审计日志" aria-label="搜索审计日志" class="keyword" :maxlength="255" allow-clear
+        @press-enter="submitDraft('keyword')" @change="changeDraft('keyword', $event)">
+        <template #prefix><SearchOutlined /></template>
+      </a-input>
       <a-select
         v-model:value="query.module"
         placeholder="模块"
@@ -220,13 +249,18 @@ onMounted(refreshAll)
         ]"
         @change="onSearch"
       />
-      <a-input v-model:value="query.actor" placeholder="操作人" class="ipt" allow-clear @press-enter="onSearch" />
-      <a-input v-model:value="query.action" placeholder="动作（如 login）" class="ipt" allow-clear @press-enter="onSearch" />
-      <a-input v-model:value="query.keyword" placeholder="搜索审计日志" class="ipt" allow-clear @press-enter="onSearch">
-        <template #prefix><SearchOutlined /></template>
-      </a-input>
-      <a-button type="primary" @click="onSearch"><SearchOutlined />查询</a-button>
-      <a-button @click="onReset">重置</a-button>
+      <a-range-picker
+        v-model:value="range"
+        show-time
+        value-format="YYYY-MM-DD HH:mm:ss"
+        class="range"
+        popup-class-name="security-audit-range-popup"
+        :placeholder="['开始时间', '结束时间']"
+        :presets="rangePresets"
+        @change="changeRange"
+      />
+      <a-button class="audit-more-toggle" :aria-expanded="moreOpen" aria-controls="audit-advanced"
+        @click="moreOpen=!moreOpen">更多筛选</a-button>
       <a-dropdown v-if="canExport" class="export-btn">
         <a-button :loading="exporting"><template #icon><ExportOutlined /></template>导出<DownOutlined v-if="!exporting" /></a-button>
         <template #overlay>
@@ -236,6 +270,12 @@ onMounted(refreshAll)
           </a-menu>
         </template>
       </a-dropdown>
+    </div>
+    <div v-if="moreOpen" id="audit-advanced" class="toolbar audit-advanced">
+      <a-input v-model:value="draft.actor" placeholder="操作人" aria-label="操作人" class="ipt" :maxlength="64" allow-clear
+        @press-enter="submitDraft('actor')" @change="changeDraft('actor', $event)" />
+      <a-input v-model:value="draft.action" placeholder="动作（如 login）" aria-label="动作" class="ipt" :maxlength="64" allow-clear
+        @press-enter="submitDraft('action')" @change="changeDraft('action', $event)" />
     </div>
 
     <!-- 审计列表：列间分割线 + 操作列固定 + 可拖拽调宽 -->
@@ -324,20 +364,44 @@ onMounted(refreshAll)
 .toolbar {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
   margin-bottom: 16px;
 }
 .range {
-  width: 340px;
+  width: 400px;
+  max-width: 100%;
+  min-width: 0;
 }
 .sel {
-  width: 110px;
+  width: 140px;
 }
-.ipt {
-  width: 150px;
+.keyword {
+  width: 220px;
+}
+.audit-advanced {
+  padding: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.audit-advanced .ipt {
+  width: 200px;
 }
 .export-btn {
   margin-left: auto;
+}
+@media (max-width: 760px) {
+  .keyword { width: 100%; }
+  .sel, .audit-advanced .ipt { width: calc((100% - 10px) / 2); }
+  .range :deep(.ant-picker-input > input) { font-size: 12px; }
+  .range :deep(.ant-picker-range-separator) { padding-inline: 4px; }
+  :global(.security-audit-range-popup.ant-picker-dropdown .ant-picker-panel-container) { max-width: calc(100vw - 24px); max-height: calc(50dvh - 24px); overflow: auto; }
+  :global(.security-audit-range-popup.ant-picker-dropdown .ant-picker-panel-container .ant-picker-panel-layout),
+  :global(.security-audit-range-popup.ant-picker-dropdown .ant-picker-datetime-panel) { flex-direction: column; }
+  :global(.security-audit-range-popup.ant-picker-dropdown .ant-picker-panel-container .ant-picker-presets) { max-width: none; }
+  :global(.security-audit-range-popup.ant-picker-dropdown .ant-picker-panel-container .ant-picker-presets ul) { display: flex; flex-wrap: wrap; gap: 8px; height: auto; }
+  :global(.security-audit-range-popup.ant-picker-dropdown .ant-picker-panel-container .ant-picker-presets li + li) { margin-top: 0; }
 }
 .target-type {
   color: var(--op-text-tertiary, #999);

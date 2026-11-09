@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { DatabaseOutlined, DownOutlined } from '@ant-design/icons-vue'
 import { message, Modal } from 'ant-design-vue'
 import { updateConfigs } from '@/api/system'
@@ -74,9 +74,7 @@ watch(() => props.configs, cfg => {
   }
 }, { immediate: true })
 
-const hasChanges = computed(() => fields.some(field => Number(values[field.key]) !== saved[field.key]))
-
-/** 六项先整体校验，再以一次请求保存改动；确认和提交共用锁，避免重复写入。 */
+/** 六项整体校验；无改动仍提交当前配置，确认和提交共用锁以避免重复写入。 */
 async function save() {
   if (saving.value || !props.configs) return
   const changes: Record<string, number> = {}
@@ -91,7 +89,9 @@ async function save() {
     if (field.key.endsWith('retention_days') && value < saved[field.key]) retentionReduced = true
   }
   error.value = ''
-  if (!Object.keys(changes).length) return
+  if (!Object.keys(changes).length) {
+    for (const field of fields) changes[`database.${field.key}`] = Number(values[field.key])
+  }
   saving.value = true
   const write = async () => {
     try {
@@ -119,7 +119,7 @@ async function save() {
         <b>数据库查询策略</b>
         <span>查询执行、结果限制与历史审计保留时间</span>
       </div>
-      <a-button type="primary" :loading="saving" :disabled="!configs||saving||!hasChanges" @click.stop="save">保存</a-button>
+      <a-button type="primary" :loading="saving" :disabled="!configs||saving" @click.stop="save">保存</a-button>
       <a-button type="text" class="db-settings-toggle" :aria-expanded="!collapsed" aria-label="展开或收起数据库设置">
         <DownOutlined class="db-settings-collapse-icon" />
       </a-button>
@@ -215,10 +215,14 @@ async function save() {
 }
 
 .db-settings-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  width: 24px;
+  width: 14px;
   height: 24px;
   padding: 0;
+  border: 0;
   color: var(--text-3);
 }
 
@@ -284,6 +288,15 @@ async function save() {
 }
 
 @media(max-width:900px) {
+  .db-settings-head {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .db-settings-title {
+    min-width: 160px;
+  }
+
   .db-settings-grid {
     grid-template-columns: minmax(0,1fr);
   }
