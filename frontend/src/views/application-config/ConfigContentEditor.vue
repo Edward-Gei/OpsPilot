@@ -11,9 +11,9 @@ const props = defineProps<{
   canReadSecret?: boolean
 }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
-const frameHeight = ref(360)
+const frameHeight = ref(520)
 let dragStartY = 0
-let dragStartHeight = 360
+let dragStartHeight = 520
 
 function update(value: string) { emit('update:modelValue', value) }
 
@@ -67,7 +67,7 @@ onBeforeUnmount(stopResize)
 <style scoped>
 .config-editor { min-width: 0; }
 .config-editor-alert { margin-bottom: 10px; }
-.config-editor-frame { display: flex; flex-direction: column; height: 360px; min-height: 180px; min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; }
+.config-editor-frame { display: flex; flex-direction: column; height: 520px; min-height: 180px; min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; }
 .config-editor-frame :deep(.code-editor) { flex: 1; min-height: 0; border: 0; border-radius: 0; }
 .config-editor-resize-handle { flex: none; width: 100%; height: 10px; cursor: ns-resize; touch-action: none; }
 </style>
