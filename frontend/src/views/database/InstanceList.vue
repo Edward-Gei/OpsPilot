@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { message, Modal } from 'ant-design-vue'
+import { message } from 'ant-design-vue'
 import { isAxiosError } from 'axios'
-import { DatabaseOutlined, SearchOutlined, PlusOutlined, DeleteOutlined, EyeOutlined, EditOutlined, ApiOutlined, CodeOutlined, DownloadOutlined, UploadOutlined } from '@ant-design/icons-vue'
+import { DatabaseOutlined, SearchOutlined, PlusOutlined, DeleteOutlined, EyeOutlined, EditOutlined, ApiOutlined, CodeOutlined, DownloadOutlined, UploadOutlined, CheckCircleOutlined, ExclamationCircleOutlined, LoadingOutlined } from '@ant-design/icons-vue'
 import * as db from '@/api/database'
 import { useUserStore } from '@/stores/user'
 import { makeResizable, onResizeColumn } from '@/utils/table'
@@ -30,7 +30,29 @@ const items = ref<db.InstanceItem[]>([]),
 const selected = ref<number[]>([]),
   deleting = ref(false),
   outcomes = ref<DeleteOutcome[]>([]),
-  feedback = ref(false)
+  feedback = ref(false),
+  deleteIds = ref<number[]>([]),
+  deleteStarted = ref(false)
+const deleteStates = {
+  deleted: { text: '已删除', color: 'success' },
+  rejected: { text: '拒绝', color: 'error' },
+  unknown: { text: '请求结果未知', color: 'warning' },
+  active: { text: '正在删除', color: 'processing' },
+  pending: { text: '等待处理', color: 'default' }
+}
+const deleteRows = computed(() => deleteIds.value.map((id, index) => {
+  const outcome = outcomes.value[index]
+  return {
+    id,
+    state: deleteStates[outcome?.status || (deleting.value && index === outcomes.value.length ? 'active' : 'pending')],
+    reason: outcome && outcome.status !== 'deleted' ? outcome.message : ''
+  }
+}))
+const deleteCounts = computed(() => ({
+  deleted: outcomes.value.filter(item => item.status === 'deleted').length,
+  rejected: outcomes.value.filter(item => item.status === 'rejected').length,
+  unknown: outcomes.value.filter(item => item.status === 'unknown').length
+}))
 const clusterNames = ref<string[]>([]),
   detailId = ref<number | null>(null),
   editorOpen = ref(false),
@@ -283,24 +305,29 @@ function changePage(p: {
 }
 
 function deleteSelected() {
-  const ids = [...selected.value]
-  Modal.confirm({
-    title: `删除已勾选的 ${ids.length} 个实例？`,
-    content: '仅删除平台台账；仅停用且无活动或恢复任务的实例可删除。每项独立处理，失败不回滚成功项。',
-    async onOk() {
-      if (deleting.value) return
-      deleting.value = true
-      outcomes.value = []
-      feedback.value = true
-      try {
-        await deleteSelectedInstances(ids, db.deleteInstance, item => outcomes.value.push(item))
-        await load()
-      }
-      finally {
-        deleting.value = false
-      }
-    }
-  })
+  if (!canDelete.value || !selected.value.length || feedback.value || deleting.value) return
+  deleteIds.value = [...new Set(selected.value)]
+  outcomes.value = []
+  deleteStarted.value = false
+  feedback.value = true
+}
+
+/** 确认、逐项进度与结果共用同一弹窗；处理中锁定关闭和重复提交。 */
+async function confirmDelete() {
+  if (!feedback.value || deleteStarted.value || deleting.value || !canDelete.value) return
+  deleteStarted.value = true
+  deleting.value = true
+  try {
+    await deleteSelectedInstances(deleteIds.value, db.deleteInstance, item => outcomes.value.push(item))
+    await load()
+  }
+  finally {
+    deleting.value = false
+  }
+}
+
+function closeDelete() {
+  if (!deleting.value) feedback.value = false
 }
 
 function probeActive(id: number, run: ProbeRun) {
@@ -519,9 +546,6 @@ onBeforeUnmount(() => {
         <a-button size="small" @click="load">重试</a-button>
       </template>
     </a-alert>
-    <p v-if="canDelete && selected.length" class="selection-hint">已选择 {{ selected.length }} 个实例 <a
-        @click="selected = []">清空选择</a>
-    </p>
     <a-table bordered :columns="columns" :data-source="items" row-key="id" :loading="loading" :show-sorter-tooltip="false"
       :scroll="{x:scrollWidth}"
       :row-selection="canDelete ? {fixed:true,selectedRowKeys:selected,onChange:selectRows,columnWidth:48} : undefined"
@@ -598,15 +622,38 @@ onBeforeUnmount(() => {
           :columns="[{title:'行号',dataIndex:'row',width:70},{title:'失败原因',dataIndex:'reason'}]" :data-source="importResult.failed_rows" />
       </template>
     </a-modal>
-    <a-modal v-model:open="feedback" title="批量删除结果" :footer="null" :closable="!deleting">
-      <a-list :data-source="outcomes">
-        <template #renderItem="{item}">
-          <a-list-item>实例 #{{item.id}} ·
-            {{item.status==='deleted'?'已删除':item.status==='rejected'?'拒绝':'请求结果未知'}} ·
-            {{item.message}}</a-list-item>
-        </template>
-      </a-list>
-      <p v-if="deleting">正在逐项处理，请勿重复提交。</p>
+    <a-modal :open="feedback" wrap-class-name="instance-delete-modal" :width="480" centered
+      :title="deleteStarted ? '批量删除结果' : `删除已勾选的 ${deleteIds.length} 个实例？`"
+      :closable="!deleting" :mask-closable="!deleting" :keyboard="!deleting" @cancel="closeDelete">
+      <p v-if="!deleteStarted" class="delete-confirm-copy">仅删除平台台账；仅停用且无活动或恢复任务的实例可删除。</p>
+      <div v-else class="delete-result">
+        <div class="delete-result-summary" role="status" aria-live="polite">
+          <div class="delete-result-heading">
+            <LoadingOutlined v-if="deleting" class="delete-summary-active" />
+            <ExclamationCircleOutlined v-else-if="deleteCounts.rejected || deleteCounts.unknown" class="delete-summary-warning" />
+            <CheckCircleOutlined v-else class="delete-summary-success" />
+            <span>{{deleting ? '正在删除' : deleteCounts.rejected || deleteCounts.unknown ? '处理完成' : '删除完成'}}</span>
+          </div>
+          <span class="delete-result-progress">{{outcomes.length}} / {{deleteIds.length}}</span>
+        </div>
+        <div v-if="deleteIds.length > 1 && outcomes.length" class="delete-result-counts">
+          <span>已删除 {{deleteCounts.deleted}}</span>
+          <span v-if="deleteCounts.rejected">拒绝 {{deleteCounts.rejected}}</span>
+          <span v-if="deleteCounts.unknown">结果未知 {{deleteCounts.unknown}}</span>
+        </div>
+        <ul class="delete-result-list" aria-label="逐项删除结果">
+          <li v-for="item in deleteRows" :key="item.id" class="delete-result-row" :data-instance-id="item.id">
+            <span class="delete-result-id">实例 <b>#{{item.id}}</b></span>
+            <a-tag :color="item.state.color" class="delete-result-status">{{item.state.text}}</a-tag>
+            <p v-if="item.reason" class="delete-result-reason">{{item.reason}}</p>
+          </li>
+        </ul>
+      </div>
+      <template #footer>
+        <a-button v-if="!deleteStarted" @click="closeDelete">取消</a-button>
+        <a-button v-if="!deleteStarted || deleting" type="primary" danger :loading="deleting" @click="confirmDelete">{{deleting ? '正在删除' : '确认删除'}}</a-button>
+        <a-button v-else type="primary" @click="closeDelete">关闭</a-button>
+      </template>
     </a-modal>
   </div>
 </template>
@@ -623,13 +670,89 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 10px;
 }
-.selection-hint {
-  margin: 0 0 12px;
-  color: var(--text-2);
-}
 .status-separator {
   margin-right: 6px;
   color: var(--text-2);
+}
+:global(.instance-delete-modal .ant-modal-header) {
+  margin-bottom: 16px;
+  padding-right: 28px;
+}
+:global(.instance-delete-modal .ant-modal-footer) {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.delete-confirm-copy {
+  margin: 0;
+  color: var(--text-2);
+  line-height: 1.7;
+}
+.delete-result-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.delete-result-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+.delete-summary-active { color: var(--primary); }
+.delete-summary-warning { color: var(--warning); }
+.delete-summary-success { color: var(--success); }
+.delete-result-progress {
+  color: var(--text-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.delete-result-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 6px;
+  padding-left: 22px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.delete-result-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: min(340px, 45dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.delete-result-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.delete-result-row:last-child { padding-bottom: 0; }
+.delete-result-id {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.delete-result-id b { color: var(--text-1); font-weight: 500; font-variant-numeric: tabular-nums; }
+.delete-result-status { margin: 0; font-size: 12px; }
+.delete-result-reason {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 .import-tip { margin-bottom: 14px; }
 .import-file { margin-top: 8px; color: var(--text-2); overflow-wrap: anywhere; }
