@@ -84,6 +84,7 @@ interface ProbeRun {
   controller: AbortController
   taskId?: number
   timer?: ReturnType<typeof setTimeout>
+  readFailureTimer?: ReturnType<typeof setTimeout>
   warned: boolean
 }
 const probeRuns = new Map<number, ProbeRun>(),
@@ -337,6 +338,7 @@ function probeActive(id: number, run: ProbeRun) {
 function finishProbe(id: number, run: ProbeRun, level: 'success' | 'error' | 'warning', text: string, blocked = false) {
   if (!probeActive(id, run)) return
   clearTimeout(run.timer)
+  clearTimeout(run.readFailureTimer)
   run.controller.abort()
   probeRuns.delete(id)
   probingIds.delete(id)
@@ -354,6 +356,13 @@ async function readProbe(id: number, run: ProbeRun) {
     if (!probeActive(id, run)) return
     if (task.task_id !== run.taskId || task.instance_id !== id || task.kind !== 'probe') {
       finishProbe(id, run, 'warning', '连接测试状态无法确认，未再次提交', true)
+      return
+    }
+    clearTimeout(run.readFailureTimer)
+    run.readFailureTimer = undefined
+    // 恢复核对仍由服务端继续；当前页结束等待并锁定重投，不将其视为失败终态。
+    if (task.status === 'recovering') {
+      finishProbe(id, run, 'warning', '连接测试状态待确认，未再次提交', true)
       return
     }
     if (activeStatuses.includes(task.status)) {
@@ -379,6 +388,10 @@ async function readProbe(id: number, run: ProbeRun) {
       message.warning(`${run.name}：连接测试状态暂无法读取，正在继续核对，请到本人历史查看任务 #${run.taskId}。`)
       run.warned = true
     }
+    // 只约束持续读取失败；读到有效状态后重新允许正常轮询，不取消服务端任务。
+    run.readFailureTimer ??= setTimeout(() => {
+      finishProbe(id, run, 'warning', '连接测试状态未知，持续读取失败，当前页已停止等待', true)
+    }, 10000)
     run.timer = setTimeout(() => void readProbe(id, run), 3000)
   }
 }
@@ -489,6 +502,7 @@ onBeforeUnmount(() => {
   disposed = true
   for (const run of probeRuns.values()) {
     clearTimeout(run.timer)
+    clearTimeout(run.readFailureTimer)
     run.controller.abort()
   }
   probeRuns.clear()

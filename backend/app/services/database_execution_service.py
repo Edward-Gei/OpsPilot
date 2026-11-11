@@ -23,6 +23,8 @@ from app.services.database_result_service import ResultBuilder, canonical, persi
 
 logger = logging.getLogger("opspilot.database_executor")
 LOCAL_CLOSE_TIMEOUT = 5
+PROBE_CLEANUP_GRACE = 1
+_probe_cleanups = set()
 
 
 async def recheck_task(session, task):
@@ -123,17 +125,21 @@ async def _record_local_cleanup(factory, claim, closed):
                 return True
             task.backend_ref = {**task.backend_ref, "local_cleanup": {**cleanup, "closed": closed}}
             await append_audit_event(session, task, "local_cleanup_confirmed" if closed else "local_cleanup_unconfirmed")
-            if task.status == "recovering" and closed:
+            if task.status == "recovering" and closed and task.lease_expires_at is None:
                 task.lease_expires_at = datetime.now()
     return closed
 
 
-async def _collect(adapter, handle, builder, persist_identity):
+async def _collect(adapter, handle, builder, persist_identity, *, probe=False):
     await adapter.run(handle)
+    if probe and asyncio.current_task().cancelling():
+        raise asyncio.CancelledError()
     if not await persist_identity():
         raise RuntimeError("lease_lost")
     builder.set_columns(handle.columns)
     async for batch in adapter.batches(handle):
+        if probe and asyncio.current_task().cancelling():
+            raise asyncio.CancelledError()
         builder.set_columns(batch.columns)
         for row in batch.rows:
             if not builder.add(row):
@@ -141,6 +147,44 @@ async def _collect(adapter, handle, builder, persist_identity):
     # 适配器在空结果时也必须提供列和可信完成依据。
     builder.set_columns(handle.columns)
     return "completed"
+
+
+async def _cleanup_probe(factory, claim, adapter, opening, runner, handle, opening_failure, outcome):
+    """迟到 I/O 结束后只关闭原资源；结算仍由原租约校验，不能重放探测。"""
+    closed = False
+    if handle is None and opening is not None:
+        try:
+            handle = await opening
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            opening_failure = exc
+    if runner is not None:
+        try:
+            await runner
+        except (asyncio.CancelledError, Exception):
+            pass
+    if handle is not None:
+        try:
+            await adapter.close(handle)
+        except (asyncio.CancelledError, Exception):
+            pass
+        else:
+            closed = True
+    elif opening_failure:
+        evidence = getattr(getattr(opening_failure, "completion", None), "evidence", {})
+        closed = evidence.get("local_closed") is True
+    await _record_local_cleanup(factory, claim, closed)
+    if outcome:
+        status, confirmation, result_builder, code, message = outcome
+        await _settle(factory, claim, status, confirmation, builder=result_builder,
+                      error_code=code, error_message=message)
+
+
+def _probe_cleanup_done(task):
+    _probe_cleanups.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.info("database probe: cleanup_persistence_failed")
 
 
 async def stop_target(factory, connection, adapter, backend_ref, reason):
@@ -173,13 +217,17 @@ async def _settle(factory, claim, status, confirmation, *, builder=None, error_c
             task = await _owned_task(session, claim, lock=True)
             if task is None:
                 return False
-            task.stop_confirmation = asdict(confirmation) if confirmation else None
             cleanup = (task.backend_ref or {}).get("local_cleanup", {})
             local_unconfirmed = task.target_attempted_at is not None and cleanup.get("closed") is not True
+            # 固定 SELECT 1/ping 的失败探测只需回收已确认关闭的本地资源，不能伪造远端停止事实。
+            probe_locally_closed = task.kind == "probe" and status in ("failed", "timed_out", "cancelled") and cleanup.get("closed") is True
+            if probe_locally_closed and confirmation is None:
+                confirmation = StopConfirmation(False, "probe_remote_stop_unconfirmed", {}, {"local_closed": True})
+            task.stop_confirmation = asdict(confirmation) if confirmation else None
             control = (await session.execute(select(DatabaseQuotaBucket).where(
                 DatabaseQuotaBucket.scope == "control", DatabaseQuotaBucket.scope_key == str(task.id)))).scalar_one_or_none()
             control_unconfirmed = control is not None and control.active_count > 0
-            if not confirmation or not confirmation.confirmed or local_unconfirmed or control_unconfirmed:
+            if ((not confirmation or not confirmation.confirmed) and not probe_locally_closed) or local_unconfirmed or control_unconfirmed:
                 task.status = "recovering"
                 if local_unconfirmed:
                     task.error_code, task.error_message = "local_cleanup_unconfirmed", "执行器连接关闭尚未确认，保留资源占用"
@@ -206,7 +254,8 @@ async def _settle(factory, claim, status, confirmation, *, builder=None, error_c
 
 async def run_claimed_task(factory, claim):
     """处理一个认领任务；任何目标 await 都在平台事务之外。"""
-    adapter, handle, runner, watcher = None, None, None, None
+    adapter, handle, runner, watcher, opening = None, None, None, None, None
+    is_probe = False
     outcome, opening_failure = None, None
     connection, builder = None, ResultBuilder(claim.policy_snapshot["max_result_rows"], claim.policy_snapshot["max_result_bytes"])
     deadline = time.monotonic()+max(0, (claim.deadline_at-datetime.now()).total_seconds())
@@ -217,6 +266,7 @@ async def run_claimed_task(factory, claim):
                 task = await _owned_task(session, claim, lock=True)
                 if task is None:
                     return
+                is_probe = task.kind == "probe"
                 try:
                     connection = await load_connection(session, task)
                 except (BizError, ValueError):
@@ -241,12 +291,22 @@ async def run_claimed_task(factory, claim):
                 task.target_attempted_at = datetime.now()
                 await append_audit_event(session, task, "target_attempted")
         watcher = asyncio.create_task(_watch(factory, claim))
-        handle = await asyncio.wait_for(adapter.open_operation(connection, prepared, deadline=deadline),
-                                        timeout=max(0.001, deadline-time.monotonic()))
+        # 内部 I/O 仍共享原截止点；外层仅给探测关闭连接的有限余量，避免同刻取消丢失证据。
+        open_timeout = max(0.001, deadline-time.monotonic()) + (PROBE_CLEANUP_GRACE if is_probe else 0)
+        if is_probe:
+            # wait_for 会等待取消配合；不合作的驱动必须转为后台清理，不能卡住执行槽。
+            opening = asyncio.create_task(adapter.open_operation(connection, prepared, deadline=deadline))
+            opened, _ = await asyncio.wait({opening}, timeout=open_timeout)
+            if not opened:
+                raise TimeoutError()
+            handle = opening.result()
+        else:
+            handle = await asyncio.wait_for(adapter.open_operation(connection, prepared, deadline=deadline),
+                                            timeout=open_timeout)
         if not await _persist_backend_ref(factory, claim, handle):
             return
         runner = asyncio.create_task(_collect(adapter, handle, builder,
-            lambda: _persist_backend_ref(factory, claim, handle)))
+            lambda: _persist_backend_ref(factory, claim, handle), probe=is_probe))
         done, _ = await asyncio.wait((runner, watcher), timeout=max(0, deadline-time.monotonic()),
                                      return_when=asyncio.FIRST_COMPLETED)
         reason = runner.result() if runner in done else watcher.result() if watcher in done else "execution_timeout"
@@ -264,7 +324,7 @@ async def run_claimed_task(factory, claim):
                 current.stop_reason = reason
                 await append_audit_event(session, current, "stop_requested")
         confirmation = handle.completion
-        if not confirmation or not confirmation.confirmed:
+        if (not confirmation or not confirmation.confirmed) and not is_probe:
             await _persist_backend_ref(factory, claim, handle)
             confirmation = await stop_target(factory, connection, adapter, handle.backend_ref, reason)
         status = ("succeeded" if reason == "result_limit" else "timed_out" if reason == "execution_timeout"
@@ -277,7 +337,7 @@ async def run_claimed_task(factory, claim):
         # 进程优雅退出也必须通过目标取消事实结算，不能仅取消协程。
         if adapter and connection:
             confirmation = handle.completion if handle else None
-            if not confirmation or not confirmation.confirmed:
+            if (not confirmation or not confirmation.confirmed) and not is_probe:
                 if handle:
                     await _persist_backend_ref(factory, claim, handle)
                 confirmation = await stop_target(factory, connection, adapter, handle.backend_ref if handle else {}, "executor_shutdown")
@@ -293,7 +353,7 @@ async def run_claimed_task(factory, claim):
                 current = await _owned_task(session, claim, lock=True)
                 if current:
                     current.stop_reason = "user_cancel" if current.cancel_requested_at else failure_reason
-        if adapter and connection and (not confirmation or not confirmation.confirmed):
+        if adapter and connection and not is_probe and (not confirmation or not confirmation.confirmed):
             if handle:
                 await _persist_backend_ref(factory, claim, handle)
             confirmation = await stop_target(factory, connection, adapter, handle.backend_ref if handle else {}, failure_reason)
@@ -303,11 +363,27 @@ async def run_claimed_task(factory, claim):
         outcome = ("timed_out" if is_timeout else "failed", confirmation, None, code, safe_message)
         logger.info("database task %s: %s", claim.task_id, code)
     finally:
-        for pending in (watcher, runner):
+        for pending in (watcher, runner, opening):
             if pending and not pending.done():
                 pending.cancel()
-        await asyncio.gather(*[p for p in (watcher, runner) if p], return_exceptions=True)
-        if adapter and handle:
+        probe_cleanup = is_probe and adapter is not None and opening is not None
+        if probe_cleanup:
+            cleanup = asyncio.create_task(_cleanup_probe(factory, claim, adapter, opening, runner,
+                handle, opening_failure, outcome))
+            _probe_cleanups.add(cleanup)
+            cleanup.add_done_callback(_probe_cleanup_done)
+            # opening 已消耗截止点后的余量时不能再叠加等待；其他清理最多再等一个短预算。
+            grace = min(PROBE_CLEANUP_GRACE, max(0, deadline+PROBE_CLEANUP_GRACE-time.monotonic()))
+            finished, _ = await asyncio.wait({cleanup}, timeout=grace)
+            if not finished:
+                await _record_local_cleanup(factory, claim, False)
+                if outcome:
+                    status, confirmation, result_builder, code, message = outcome
+                    await _settle(factory, claim, status, confirmation, builder=result_builder,
+                                  error_code=code, error_message=message)
+        else:
+            await asyncio.gather(*[p for p in (watcher, runner) if p], return_exceptions=True)
+        if not probe_cleanup and adapter and handle:
             try:
                 await asyncio.wait_for(adapter.close(handle), LOCAL_CLOSE_TIMEOUT)
             except Exception:
@@ -315,10 +391,10 @@ async def run_claimed_task(factory, claim):
                 logger.info("database task %s: close_unconfirmed", claim.task_id)
             else:
                 await _record_local_cleanup(factory, claim, True)
-        elif opening_failure:
+        elif not probe_cleanup and opening_failure:
             evidence = getattr(getattr(opening_failure, "completion", None), "evidence", {})
             await _record_local_cleanup(factory, claim, evidence.get("local_closed") is True)
-        if outcome:
+        if outcome and not probe_cleanup:
             status, confirmation, result_builder, code, message = outcome
             await _settle(factory, claim, status, confirmation, builder=result_builder,
                           error_code=code, error_message=message)

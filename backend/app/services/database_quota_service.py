@@ -14,6 +14,7 @@ from app.services.database_audit_service import append_audit_event
 
 TERMINAL_STATES = ("succeeded", "failed", "cancelled", "timed_out", "rejected", "queue_expired")
 DATA_KINDS = ("sql", "mongo_read", "redis_read")
+PROBE_TIMEOUT_SECONDS = 5
 POLICY_DEFAULTS = {
     "execution_timeout_seconds": 60, "max_result_rows": 1000, "max_result_bytes": 5242880,
     "result_ttl_minutes": 30, "global_concurrency": 20, "instance_concurrency_default": 5,
@@ -168,14 +169,16 @@ async def claim_next_task(factory, executor_id):
                 now, token = datetime.now(), uuid.uuid4().hex
                 task.status, task.executor_id, task.lease_token = "running", executor_id, token
                 task.started_at, task.heartbeat_at = now, now
-                task.deadline_at = now + timedelta(seconds=limits["execution_timeout_seconds"])
+                # 连接检测固定使用短预算，查询仍沿用管理员配置的执行上限。
+                task_limits = {**limits, "execution_timeout_seconds": PROBE_TIMEOUT_SECONDS} if task.kind == "probe" else limits
+                task.deadline_at = now + timedelta(seconds=task_limits["execution_timeout_seconds"])
                 task.lease_expires_at = now + timedelta(seconds=30)
-                task.policy_snapshot = limits
+                task.policy_snapshot = task_limits
                 task.result_reserved_bytes = reserved_bytes
                 task.quota_snapshot = {"executor_id": executor_id, "target_sockets": sockets}
                 await append_audit_event(session, task, "started")
                 await session.flush()
-                return ClaimedTask(task.id, token, executor_id, task.deadline_at, limits, task.quota_snapshot)
+                return ClaimedTask(task.id, token, executor_id, task.deadline_at, task_limits, task.quota_snapshot)
     return None
 
 

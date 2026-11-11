@@ -455,7 +455,7 @@ Excel 列为实例名称、引擎、连接地址、端口、环境、描述、�
 | ResultPage | columns[{ordinal,name,type}]、二维rows、returned_rows/returned_bytes/truncated/truncate_reason/expires_at/saved_total/page/page_size；returned_*为整份保存结果，saved_total不是目标表总数 |
 | Audit | 列表按task_id汇总首次身份/提交时间与最新状态/终态摘要；详情另含上限内原文/实际操作、安全快照、submitted_bytes/submitted_sha256和events[{id,event_type,created_at,validation,stop_confirmation,error_code,error_message,result_summary}]，不查结果块 |
 
-新probe的operation_summary为“连接状态检测”，成功更新last_probe_message为“连接检测成功”，适配器probe的summary.message为“连接和认证成功”。这些摘要只描述连接/认证，不声明账号只读；既有历史记录和旧检测摘要不回填或清洗。SQL、metadata和原生数据查询的只读策略保持。
+新probe的operation_summary为“连接状态检测”，成功更新last_probe_message为“连接检测成功”，适配器probe的summary.message为“连接和认证成功”。probe 认领后的执行预算固定5秒，与系统设置中的查询执行上限独立；排队时限仍单独计算。超时或连接失败且本地连接关闭已确认时，返回timed_out/failed终态；关闭事实无法确认时保留recovering与额度，前端停止本行加载并提示核对。这些摘要只描述连接/认证，不声明账号只读或远端停止已确认；既有历史记录和旧检测摘要不回填或清洗。SQL、metadata和原生数据查询的只读策略保持。
 
 特殊值使用 `{"$type":"int|decimal|datetime|date|time|bytes|float","value":"..."}`；超JS安全整数标int、bytes为base64、非有限float为NaN/Infinity/-Infinity；其余JSON类型保留原值，前端纯文本展示。重名列按ordinal保序，不以列名对象覆盖。
 

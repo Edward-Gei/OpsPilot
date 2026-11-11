@@ -6,6 +6,7 @@ import uuid
 from sqlalchemy import delete, func, select
 
 from app.database_adapters import get_adapter
+from app.database_adapters.base import StopConfirmation
 from app.models.database_management import (DatabaseAuditEvent, DatabaseQuotaBucket, DatabaseResult,
     DatabaseResultChunk, DatabaseTask)
 from app.services import config_service
@@ -79,17 +80,23 @@ async def run_maintenance_once(factory, executor_id):
     for claim in recoveries:
         async with factory() as session:
             task = await session.get(DatabaseTask, claim.task_id)
-            try:
-                connection = await load_connection(session, task, recheck=False)
-                adapter = get_adapter(task.engine)
-            except Exception:
-                continue
             backend_ref, reason = task.backend_ref or {}, task.stop_reason
-        confirmation = await stop_target(factory, connection, adapter, backend_ref, reason)
-        if confirmation.confirmed:
+            closed_probe = task.kind == "probe" and backend_ref.get("local_cleanup", {}).get("closed") is True
+            if closed_probe:
+                # 固定探测已无本地资源，不为补结算再建立目标或控制连接。
+                connection, adapter = None, None
+            else:
+                try:
+                    connection = await load_connection(session, task, recheck=False)
+                    adapter = get_adapter(task.engine)
+                except Exception:
+                    continue
+        confirmation = (StopConfirmation(False, "probe_remote_stop_unconfirmed", backend_ref, {"local_closed": True})
+            if closed_probe else await stop_target(factory, connection, adapter, backend_ref, reason))
+        if confirmation.confirmed or closed_probe:
             status = "cancelled" if reason == "user_cancel" else "timed_out" if reason == "execution_timeout" else "failed"
             await _settle(factory, claim, status, confirmation, error_code=reason,
-                          error_message="已确认目标操作结束，恢复结算完成")
+                          error_message="已确认探测本地资源关闭，恢复结算完成" if closed_probe else "已确认目标操作结束，恢复结算完成")
     await cleanup_retention(factory, executor_id)
 
 
