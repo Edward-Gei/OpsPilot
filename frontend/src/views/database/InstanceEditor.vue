@@ -356,7 +356,7 @@ onBeforeUnmount(() => {
               <a-select v-model:value="form.business_line" :options="[{value:'mitrade'},{value:'tradingkey'}]" allow-clear />
             </a-form-item>
             <a-form-item label="环境" required>
-              <a-select v-model:value="form.environment" :options="[{value:'demo',label:'演示'},{value:'stage',label:'预发'},{value:'prod',label:'生产'}]" />
+              <a-select v-model:value="form.environment" :options="[{value:'prod',label:'prod'},{value:'stage',label:'stage'},{value:'demo',label:'demo'}]" />
             </a-form-item>
             <a-form-item label="集群名称（可选）">
               <a-input v-model:value="form.cluster_name" :maxlength="128" />
