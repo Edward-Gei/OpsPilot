@@ -72,8 +72,8 @@ function search() {
   query.page = 1
   void load()
 }
-function onKeywordChange() {
-  if (focusedProcessId.value !== undefined && query.keyword !== detail.value?.name) search()
+function onKeywordChange(event: Event) {
+  if (event.type === 'click' || (focusedProcessId.value !== undefined && query.keyword !== detail.value?.name)) search()
 }
 function pageChange(page: number, pageSize: number) { query.page = page; query.page_size = pageSize; load() }
 function edit(id: number | null) { editingId.value = id; copyFromId.value = null; open.value = true }

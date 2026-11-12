@@ -103,9 +103,9 @@ function onSearch() {
   query.page = 1
   void load()
 }
-function onKeywordChange() {
+function onKeywordChange(event: Event) {
   keywordEdited = true
-  if (focusedFileId.value !== undefined && query.keyword !== focusedFileName.value) onSearch()
+  if (event.type === 'click' || (focusedFileId.value !== undefined && query.keyword !== focusedFileName.value)) onSearch()
 }
 async function loadInstances() {
   instanceLoading.value = true

@@ -214,10 +214,12 @@ function search() {
   void load()
 }
 
-function inputChanged() {
+function inputChanged(event: Event) {
   if (hasExactFilter()) {
     exact.instance_id = exact.app_id = exact.host_id = undefined
     void router.replace({ path: '/database/instances' })
+    search()
+  } else if (event.type === 'click') {
     search()
   }
 }

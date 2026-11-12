@@ -265,6 +265,23 @@ it('数据库页面进入与同组件路径切换复位外层滚动，筛选参�
   expect(document.documentElement.scrollTop).toBe(0)
 })
 
+it('清除数据库实例搜索草稿立即按空关键词刷新一次', async () => {
+  const wrapper = mount(InstanceList, options)
+  wrappers.push(wrapper)
+  await flushPromises()
+  const input = wrapper.get<HTMLInputElement>('input[placeholder="搜索实例信息"]')
+  await input.setValue('mysql')
+  expect(api.listInstances).toHaveBeenCalledTimes(1)
+  await input.trigger('keydown.enter')
+  await flushPromises()
+  expect(api.listInstances).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, keyword: 'mysql' }))
+  const beforeClear = api.listInstances.mock.calls.length
+  await wrapper.get('.ant-input-clear-icon').trigger('click')
+  await flushPromises()
+  expect(api.listInstances).toHaveBeenCalledTimes(beforeClear + 1)
+  expect(api.listInstances).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, keyword: undefined }))
+})
+
 it.each([
   { permissions: ['database:read'], imported: false, exported: true },
   { permissions: ['database:write'], imported: false, exported: false },

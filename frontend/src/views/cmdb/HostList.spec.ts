@@ -67,6 +67,19 @@ it.each([true, false])('承载数据库以三列表格展示，读取权限为%s
 })
 afterEach(() => { document.body.innerHTML = '' })
 
+it('清除关联主机搜索词只刷新一次完整列表', async () => {
+  api.routeQuery = { id: '21', related: 'app' }
+  const wrapper = mount(HostList, { attachTo: document.body })
+  await flushPromises()
+  expect(wrapper.get<HTMLInputElement>('.toolbar .kw input').element.value).toBe('shared-host')
+  const beforeClear = api.listHosts.mock.calls.length
+  await wrapper.get('.toolbar .kw .ant-input-clear-icon').trigger('click')
+  await flushPromises()
+  expect(api.listHosts).toHaveBeenCalledTimes(beforeClear + 1)
+  expect(api.listHosts).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, keyword: undefined, host_id: undefined }))
+  wrapper.unmount()
+})
+
 it.each(['app', 'database'])('从%s关联主机跳转回填搜索框并精确展示一条，改词后恢复普通搜索', async (related) => {
   api.routeQuery = { id: '21', related }
   const wrapper = mount(HostList, { attachTo: document.body })

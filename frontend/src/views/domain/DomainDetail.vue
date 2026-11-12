@@ -337,6 +337,7 @@ onMounted(refreshAll)
         placeholder="搜索记录集"
         allow-clear
         @press-enter="onRecordSearch"
+        @change="(event: Event) => event.type === 'click' && onRecordSearch()"
       >
         <template #prefix><SearchOutlined /></template>
       </a-input>

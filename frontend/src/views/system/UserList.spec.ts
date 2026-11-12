@@ -31,6 +31,25 @@ beforeEach(() => {
   api.listRoles.mockResolvedValue({ items: [] })
 })
 
+it('清除搜索词立即查询第一页，普通输入仍由回车提交', async () => {
+  api.listUsers.mockResolvedValue({ items: [], total: 0 })
+  const wrapper = mount(UserList, { global: { plugins: [Antd] } })
+  await flushPromises()
+  const listCalls = () => api.listUsers.mock.calls.filter(([params]) => params.page_size === 20)
+  const input = wrapper.get<HTMLInputElement>('input[placeholder="搜索列表内容"]')
+  await input.setValue('operate')
+  expect(listCalls()).toHaveLength(1)
+  await input.trigger('keydown.enter')
+  await flushPromises()
+  expect(listCalls()[listCalls().length - 1][0]).toEqual(expect.objectContaining({ page: 1, keyword: 'operate' }))
+  const beforeClear = listCalls().length
+  await wrapper.get('.toolbar .ant-input-clear-icon').trigger('click')
+  await flushPromises()
+  expect(listCalls()).toHaveLength(beforeClear + 1)
+  expect(listCalls()[listCalls().length - 1][0]).toEqual(expect.objectContaining({ page: 1, keyword: undefined }))
+  wrapper.unmount()
+})
+
 it('同一角色在不同行、角色顺序及分页变化后保持相同标签颜色', async () => {
   api.listUsers.mockImplementation(async ({ page, page_size }) => ({
     items: page_size === 1 ? [] : page === 1

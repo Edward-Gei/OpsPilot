@@ -29,6 +29,24 @@ beforeEach(() => {
 })
 afterEach(() => { document.body.innerHTML = '' })
 
+it('清除记录集搜索词立即查询第一页，输入仍需回车提交', async () => {
+  api.listRecords.mockResolvedValue({ items: [], total: 0 })
+  const wrapper = mount(DomainDetail, { attachTo: document.body })
+  await flushPromises()
+  const input = wrapper.get<HTMLInputElement>('input[placeholder="搜索记录集"]')
+  await input.setValue('www')
+  expect(api.listRecords).toHaveBeenCalledTimes(1)
+  await input.trigger('keydown.enter')
+  await flushPromises()
+  expect(api.listRecords).toHaveBeenLastCalledWith(1, expect.objectContaining({ page: 1, keyword: 'www' }))
+  const beforeClear = api.listRecords.mock.calls.length
+  await wrapper.get('.record-toolbar .ant-input-clear-icon').trigger('click')
+  await flushPromises()
+  expect(api.listRecords).toHaveBeenCalledTimes(beforeClear + 1)
+  expect(api.listRecords).toHaveBeenLastCalledWith(1, expect.objectContaining({ page: 1, keyword: undefined }))
+  wrapper.unmount()
+})
+
 it.each([
   { recordType: 'NS', values: ['ns-1015.awsdns-62.net.', 'ns-1199.awsdns-21.org.', 'ns-161.awsdns-20.com.'] },
   { recordType: 'TXT', values: ['"v=spf1 include:example.com ~all"', '"verification=  original value"'] },

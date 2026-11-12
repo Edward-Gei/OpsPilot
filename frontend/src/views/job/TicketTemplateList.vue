@@ -99,8 +99,8 @@ function search() {
   query.page = 1
   void load()
 }
-function onKeywordChange() {
-  if (focusedTemplateId.value !== undefined && query.keyword !== detail.value?.name) search()
+function onKeywordChange(event: Event) {
+  if (event.type === 'click' || (focusedTemplateId.value !== undefined && query.keyword !== detail.value?.name)) search()
 }
 function pageChange(page: number, pageSize: number) { query.page = page; query.page_size = pageSize; load() }
 function startCreate() { editing.value = null; copyFromId.value = null; open.value = true }

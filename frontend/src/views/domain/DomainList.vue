@@ -511,6 +511,7 @@ onBeforeUnmount(stopBindPolling)
         placeholder="搜索 Zone"
         allow-clear
         @press-enter="onSearch"
+        @change="(event: Event) => event.type === 'click' && onSearch()"
       >
         <template #prefix><SearchOutlined /></template>
       </a-input>

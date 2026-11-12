@@ -173,8 +173,8 @@ function onSearch() {
   loadList()
 }
 
-function onKeywordChange() {
-  if (focusedHostId.value !== undefined && query.keyword !== detail.value?.hostname) onSearch()
+function onKeywordChange(event: Event) {
+  if (event.type === 'click' || (focusedHostId.value !== undefined && query.keyword !== detail.value?.hostname)) onSearch()
 }
 
 function onTableChange(

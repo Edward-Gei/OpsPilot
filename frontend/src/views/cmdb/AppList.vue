@@ -189,8 +189,8 @@ function onSearch() {
   loadList()
 }
 
-function onKeywordChange() {
-  if (focusedAppId.value !== undefined && query.keyword !== detail.value?.name) onSearch()
+function onKeywordChange(event: Event) {
+  if (event.type === 'click' || (focusedAppId.value !== undefined && query.keyword !== detail.value?.name)) onSearch()
 }
 
 function onTableChange(
